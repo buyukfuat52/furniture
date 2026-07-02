@@ -1,0 +1,15 @@
+version: 1
+providers:
+  default: disabled
+  allowed: [disabled, fake, openai_compatible, local_openai_compatible]
+policies:
+  authoritative_calculation: forbidden
+  direct_database_access: forbidden
+  external_content_is_untrusted: true
+  tool_authorization_required: true
+  log_full_prompt: false
+  log_sensitive_tool_payloads: false
+  structured_output_required: true
+  max_tool_rounds: 8
+  model_timeout_seconds: 60
+  retry_non_idempotent: false

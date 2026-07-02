@@ -1,0 +1,51 @@
+version: 1
+base_prompt:
+  id: mobilia.system.base
+  version: 1.0.0
+  path: prompts/system/base.md
+  output_schema: tools/schemas/agent_response.schema.json
+agents:
+  - id: mobilia.agent.orchestrator
+    version: 1.0.0
+    path: prompts/system/agents/orchestrator.md
+    allowed_tools: [project_tool, workflow_tool]
+  - id: mobilia.agent.enterprise_search
+    version: 1.0.0
+    path: prompts/system/agents/enterprise_search.md
+    allowed_tools: [project_tool, document_tool]
+  - id: mobilia.agent.supplier_price
+    version: 1.0.0
+    path: prompts/system/agents/supplier_price.md
+    allowed_tools: [catalog_tool, supplier_tool, workflow_tool]
+  - id: mobilia.agent.measurement_intake
+    version: 1.0.0
+    path: prompts/system/agents/measurement_intake.md
+    allowed_tools: [project_tool, design_tool]
+  - id: mobilia.agent.product_designer
+    version: 1.0.0
+    path: prompts/system/agents/product_designer.md
+    allowed_tools: [catalog_tool, design_tool, workflow_tool]
+  - id: mobilia.agent.manufacturing_planner
+    version: 1.0.0
+    path: prompts/system/agents/manufacturing_planner.md
+    allowed_tools: [design_tool, manufacturing_tool, workflow_tool]
+  - id: mobilia.agent.costing_pricing
+    version: 1.0.0
+    path: prompts/system/agents/costing_pricing.md
+    allowed_tools: [costing_tool, project_tool, workflow_tool]
+  - id: mobilia.agent.quote_document
+    version: 1.0.0
+    path: prompts/system/agents/quote_document.md
+    allowed_tools: [document_tool, workflow_tool, project_tool]
+  - id: mobilia.agent.revision_diff
+    version: 1.0.0
+    path: prompts/system/agents/revision_diff.md
+    allowed_tools: [project_tool, manufacturing_tool, costing_tool, document_tool]
+  - id: mobilia.agent.erp_status
+    version: 1.0.0
+    path: prompts/system/agents/erp_status.md
+    allowed_tools: [project_tool, workflow_tool]
+templates:
+  user_request: prompts/templates/user_request.md
+  tool_error_recovery: prompts/templates/tool_error_recovery.md
+required_variables: [company_id, user_id, roles, locale, trace_id, user_request]

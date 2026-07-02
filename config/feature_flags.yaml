@@ -1,0 +1,10 @@
+features:
+  agent_chat: true
+  local_fake_model: true
+  supplier_csv_import: true
+  supplier_portal_automation: false
+  temporal_workflows: true
+  advanced_3d: false
+  cnc_postprocessors: false
+  customer_email_delivery: false
+  production_release: true

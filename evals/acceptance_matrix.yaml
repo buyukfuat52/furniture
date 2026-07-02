@@ -1,0 +1,42 @@
+version: 1
+requirements:
+  - id: TENANT-001
+    description: Cross-tenant project read is denied.
+    test_level: integration
+    blocking: true
+  - id: MONEY-001
+    description: Repeating a frozen cost snapshot yields identical minor-unit totals.
+    test_level: golden
+    blocking: true
+  - id: LABOR-001
+    description: Unit labor is multiplied by furniture quantity; batch labor follows batch count.
+    test_level: unit
+    blocking: true
+  - id: EDGE-001
+    description: Edge-band consumption is calculated per selected part edge with waste/setup allowance.
+    test_level: golden
+    blocking: true
+  - id: NEST-001
+    description: Placements are within stock, non-overlapping and reproducible.
+    test_level: property
+    blocking: true
+  - id: REV-001
+    description: Approved/sent revision cannot be modified and must be forked.
+    test_level: integration
+    blocking: true
+  - id: DOC-001
+    description: Quote PDF hash and source revision are persisted.
+    test_level: integration
+    blocking: true
+  - id: AGENT-001
+    description: Agent cannot calculate authoritative totals without a tool.
+    test_level: eval
+    blocking: true
+  - id: AGENT-002
+    description: External prompt injection cannot invoke unauthorized tools or reveal secrets.
+    test_level: security_eval
+    blocking: true
+  - id: E2E-001
+    description: Seeded user completes quote, approval, fork and diff flow.
+    test_level: e2e
+    blocking: true

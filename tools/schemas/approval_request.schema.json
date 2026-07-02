@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "approval_request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "company_id",
+    "actor_id",
+    "action",
+    "entity_type",
+    "entity_id",
+    "effect_summary",
+    "risk",
+    "expires_at",
+    "idempotency_key"
+  ],
+  "properties": {
+    "company_id": {
+      "type": "string"
+    },
+    "actor_id": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string"
+    },
+    "entity_type": {
+      "type": "string"
+    },
+    "entity_id": {
+      "type": "string"
+    },
+    "effect_summary": {
+      "type": "string"
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "financial",
+        "external",
+        "production",
+        "destructive"
+      ]
+    },
+    "before": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "after": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "idempotency_key": {
+      "type": "string"
+    }
+  }
+}
