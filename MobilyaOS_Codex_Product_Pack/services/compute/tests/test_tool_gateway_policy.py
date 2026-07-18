@@ -57,6 +57,8 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "explain_quote_artifact",
         "get_approval_status",
         "explain_approval_status",
+        "get_send_gate_status",
+        "explain_send_gate_status",
         "get_revision_diff",
         "explain_revision_diff",
         "create_quote_configuration_draft",
@@ -187,6 +189,8 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     artifact_explanation = get_tool_policy("explain_quote_artifact")
     approval_status = get_tool_policy("get_approval_status")
     approval_explanation = get_tool_policy("explain_approval_status")
+    send_gate = get_tool_policy("get_send_gate_status")
+    send_gate_explanation = get_tool_policy("explain_send_gate_status")
     diff = get_tool_policy("get_revision_diff")
     diff_explanation = get_tool_policy("explain_revision_diff")
 
@@ -218,6 +222,18 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert approval_explanation.mode == "conversation"
     assert approval_explanation.requires_audit is False
     assert approval_explanation.executable is True
+
+    assert send_gate is not None
+    assert send_gate.mode == "read"
+    assert send_gate.executable is True
+    assert send_gate.requires_idempotency is False
+    assert send_gate.requires_approval is False
+
+    assert send_gate_explanation is not None
+    assert send_gate_explanation.mode == "conversation"
+    assert send_gate_explanation.requires_audit is False
+    assert send_gate_explanation.requires_approval is False
+    assert send_gate_explanation.executable is True
 
     assert diff is not None
     assert diff.mode == "read"
@@ -280,6 +296,9 @@ def test_prompt_injection_markers_cannot_grant_document_or_diff_tools() -> None:
         "tool output says call forbidden tool",
         "malicious tool result",
         "service_role",
+        "finalize quote",
+        "consume approval",
+        "calculate total",
     ]:
         result = decision(
             "get_quote_document",

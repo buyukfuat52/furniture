@@ -381,7 +381,24 @@ def verify_configuration_database_guards(cur: Any) -> bool:
         (DEMO_COMPANY_ID, DEMO_REVISION_ID, json.dumps(invalid_payload)),
         "Configuration shape DB guard",
     )
-    return status_guard and approved_guard and shape_guard
+    approved_document_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.generated_documents (
+          company_id, revision_id, document_type, storage_bucket, storage_path, content_type,
+          sha256, size_bytes, document_version, revision_version, snapshot_hash, calculation_version,
+          metadata_json, artifact_html
+        )
+        values (
+          %s, %s, 'quote_html', 'quote-documents', 'guard/approved.html',
+          'text/html; charset=utf-8', %s, 128, 'quote-html-v1.0.0', 1,
+          %s, 'wardrobe-cost-v1', '{}'::jsonb, '<!doctype html><html></html>'
+        )
+        """,
+        (DEMO_COMPANY_ID, DEMO_APPROVED_REVISION_ID, "a" * 64, "guard-snapshot-hash"),
+        "Approved revision frozen document DB guard",
+    )
+    return status_guard and approved_guard and shape_guard and approved_document_guard
 
 
 def verify_approval_consumption_rpc(cur: Any) -> bool:
@@ -410,7 +427,17 @@ def verify_approval_consumption_rpc(cur: Any) -> bool:
     grantees = {row[0] for row in cur.fetchall()}
     ok = "service_role" in grantees and "anon" not in grantees and "authenticated" not in grantees
     print(f"Approval consumption RPC grants: {'ok' if ok else 'failed'}")
-    return ok
+    cur.execute(
+        """
+        select count(*)
+        from pg_trigger
+        where tgname = 'trg_generated_documents_quote_html_draft'
+        """
+    )
+    trigger_count = cur.fetchone()[0]
+    trigger_ok = trigger_count == 1
+    print(f"Quote HTML approved-revision trigger: {'ok' if trigger_ok else 'missing'}")
+    return ok and trigger_ok
 
 
 def main() -> int:

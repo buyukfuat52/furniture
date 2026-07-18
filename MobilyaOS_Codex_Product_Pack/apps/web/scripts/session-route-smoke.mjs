@@ -445,6 +445,46 @@ async function main() {
       "Mutation-like agent request must be denied by the gateway."
     );
 
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Maliyeti hesapla ve toplami yeniden hesapla",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id,
+        total: forgedBrowserTotalMinor
+      })
+    });
+    requireSafe(response.ok, "Calculate-like agent request must return a safe denial.");
+    const calculateMutationPayload = await readJson(response, "agent calculate mutation payload");
+    assertSafeAgentPayload("agent calculate mutation payload", calculateMutationPayload);
+    requireSafe(calculateMutationPayload.response?.status === "failed", "Calculate-like request must fail safely.");
+    requireSafe(calculateMutationPayload.classification === "mutation_tool_blocked", "Calculate-like request must be mutation-blocked.");
+    requireSafe(calculateMutationPayload.tool_calls?.every((call) => call.status === "denied"), "Calculate-like request must not call read or mutation tools.");
+
+    response = await fetch(`${baseUrl}/api/supabase/demo-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "viewer@demo.local", password })
+    });
+    requireSafe(response.ok, "Viewer demo login must succeed.");
+    const viewerCookie = firstCookie(response.headers.get("set-cookie") || "");
+    await readJson(response, "viewer login");
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie },
+      body: JSON.stringify({
+        message: "Teklifi onayla, gonder ve maliyeti hesapla",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id
+      })
+    });
+    requireSafe(response.ok, "Viewer mutation-like agent request must return a safe denial.");
+    const viewerMutationPayload = await readJson(response, "viewer agent mutation payload");
+    assertSafeAgentPayload("viewer agent mutation payload", viewerMutationPayload);
+    requireSafe(viewerMutationPayload.response?.status === "failed", "Viewer mutation-like request must fail safely.");
+    requireSafe(viewerMutationPayload.tool_calls?.every((call) => call.status === "denied"), "Viewer mutation-like request must be denied.");
+
     response = await fetch(`${baseUrl}/api/supabase/demo-login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

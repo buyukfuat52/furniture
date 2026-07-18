@@ -35,7 +35,7 @@ function invalidTokenResponse(status = 404): NextResponse {
         quote_status_changed: false,
         quote_send_triggered: false,
         production_package_triggered: false,
-        deferred_actions: ["quote_send", "quote_approve", "production_package"]
+        deferred_actions: ["quote_send", "quote_pdf", "production_package"]
       }
     },
     { status }

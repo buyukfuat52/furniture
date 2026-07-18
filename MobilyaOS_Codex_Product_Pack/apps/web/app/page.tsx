@@ -19,6 +19,7 @@ import {
   SupabaseQuoteForkResponse,
   SupabaseQuoteRevisionDetail,
   SupabaseQuoteRevisionDiff,
+  SupabaseSendGateStatus,
   SupabaseQuoteSnapshotResponse,
   SupabaseSessionResponse
 } from "../lib/api";
@@ -60,6 +61,7 @@ export default function HomePage() {
   const [cloudDocumentPreview, setCloudDocumentPreview] = useState<SupabaseQuoteDocumentPreview | null>(null);
   const [cloudRevisionDiff, setCloudRevisionDiff] = useState<SupabaseQuoteRevisionDiff | null>(null);
   const [cloudApprovalGate, setCloudApprovalGate] = useState<SupabaseApprovalGate | null>(null);
+  const [cloudSendGate, setCloudSendGate] = useState<SupabaseSendGateStatus | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [chatInput, setChatInput] = useState("Bu projenin maliyet snapshot sonucunu acikla");
   const [chatResult, setChatResult] = useState<AgentChatResponse | null>(null);
@@ -174,6 +176,7 @@ export default function HomePage() {
       setCloudDocumentPreview(null);
       setCloudRevisionDiff(null);
       setCloudApprovalGate(null);
+      setCloudSendGate(null);
       setSeedSummary("");
       setStep("login");
     } finally {
@@ -284,7 +287,8 @@ export default function HomePage() {
         loadSupabaseConfigurationDraft(quoteRevisionId, false),
         loadSupabaseQuoteSnapshot(quoteRevisionId, false),
         loadSupabaseQuoteDocuments(quoteRevisionId, false),
-        loadSupabaseApprovalStatus(quoteRevisionId, false)
+        loadSupabaseApprovalStatus(quoteRevisionId, false),
+        loadSupabaseSendGateStatus(quoteRevisionId, false)
       ]);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -366,6 +370,25 @@ export default function HomePage() {
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
       setCloudApprovalGate(null);
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseSendGateStatus(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ send_gate: SupabaseSendGateStatus }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/send-gate`
+      );
+      setCloudSendGate(result.send_gate);
+    } catch {
+      setCloudSendGate(null);
     } finally {
       if (setBusy) {
         setCloudBusy(false);
@@ -531,6 +554,7 @@ export default function HomePage() {
       setSeedSummary(`Frozen teklif belgesi uretildi: ${result.document.sha256.slice(0, 12)}`);
       await refreshCloudOverview(false);
       await loadSupabaseQuoteDocuments(revisionId, false);
+      await loadSupabaseSendGateStatus(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -620,6 +644,7 @@ export default function HomePage() {
       setCloudApprovalGate(result.approval_gate);
       setSeedSummary(`Onay kapisi hazirlandi: ${result.approval_gate.status}`);
       await refreshCloudOverview(false);
+      await loadSupabaseSendGateStatus(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -840,7 +865,7 @@ export default function HomePage() {
           <SupabaseTimelinePanel
             approvalGate={cloudApprovalGate}
             busy={cloudBusy}
-            canPrepareApproval={cloudSession?.app_user.role === "admin"}
+            canPrepareApproval={cloudSession?.app_user.role === "admin" && cloudRevisionDetail?.status_policy.mutable === true}
             configurationDraft={cloudConfigurationDraft}
             documentPreview={cloudDocumentPreview}
             documents={cloudDocuments}
@@ -854,6 +879,7 @@ export default function HomePage() {
             quoteSnapshot={cloudQuoteSnapshot}
             revisionDiff={cloudRevisionDiff}
             revisionDetail={cloudRevisionDetail}
+            sendGate={cloudSendGate}
             onPrepareApprovalGate={prepareSupabaseApprovalGate}
             onLoadRevisionDetail={loadSupabaseQuoteRevisionDetail}
           />
@@ -1138,7 +1164,8 @@ function SupabaseTimelinePanel({
   projectDetail,
   quoteSnapshot,
   revisionDiff,
-  revisionDetail
+  revisionDetail,
+  sendGate
 }: {
   approvalGate: SupabaseApprovalGate | null;
   busy: boolean;
@@ -1158,6 +1185,7 @@ function SupabaseTimelinePanel({
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDiff: SupabaseQuoteRevisionDiff | null;
   revisionDetail: SupabaseQuoteRevisionDetail | null;
+  sendGate: SupabaseSendGateStatus | null;
 }) {
   const auditEntries = projectDetail?.audit_entries ?? revisionDetail?.audit_entries ?? [];
   const draft = configurationDraft?.configuration_draft ?? null;
@@ -1262,6 +1290,7 @@ function SupabaseTimelinePanel({
               quoteSnapshot={quoteSnapshot}
               revisionDiff={revisionDiff}
               revisionDetail={revisionDetail}
+              sendGate={sendGate}
             />
           ) : null}
         </div>
@@ -1298,7 +1327,8 @@ function SupabaseQuoteLifecyclePanel({
   onPrepareApprovalGate,
   quoteSnapshot,
   revisionDiff,
-  revisionDetail
+  revisionDetail,
+  sendGate
 }: {
   approvalGate: SupabaseApprovalGate | null;
   busy: boolean;
@@ -1313,6 +1343,7 @@ function SupabaseQuoteLifecyclePanel({
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDiff: SupabaseQuoteRevisionDiff | null;
   revisionDetail: SupabaseQuoteRevisionDetail;
+  sendGate: SupabaseSendGateStatus | null;
 }) {
   const hasCalculatedSnapshot = quoteSnapshot?.calculation_status === "calculated" && Boolean(quoteSnapshot.cost_snapshot);
   const latestDocument = documents[0] ?? null;
@@ -1332,6 +1363,7 @@ function SupabaseQuoteLifecyclePanel({
         <SummaryCard title="Belgeler" value={`${documents.length} kayit`} />
         <SummaryCard title="Son belge" value={latestDocument ? latestDocument.sha256.slice(0, 12) : "-"} />
         <SummaryCard title="Onay kapisi" value={approvalGate?.status ?? "not_prepared"} />
+        <SummaryCard title="Gonderim kapisi" value={sendGate?.status ?? "not_ready"} />
       </div>
 
       <div className="buttonRow">
@@ -1422,6 +1454,22 @@ function SupabaseQuoteLifecyclePanel({
             status change: {String(approvalGate.quote_status_changed ?? false)}
           </p>
           <p className="smallNote">{approvalGate.expires_at ? new Date(approvalGate.expires_at).toLocaleString("tr-TR") : "Hazir degil"}</p>
+        </div>
+      ) : null}
+
+      {sendGate ? (
+        <div className="approvalBox">
+          <strong>Gonderim kapisi: {sendGate.status}</strong>
+          <p>
+            Onayli revizyon: {sendGate.approved_revision ? "evet" : "hayir"} /
+            belge bagli: {sendGate.frozen_document_bound ? "evet" : "hayir"} /
+            e-posta saglayici: {sendGate.email_provider_configured ? "hazir" : "yok"}
+          </p>
+          <p className="smallNote">
+            Calisan gonderim: {String(sendGate.quote_send_triggered)} /
+            uretim paketi: {String(sendGate.production_package_triggered)}
+          </p>
+          <p className="smallNote">Blokajlar: {sendGate.blocking_reasons.join(", ") || "yok"}</p>
         </div>
       ) : null}
     </div>

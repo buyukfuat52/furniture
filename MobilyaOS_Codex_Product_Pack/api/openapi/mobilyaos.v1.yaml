@@ -191,8 +191,8 @@ paths:
           description: Revision is immutable.
   /revisions/{revision_id}/approve:
     post:
-      summary: Approve a quote revision
-      description: Demo durable-local approval transition. Requires a generated document and an authorized sales/admin caller. Approved revisions become immutable; changes must fork a new revision.
+      summary: Legacy local-demo approval route, deferred for Supabase P9
+      description: This legacy Go-demo path is not the active Supabase approval contract. P9 approval finalization is performed only by consuming a bound approval token through the service-role-backed Supabase route, which validates revision version, snapshot hash, document hash, expiry and replay state before approving a draft quote revision.
       security:
         - bearerAuth: []
       parameters:
@@ -209,6 +209,36 @@ paths:
           description: Caller role cannot approve revisions.
         "409":
           description: Revision is already immutable.
+  /supabase/approval-tokens/consume:
+    post:
+      summary: Consume customer approval token and finalize quote approval
+      description: Accepts only a strict POST body approval token. The server hashes the token, validates pending approval, expiry, replay state, revision version, current snapshot hash, and frozen document hash, then may transition the quote revision from draft to approved. The response is sanitized and never includes raw tokens, token hashes, tenant internals, storage paths, signed URLs, send state authority, or production package state.
+      responses:
+        "200":
+          description: Approval token accepted and quote approval finalized.
+        "409":
+          description: Token was replayed or expired; no quote send or production package was triggered.
+        "422":
+          description: Request body shape was rejected.
+  /supabase/quote-revisions/{revision_id}/send-gate:
+    get:
+      summary: Read quote send-gate status
+      description: Returns server-derived send eligibility and blocker metadata for a tenant-scoped quote revision. P9 keeps send non-executable, binary PDF deferred, and production package generation unavailable.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized send-gate status.
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
   /revisions/{revision_id}/fork:
     post:
       summary: Fork a quote revision and apply deterministic config patch

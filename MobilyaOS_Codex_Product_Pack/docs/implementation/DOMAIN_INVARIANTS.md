@@ -33,7 +33,7 @@ Allowed during the current Supabase-backed build-train checkpoint:
 
 - Establish authenticated tenant context through a durable local-demo session.
 - Read seeded Supabase demo company, customer, project, quote, BOM, cost, document, approval, revision, and audit data through server-side tenant scope.
-- Accept the first Supabase-backed mutation commands only for creating customers, creating projects, creating quote drafts, creating/updating quote configuration drafts, calculating the narrow wardrobe snapshot, generating frozen HTML quote documents, forking quote revisions, preparing admin-only approval gates, consuming approval tokens without quote-status side effects, and appending audit entries.
+- Accept the first Supabase-backed mutation commands only for creating customers, creating projects, creating quote drafts, creating/updating quote configuration drafts, calculating the narrow wardrobe snapshot, generating frozen HTML quote documents, forking quote revisions, preparing admin-only approval gates, consuming approval tokens through the guarded approval-finalization RPC, and appending audit entries.
 - Accept the first deterministic persisted calculation command only for the saved wardrobe configuration draft on a tenant-scoped draft quote revision.
 - Read and list quote revisions through tenant-scoped backend routes.
 - Read current project/revision/configuration/snapshot context through the read-only web agent chat route.
@@ -47,9 +47,9 @@ Deferred beyond this sprint:
 - Sending quotes to customers.
 - Treating generated PDFs as legally or commercially final.
 - Creating production packages from quotes.
-- Quote approval workflows that change quote status, approver assignment, rejection workflows, and customer send ledgers.
-- Quote status transitions beyond draft.
-- Marking quote drafts as approved, sent, PDF-ready, production-ready, or commercially final.
+- Quote rejection workflows, approver assignment workflows, customer send ledgers, and delivery workflows.
+- Direct or browser-driven quote status transitions beyond draft.
+- Marking quote drafts as sent, PDF-ready, production-ready, or commercially final.
 - Payment, tax filing, accounting, procurement, inventory reservation, manufacturing release, and delivery commitments.
 - Bulk import/export and cross-tenant administrative mutation flows.
 
@@ -72,7 +72,8 @@ Route-specific invariants:
 - Fork quote revision: creates a draft child revision with `parent_revision_id` and copies configuration input only. Frozen snapshots, generated documents, approval gates, sent state, approval state, and production state are not copied.
 - Read revision diff: computes a deterministic server-derived same-project diff from tenant-scoped revision/configuration/snapshot/document facts before any LLM explanation.
 - Prepare approval gate: `admin` only. Creates a pending approval gate bound to revision version, frozen document, document hash, cost snapshot, snapshot hash, expiry, and approval token version. It stores only token hash material and never returns a raw token or token hash.
-- Consume approval token: accepts only a strict token body, hashes it server-side, validates approval/document/snapshot/revision bindings, consumes pending tokens once, returns replay/expired states safely, and appends audit rows. Consumption must not change quote status, send a quote, approve a quote, expose tenant/document/revision identifiers, expose token material, or create a production package.
+- Consume approval token: accepts only a strict token body, hashes it server-side, validates token hash, expiry, replay state, company, quote revision id/version, current configuration provenance, cost snapshot id/hash, frozen document id/hash, and draft quote status. A valid pending token may transition the bound draft quote revision to `approved` inside the service-role RPC and append audit rows. Invalid, expired, replayed, stale, mismatched, or non-draft tokens must not change quote status. The response must not send a quote, expose tenant/document/revision identifiers, expose token material, or create a production package.
+- Read send gate: returns only sanitized, tenant-scoped readiness/deferred-action metadata for the authenticated session. P9 send-gate status must not send email, expose delivery secrets, mark PDF final, or create production state.
 - Read/list quote revisions: returns only revisions visible to the resolved company and user role. Revision reads are non-mutating and must not recalculate, approve, send, finalize, or promote a quote.
 - Append audit: records audit entries using trusted server-derived company, app user, session, timestamp, route/action, and request provenance. Browser-provided actor, company, tenant, user, role, timestamp, and session identifiers are never authoritative.
 
@@ -81,7 +82,7 @@ Role invariants for these routes:
 - `viewer` is read-only. A viewer may read tenant-authorized data and quote revisions, but must not create customers, projects, quote drafts, configuration drafts, snapshots, documents, forks, audit entries through user commands, sends, approvals, PDFs, or production packages.
 - `sales` may create customers, projects, quote drafts, create/update quote configuration drafts, run the deterministic snapshot calculation, generate frozen HTML quote documents, and fork revisions for the resolved company when route-specific validation passes.
 - `admin` may do the same writer actions as `sales` and may prepare approval gates.
-- Risky quote actions remain deferred for all roles until explicit domain gates exist: quote status approval, quote send, final binary PDF generation, production package creation, and downstream operational release. P8 approval-token consumption records token state only and is not a status transition.
+- Risky quote actions remain deferred for all roles unless an explicit domain gate exists. P9 allows only approval-token-consumption-driven draft-to-approved finalization through the service-role RPC. Quote send, final binary PDF generation, production package creation, and downstream operational release remain deferred.
 
 Idempotency expectations:
 
@@ -95,7 +96,7 @@ Idempotency expectations:
 
 ## Deterministic Domain Responsibilities
 
-BOM, cost, tax, margin, edge banding, labor, quote totals, frozen documents, revision fork/diff, approval-gate preparation, and approval-token consumption remain deterministic backend/domain responsibilities. P6/P7/P8 implement one narrow wardrobe persisted quote lifecycle; everything outside that slice remains deferred to future deterministic backend/domain services.
+BOM, cost, tax, margin, edge banding, labor, quote totals, frozen documents, revision fork/diff, approval-gate preparation, approval-token finalization, and send-gate status remain deterministic backend/domain responsibilities. P6/P7/P8/P9 implement one narrow wardrobe persisted quote lifecycle; everything outside that slice remains deferred to future deterministic backend/domain services.
 
 LLM output and frontend calculations may be used only as suggestions, previews, or input collection aids. They must not become the source of truth for:
 
@@ -114,7 +115,7 @@ Any accepted quote mutation that changes commercial meaning must be followed by 
 
 ## Approval Gates and Status Transitions
 
-Future quote send, quote-status approval transitions, binary PDF, and production package work must pass explicit approval gates. P7 prepares a pending approval gate; P8 consumes approval tokens as an audited token-state transition only. Quote drafts remain non-sendable, non-approved, and non-production-ready.
+Future quote send, binary PDF, and production package work must pass explicit approval gates. P7 prepares a pending approval gate; P8 introduced safe token consumption; P9 permits a valid bound pending token to finalize a draft quote revision as approved. Quote drafts remain non-sendable, non-PDF-final, and non-production-ready.
 
 Required constraints for future status transitions:
 
@@ -122,13 +123,12 @@ Required constraints for future status transitions:
 - Current quote detail responses may describe status policy, but they do not activate direct status updates.
 - Direct browser writes of `approved`, `sent`, `accepted`, `rejected`, or any other quote status are invalid. There is no PATCH/POST status route in the current Supabase surface.
 - Status changes are commands validated by the backend/domain layer, not direct browser writes.
-- A quote can move from draft to review only when required project, customer, line, pricing, and tenant context is complete.
-- A quote can move from review to approved only through an authorized approval action by a role permitted for that tenant.
+- In P9, a quote can move from draft to approved only through the service-role approval-token consumption RPC after all token, revision-version, snapshot, document, and current-provenance bindings match.
 - A quote can move from approved to sent only after deterministic totals are current and the backend confirms send eligibility.
 - A PDF can be marked final only when generated from the approved quote snapshot and linked to that immutable quote version.
 - A production package can be created only from an approved or otherwise explicitly production-authorized quote snapshot.
 - Rejection, cancellation, expiry, or revision must prevent stale send/PDF/production actions from using superseded totals or artifacts.
-- Every approval, send, final PDF, and production package transition must record backend-derived actor, tenant, timestamp, source quote version, and resulting status.
+- Every approval, send, final PDF, and production package transition must record backend-derived tenant, timestamp, source quote version, resulting status, and the safest available actor/customer provenance without exposing token material.
 
 Direct status edits, client-only approval flags, and artifact generation without a validated quote snapshot are invalid.
 
@@ -141,6 +141,8 @@ Current Supabase-backed scope:
 - First tenant-scoped create routes for customers, projects, and quote drafts.
 - Tenant-scoped create/update routes for quote configuration draft input with `not_calculated` status.
 - Tenant-scoped deterministic wardrobe BOM/cost snapshot calculation and current snapshot reads.
+- Tenant-scoped guarded approval-token finalization from draft to approved when the current revision/document/snapshot bindings match.
+- Tenant-scoped read-only send-gate status that keeps email delivery, binary PDF generation, and production-package creation deferred.
 - Backend-owned audit append for accepted route actions.
 - Backend/database policy enforcement for tenant-scoped reads, authenticated direct-write denial, and first scoped mutations wired into the current demo flow.
 - A local-demo browser session intended to survive reloads until expiry or logout.
@@ -149,9 +151,9 @@ Current Supabase-backed scope:
 Remaining in-memory or mock scope:
 
 - Any flow not yet wired to Supabase persistence.
-- Quote send, quote-status approval transitions, official binary PDF, production package, and downstream operational mutations in the current web flow.
+- Quote send, official binary PDF, production package, and downstream operational mutations in the current web flow.
 - Any customer, project, quote, revision, or audit behavior outside the first scoped routes defined above.
-- Placeholder catalogs, pricing tables, final quote approval/send records, PDF outputs, production package records, and downstream operational integrations.
+- Placeholder catalogs, pricing tables, quote send records, PDF outputs, production package records, and downstream operational integrations.
 - Client previews that help users understand pending changes before backend/domain acceptance.
 - Demo-only fixtures used for product exploration and sprint validation.
 

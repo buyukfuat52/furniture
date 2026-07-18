@@ -87,6 +87,7 @@ const forgedPayloadMarkers = {
   }
 };
 const deferredQuoteActions = ["quote_send", "quote_approve", "quote_pdf", "production_package"];
+const p9PostApprovalDeferredActions = ["quote_send", "quote_pdf", "production_package"];
 const deterministicCalculationVersion = "wardrobe-deterministic-v1.0.0";
 const canonicalSnapshotEdges = new Set(["north", "east", "south", "west"]);
 const unavailableQuotePayloadFields = [
@@ -652,17 +653,34 @@ function assertApprovalGate(payload, expected, label) {
   assertNoForbiddenResponseFields(label, payload);
 }
 
-function assertApprovalConsumption(payload, expectedStatus, label) {
+function assertApprovalConsumption(payload, expectedStatus, label, options = {}) {
   const consumption = payload.approval_consumption;
   requireSafe(consumption?.status === expectedStatus, `${label} must return ${expectedStatus}.`);
   requireSafe(consumption.token_secret_returned === false, `${label} must never return token secret.`);
-  requireSafe(consumption.quote_status_changed === false, `${label} must not change quote status.`);
+  requireSafe(
+    consumption.quote_status_changed === Boolean(options.quoteStatusChanged),
+    `${label} quote status change flag must be ${Boolean(options.quoteStatusChanged)}.`
+  );
   requireSafe(consumption.quote_send_triggered === false, `${label} must not send quote.`);
   requireSafe(consumption.production_package_triggered === false, `${label} must not trigger production package.`);
   requireSafe(Array.isArray(consumption.deferred_actions), `${label} must include deferred actions.`);
-  for (const action of ["quote_send", "quote_approve", "production_package"]) {
+  for (const action of p9PostApprovalDeferredActions) {
     requireSafe(consumption.deferred_actions.includes(action), `${label} must keep ${action} deferred.`);
   }
+  assertNoForbiddenResponseFields(label, payload);
+}
+
+function assertSendGate(payload, expected, label) {
+  const sendGate = payload.send_gate;
+  requireSafe(sendGate?.revision_id === expected.quoteRevisionId, `${label} must bind to the quote revision.`);
+  requireSafe(sendGate.quote_status === expected.quoteStatus, `${label} quote status must be ${expected.quoteStatus}.`);
+  requireSafe(sendGate.approved_revision === expected.approved, `${label} approved flag must be ${expected.approved}.`);
+  requireSafe(sendGate.eligible_to_send === false, `${label} must never become send-executable in P9.`);
+  requireSafe(sendGate.quote_send_triggered === false, `${label} must not send a quote.`);
+  requireSafe(sendGate.production_package_triggered === false, `${label} must not trigger production package.`);
+  requireSafe(sendGate.email_provider_configured === false, `${label} must report no configured email provider.`);
+  requireSafe(sendGate.artifact_status === "html_verified_pdf_deferred", `${label} must keep binary PDF deferred.`);
+  requireSafe(Array.isArray(sendGate.blocking_reasons), `${label} must include blocking reasons.`);
   assertNoForbiddenResponseFields(label, payload);
 }
 
@@ -795,6 +813,10 @@ async function main() {
       {
         label: "unauthenticated approval status",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/approval-status`
+      },
+      {
+        label: "unauthenticated send gate status",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/send-gate`
       }
     ];
     for (const probe of readProbes) {
@@ -838,6 +860,18 @@ async function main() {
     }, "missing approval token consume");
     requireSafe(result.response.status === 404, "Missing approval token consumption must return 404.");
     assertApprovalConsumption(result.payload, "invalid", "missing approval token consume");
+
+    const rateLimitToken = newApprovalSmokeToken();
+    let rateLimitedStatus = 0;
+    for (let index = 0; index < 7; index += 1) {
+      const rateLimitProbe = await requestJson(baseUrl, "/api/supabase/approval-tokens/consume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approval_token: rateLimitToken })
+      }, `approval token rate limit probe ${index}`);
+      rateLimitedStatus = rateLimitProbe.response.status;
+    }
+    requireSafe(rateLimitedStatus === 429, "Approval token consumption must rate limit repeated token attempts.");
 
     const viewerCookie = await login(baseUrl, "viewer@demo.local", password);
     for (const probe of mutationProbes) {
@@ -1991,22 +2025,75 @@ async function main() {
     }, "audit after approval gate");
     requireSafe(result.response.ok, "Demo data must succeed after approval gate preparation.");
     const auditAfterApprovalGate = countAuditActions(result.payload.audit_entries);
+    const auditAfterApprovalGateAll = countAllAuditActions(result.payload.audit_entries);
     requireAuditDelta(auditAfterQuoteFork, auditAfterApprovalGate, "quote_approval_gate_prepared", 1);
 
     const approvalSetupEnv = serviceRoleEnv();
+    const staleVersionApprovalToken = newApprovalSmokeToken();
+    await patchApprovalTokenHashForSmoke(
+      approvalSetupEnv,
+      preparedApprovalGate.id,
+      approvalSmokeTokenHash(staleVersionApprovalToken),
+      { quote_revision_version: 0 }
+    );
+    result = await requestJson(baseUrl, "/api/supabase/approval-tokens/consume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approval_token: staleVersionApprovalToken })
+    }, "stale revision approval token consume");
+    requireSafe(result.response.status === 404, "Stale revision approval token must return 404.");
+    assertApprovalConsumption(result.payload, "invalid", "stale revision approval token consume");
+
+    const wrongDocumentHashToken = newApprovalSmokeToken();
+    await patchApprovalTokenHashForSmoke(
+      approvalSetupEnv,
+      preparedApprovalGate.id,
+      approvalSmokeTokenHash(wrongDocumentHashToken),
+      { document_hash: "0".repeat(64) }
+    );
+    result = await requestJson(baseUrl, "/api/supabase/approval-tokens/consume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approval_token: wrongDocumentHashToken })
+    }, "wrong document hash approval token consume");
+    requireSafe(result.response.status === 404, "Wrong document hash approval token must return 404.");
+    assertApprovalConsumption(result.payload, "invalid", "wrong document hash approval token consume");
+
     const approvalToken = newApprovalSmokeToken();
     await patchApprovalTokenHashForSmoke(
       approvalSetupEnv,
       preparedApprovalGate.id,
-      approvalSmokeTokenHash(approvalToken)
+      approvalSmokeTokenHash(approvalToken),
+      {
+        quote_revision_version: quoteRevision.version,
+        cost_snapshot_id: calculatedCostSnapshot.id,
+        generated_document_id: generatedDocument.id,
+        snapshot_hash: calculatedCostSnapshot.snapshot_hash,
+        document_hash: generatedDocument.sha256
+      }
     );
+    result = await requestJson(baseUrl, "/api/supabase/approval-tokens/consume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        approval_token: approvalToken,
+        status: "approved",
+        quote_revision_id: quoteRevision.id,
+        document_hash: "browser-supplied",
+        snapshot_hash: "browser-supplied",
+        token_hash: "browser-supplied"
+      })
+    }, "forged approval token consume body");
+    requireSafe(result.response.status === 422, "Forged approval token consumption body must return 422.");
+    assertApprovalConsumption(result.payload, "invalid", "forged approval token consume body");
+
     result = await requestJson(baseUrl, "/api/supabase/approval-tokens/consume", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approval_token: approvalToken })
     }, "approval token consume");
     requireSafe(result.response.status === 200, "Approval token consumption must return 200.");
-    assertApprovalConsumption(result.payload, "consumed", "approval token consume");
+    assertApprovalConsumption(result.payload, "approved", "approval token consume", { quoteStatusChanged: true });
     requireSafe(result.payload.approval_consumption?.consumed === true, "Approval token consumption must mark consumed true.");
 
     result = await requestJson(baseUrl, "/api/supabase/approval-tokens/consume", {
@@ -2023,9 +2110,78 @@ async function main() {
       headers: { Cookie: salesCookie }
     }, "approval gate status after consumption");
     requireSafe(result.response.ok, "Approval gate status must be readable after consumption.");
-    requireSafe(result.payload.approval_gate?.status === "consumed", "Approval gate status must become consumed.");
+    requireSafe(result.payload.approval_gate?.status === "approved", "Approval gate status must become approved.");
     requireSafe(result.payload.approval_gate?.token_secret_returned === false, "Consumed approval gate status must not return token secret.");
-    requireSafe(result.payload.approval_gate?.quote_status_changed === false, "Approval consumption must not change quote status.");
+    requireSafe(result.payload.approval_gate?.quote_status_changed === true, "Approval consumption must change quote status after P9 finalization.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote revision after approval finalization");
+    requireSafe(result.response.ok, "Quote revision must be readable after approval finalization.");
+    requireSafe(result.payload.quote_revision?.status === "approved", "Quote revision must be approved after valid token consumption.");
+    requireSafe(result.payload.status_policy?.mutable === false, "Approved quote revision must be immutable.");
+    const approvedQuoteRevision = result.payload.quote_revision;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "send gate after approval finalization");
+    requireSafe(result.response.ok, "Send gate status must be readable after approval finalization.");
+    assertSendGate(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved",
+      approved: true
+    }, "send gate after approval finalization");
+
+    const sendGatePost = await requestText(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `send-gate-post-${suffix}` },
+      body: JSON.stringify({ ...forgedPayloadMarkers, send_state: "browser-supplied" })
+    }, "send gate post probe");
+    requireSafe([404, 405].includes(sendGatePost.response.status), "Send gate POST must remain unavailable.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `approved-final-config-update-${suffix}` },
+      body: JSON.stringify(configurationDraftBody({
+        expected_version: configurationDraft.version,
+        width_mm: 1900
+      }))
+    }, "approved finalized revision configuration update");
+    requireSafe(result.response.status === 409, "Approved finalized revision configuration update must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `approved-final-calculate-${suffix}` },
+      body: JSON.stringify({ expected_configuration_version: configurationDraft.version })
+    }, "approved finalized revision calculate");
+    requireSafe(result.response.status === 409, "Approved finalized revision calculate must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `approved-final-document-${suffix}` },
+      body: JSON.stringify({})
+    }, "approved finalized revision document generation");
+    requireSafe(result.response.status === 409, "Approved finalized revision document generation must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/approval-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": `approved-final-approval-gate-${suffix}` },
+      body: JSON.stringify({ document_id: generatedDocument.id })
+    }, "approved finalized revision approval gate prepare");
+    requireSafe(result.response.status === 409, "Approved finalized revision approval gate preparation must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `approved-final-fork-${suffix}` },
+      body: JSON.stringify({ expected_revision_version: approvedQuoteRevision.version })
+    }, "approved finalized revision fork");
+    requireSafe(result.response.status === 201, "Approved finalized revision fork must return 201.");
+    assertQuoteFork(result.payload, {
+      sourceRevisionId: quoteRevision.id,
+      projectId: project.id
+    }, "approved finalized revision fork");
 
     result = await requestJson(baseUrl, "/api/supabase/demo-data", {
       method: "GET",
@@ -2034,14 +2190,22 @@ async function main() {
     requireSafe(result.response.ok, "Demo data must succeed after approval token consumption.");
     const auditAfterApprovalConsume = countAuditActions(result.payload.audit_entries);
     const auditAfterApprovalConsumeAll = countAllAuditActions(result.payload.audit_entries);
-    requireAuditIncrease(auditAfterApprovalGate, auditAfterApprovalConsume, "quote_approval_token_consumed");
+    requireAuditIncrease(auditAfterApprovalGate, auditAfterApprovalConsume, "quote_approved");
+    requireAuditActionIncrease(auditAfterApprovalGateAll, auditAfterApprovalConsumeAll, "quote_approval_token_replayed");
 
     const expiredApprovalToken = newApprovalSmokeToken();
     await patchApprovalTokenHashForSmoke(
       approvalSetupEnv,
       preparedApprovalGate.id,
       approvalSmokeTokenHash(expiredApprovalToken),
-      { expires_at: new Date(Date.now() - 60_000).toISOString() }
+      {
+        quote_revision_version: quoteRevision.version,
+        cost_snapshot_id: calculatedCostSnapshot.id,
+        generated_document_id: generatedDocument.id,
+        snapshot_hash: calculatedCostSnapshot.snapshot_hash,
+        document_hash: generatedDocument.sha256,
+        expires_at: new Date(Date.now() - 60_000).toISOString()
+      }
     );
     result = await requestJson(baseUrl, "/api/supabase/approval-tokens/consume", {
       method: "POST",
@@ -2116,7 +2280,8 @@ async function main() {
     requireSafe(auditActions.has("quote_document_generated"), "Audit entries must include quote_document_generated.");
     requireSafe(auditActions.has("quote_revision_forked"), "Audit entries must include quote_revision_forked.");
     requireSafe(auditActions.has("quote_approval_gate_prepared"), "Audit entries must include quote_approval_gate_prepared.");
-    requireSafe(auditActions.has("quote_approval_token_consumed"), "Audit entries must include quote_approval_token_consumed.");
+    requireSafe(auditActions.has("quote_approved"), "Audit entries must include quote_approved.");
+    requireSafe(auditActions.has("quote_approval_token_replayed"), "Audit entries must include quote_approval_token_replayed.");
     requireSafe(auditActions.has("quote_approval_token_expired"), "Audit entries must include quote_approval_token_expired.");
     const auditAfter = countAuditActions(result.payload.audit_entries);
     const auditAfterAll = countAllAuditActions(result.payload.audit_entries);
@@ -2129,7 +2294,8 @@ async function main() {
     requireAuditIncrease(auditBefore, auditAfter, "quote_document_generated");
     requireAuditIncrease(auditBefore, auditAfter, "quote_revision_forked");
     requireAuditIncrease(auditBefore, auditAfter, "quote_approval_gate_prepared");
-    requireAuditIncrease(auditBefore, auditAfter, "quote_approval_token_consumed");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_approved");
+    requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_replayed");
     requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_expired");
 
     console.log("web mutation route smoke passed");

@@ -247,6 +247,8 @@ class ToolGateway:
             return self._revision_diff(agent_id, tool, action, context)
         if tool == "document_tool" and action == "get_quote_document":
             return self._quote_document(agent_id, context)
+        if tool == "workflow_tool" and action == "get_send_gate_status":
+            return self._send_gate_status(agent_id, context)
         if tool == "document_tool" and action == "send_quote":
             return self._approval_required(agent_id, tool, action)
         if tool == "workflow_tool" and action == "request_approval":
@@ -619,6 +621,51 @@ class ToolGateway:
             [],
         )
 
+    def _send_gate_status(self, agent_id: AgentID, context: ChatContext) -> GatewayResult:
+        revision_id = context.revision_id
+        record = self._record(
+            agent_id,
+            "workflow_tool",
+            "get_send_gate_status",
+            "completed" if revision_id else "denied",
+            "send gate status returned" if revision_id else "revision_id is required",
+        )
+        if revision_id is None:
+            return GatewayResult(record, [], [], [], [], ["revision_id"])
+        if not self._revision_is_authorized(revision_id):
+            return self._denied(
+                agent_id,
+                "workflow_tool",
+                "get_send_gate_status",
+                "revision_id was not found in the authorized tenant tool adapter",
+            )
+        return GatewayResult(
+            record,
+            [
+                Fact(
+                    label="Gonderim kapisi",
+                    value={
+                        "eligible_to_send": False,
+                        "status": "prepared_deferred"
+                        if self._revision_status(revision_id) == "approved"
+                        else "not_ready",
+                        "quote_send_triggered": False,
+                        "production_package_triggered": False,
+                    },
+                    source=Source(
+                        type="tool_result",
+                        id="workflow_tool.get_send_gate_status",
+                        revision_id=revision_id,
+                        tool_call_id=record.id,
+                    ),
+                )
+            ],
+            [],
+            [Reference(type="quote_revision", id=revision_id, label="Gonderim kapisi")],
+            ["Send gate is read-only; email delivery remains deferred."],
+            [],
+        )
+
 
 class AgentRuntime:
     def __init__(self, repository_root: Path) -> None:
@@ -758,6 +805,13 @@ class AgentRuntime:
                 agent_id=agent_id,
                 tool="document_tool",
                 action="get_quote_document",
+                context=context,
+                untrusted_text=request.message,
+            ),
+            self._gateway.call(
+                agent_id=agent_id,
+                tool="workflow_tool",
+                action="get_send_gate_status",
                 context=context,
                 untrusted_text=request.message,
             )

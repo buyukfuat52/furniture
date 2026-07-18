@@ -187,6 +187,15 @@ Large-scale backend/frontend application coding must not start until:
 - Active cookie-authenticated mutations and token consumption use same-origin/fetch-metadata checks where applicable and process-local development rate limits. Production still needs a durable distributed limiter and full auth/session policy.
 - Runtime agents remain read-only in the web route. The compute policy registry now explicitly includes read-only artifact/approval explanation tools and forbidden chat-side approval-consumption/mutation aliases.
 
+## P9 Decisions
+
+- Approval-token consumption can now finalize a draft quote revision as `approved`, but only through the service-role Supabase RPC after revalidating token hash, expiry, replay state, company, revision version, current configuration provenance, cost snapshot, snapshot hash, generated document id, and document hash.
+- Invalid, expired, replayed, stale, mismatched, or non-draft approval tokens must not change quote status. All outcomes remain sanitized and never return raw token material, token hashes, tenant ids, revision ids, document ids, storage paths, or secrets.
+- Approved and sent revisions remain immutable. Configuration mutation, recalculation, quote HTML document regeneration, and approval-gate preparation are blocked for approved revisions; revision changes must fork.
+- The P9 customer approval UI is a minimal controlled form at `/customer-approval`; it does not place tokens in URLs or expose internal identifiers.
+- The send gate is read-only in P9. It can report prepared/deferred state for an approved revision with a bound frozen document, but `eligible_to_send`, email delivery, binary PDF generation, and production package creation remain disabled.
+- Runtime agents may explain approval and send-gate facts fetched by server-owned read tools. They cannot consume tokens, approve, send, generate PDFs, create production packages, or calculate authoritative totals.
+
 ## P5 Supabase Cloud Decisions
 
 - Docker Desktop is not the active local runtime on this machine.
@@ -241,6 +250,6 @@ Large-scale backend/frontend application coding must not start until:
 
 1. Add deterministic binary PDF generation from the exact frozen HTML/cost snapshot inputs and compare PDF totals to the cost snapshot in tests.
 2. Add object-storage upload metadata for generated artifacts without exposing bucket/path locators to browser DTOs.
-3. Extend the P8 approval-token consumption and denial/replay handling into final quote approval/send gates with explicit customer/actor intent.
+3. Promote the P9 read-only send gate into a tested explicit quote-send workflow with provider configuration, idempotency, audit, delivery proof, and no-secret outbound logs.
 4. Move the P6/P7 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
 5. Add CSRF/fetch-metadata controls, rate limiting, production session revocation/rotation, and persisted tool invocation audit records.

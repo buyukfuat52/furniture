@@ -85,9 +85,10 @@ The current web wiring reads seeded Supabase data, validates the local-demo sess
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/approval-status`
 - `POST /api/supabase/quote-revisions/[quoteRevisionId]/approval-token`
 - `POST /api/supabase/approval-tokens/consume`
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/send-gate`
 - `POST /api/supabase/agent-chat`
 
-`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, create/update draft quote configuration inputs, run the narrow deterministic wardrobe snapshot calculation, generate frozen HTML quote documents, and fork revisions. Approval-gate preparation is `admin` only. Approval-token consumption is a strict unauthenticated POST-body endpoint intended for external token flows; it returns only sanitized consumption/replay/expiry status and does not approve, send, or change quote status. Quote revisions remain draft; these routes do not send quotes, create binary PDFs, or create production packages.
+`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, create/update draft quote configuration inputs, run the narrow deterministic wardrobe snapshot calculation, generate frozen HTML quote documents, and fork revisions. Approval-gate preparation is `admin` only. Approval-token consumption is a strict unauthenticated POST-body endpoint intended for external token flows; it returns only sanitized invalid/replay/expiry/stale/approved status. In P9, a valid pending token can approve the bound draft revision only after the service-role RPC rechecks token hash, expiry, replay state, company, revision version, current configuration provenance, cost snapshot hash, frozen document id, and document hash. These routes do not send quotes, create binary PDFs, or create production packages.
 
 Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, cost, or calculation values are not authority. Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key. Raw idempotency keys are not stored.
 
@@ -96,6 +97,8 @@ P6 snapshot persistence uses `supabase/migrations/0007_persist_quote_calculation
 P7 quote lifecycle persistence uses `supabase/migrations/0008_quote_document_revision_approval_gate.sql`. The document, fork, and approval-gate RPCs validate revision version, cost snapshot, snapshot hash, document hash, approval metadata, and idempotency scope before inserting state and audit entries. Server routes return sanitized document/approval DTOs and do not expose storage bucket/path fields, raw approval tokens, token hashes, or artifact HTML in document JSON.
 
 P8 quote artifact and approval-consumption hardening uses `supabase/migrations/0009_approval_consumption_and_artifact_hardening.sql`. The document metadata route returns only safe metadata; HTML is served through `GET /api/supabase/documents/[documentId]/preview` with session/tenant checks, `no-store`, `nosniff`, and a sandboxed CSP. The approval-consumption RPC looks up only token hashes, validates revision/document/snapshot bindings, marks pending tokens as `consumed`, treats replays and expiries as non-mutating quote outcomes, appends audit rows, and returns no tenant/document/revision identifiers or secrets.
+
+P9 customer approval finalization and send-gate hardening uses `supabase/migrations/0010_customer_approval_finalization_send_gate.sql`. The approval-consumption RPC now finalizes a matching draft quote revision as `approved` and records audit metadata only when all hash/version/expiry/replay/provenance gates pass. Replayed, expired, stale, mismatched, and invalid tokens remain denied without changing quote status. A database trigger rejects new quote HTML document rows for non-draft revisions. `GET /api/supabase/quote-revisions/[quoteRevisionId]/send-gate` reports sanitized prepared/deferred state but keeps email delivery, binary PDF, and production package generation disabled.
 
 The seed includes a second tenant (`tenantb-sales@demo.local`) for live isolation checks. Authenticated Supabase public-key access is read-only for app data after `0006_authenticated_read_only_rls.sql`; direct sales/viewer writes are denied so browser clients cannot bypass server-side idempotency, validation, or audit.
 
@@ -108,7 +111,7 @@ Quote configuration drafts are protected by route validation and database guards
 - draft writes are rejected for approved/sent revisions
 - direct authenticated writes to quote revisions/configuration drafts are blocked or no-effect
 
-Binary PDF generation, quote send, quote-status approval transitions, production package, nesting, and broader product-template mutations remain deferred until fuller deterministic persistence is implemented. Lower legacy P3 demo controls may still point at the in-memory Go path, but the persisted Supabase panel owns the current document/fork/diff/approval-consumption lifecycle.
+Binary PDF generation, quote send, production package, nesting, and broader product-template mutations remain deferred until fuller deterministic persistence is implemented. Lower legacy P3 demo controls may still point at the in-memory Go path, but the persisted Supabase panel owns the current document/fork/diff/approval-finalization/send-gate lifecycle.
 
 Additional sprint artifacts:
 
@@ -135,4 +138,4 @@ After env values are configured, `verify_supabase_connection.py` checks:
 - direct authenticated write denial/no-effect checks
 - direct authenticated sensitive generated-document and approval read denial
 - approval-consumption RPC existence and service-role-only execute grants
-- database guards for quote revision status changes, approved-revision configuration drafts, and invalid configuration draft shapes
+- database guards for quote revision status changes, approved-revision configuration drafts, approved-revision quote HTML document generation, and invalid configuration draft shapes

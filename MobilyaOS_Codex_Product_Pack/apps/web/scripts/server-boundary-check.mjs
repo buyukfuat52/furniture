@@ -187,6 +187,7 @@ const mutationBoundaryText = readFileSync(join(root, "lib/server/productMutation
 for (const marker of ["TrustedMutationScope", "quote_send", "quote_approve", "create_production_package", "approval_required", "allowed_mutation"]) {
   requireMarker(mutationBoundaryText, marker, `server mutation boundary is missing ${marker}`);
 }
+requireMarker(mutationBoundaryText, "read_send_gate_status", "server mutation boundary must register read_send_gate_status as read-only");
 const activeMutationMatch = mutationBoundaryText.match(/activeMutationKinds[\s\S]*?\(\[([\s\S]*?)\]\)/);
 const activeMutationText = activeMutationMatch ? activeMutationMatch[1] : "";
 for (const riskyKind of ["quote_send", "quote_approve", "generate_customer_document", "create_production_package"]) {
@@ -270,6 +271,25 @@ for (const marker of [
   requireMarker(p8MigrationText, marker, `P8 migration is missing security marker ${marker}`);
 }
 
+const p9MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0010_customer_approval_finalization_send_gate.sql"), "utf8");
+for (const marker of [
+  "consume_quote_approval_token",
+  "enforce_quote_html_document_draft_revision",
+  "trg_generated_documents_quote_html_draft",
+  "set_config('app.mobilyaos_allow_quote_status_update', 'on', true)",
+  "status = 'approved'",
+  "version = version + 1",
+  "quote_approved",
+  "quote_approval_token_replayed",
+  "quote_status_changed', true",
+  "quote_send_triggered', false",
+  "production_package_triggered', false",
+  "revoke all on function public.consume_quote_approval_token",
+  "to service_role"
+]) {
+  requireMarker(p9MigrationText, marker, `P9 migration is missing approval-finalization marker ${marker}`);
+}
+
 const mutationRouteChecks = [
   ["app/api/supabase/customers/route.ts", ["GET", "POST"], ["withMutationSession", "create_customer", "appendAuditEntry", "customer_created"]],
   ["app/api/supabase/projects/route.ts", ["GET", "POST"], ["withMutationSession", "create_project", "appendAuditEntry", "project_created"]],
@@ -286,9 +306,10 @@ const mutationRouteChecks = [
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/fork/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "fork_quote_revision", "expected_revision_version", "forkQuoteRevision", "reserveIdempotency", "quote_revision_forked", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/diff/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_revision_diff", "getQuoteRevisionDiff", "against", "rejectUnsupportedQuery"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-status/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_approval_status", "getApprovalGateStatus"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/send-gate/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_send_gate_status", "getQuoteSendGateStatus"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/approval-tokens/consume/route.ts", ["POST"], ["requireSameOriginMutation", "allowedBodyKeys", "requireApprovalTokenConsumeRateLimit", "consumeApprovalToken", "token_secret_returned", "quote_status_changed", "quote_send_triggered", "production_package_triggered"]],
-  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments"]]
+  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments"]]
 ];
 for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const text = readFileSync(join(root, route), "utf8");
@@ -397,6 +418,7 @@ requireMarker(persistQuoteCalculationResultBlock, "p_request_hash: reservation.r
 
 const generateQuoteDocumentBlock = sourceBlock(repositoryText, "generateQuoteDocument");
 requireMarker(generateQuoteDocumentBlock, "getCurrentCalculatedQuoteSnapshot", "generateQuoteDocument must require a current trusted snapshot");
+requireMarker(generateQuoteDocumentBlock, 'snapshot.quote_revision.status !== "draft"', "generateQuoteDocument must reject non-draft revisions");
 requireMarker(generateQuoteDocumentBlock, "buildFrozenQuoteHtmlDocument", "generateQuoteDocument must build frozen HTML server-side");
 requireMarker(generateQuoteDocumentBlock, "rpc/persist_frozen_quote_document", "generateQuoteDocument must use the atomic document RPC");
 requireMarker(generateQuoteDocumentBlock, "p_idempotency_record_id: reservation.id", "generateQuoteDocument must bind durable idempotency");
@@ -423,15 +445,23 @@ requireMarker(consumeApprovalTokenBlock, "rpc/consume_quote_approval_token", "co
 requireMarker(consumeApprovalTokenBlock, "p_consumption_version", "consumeApprovalToken must bind an explicit consumption version");
 requireNoMarker(consumeApprovalTokenBlock, "quote_revision_id:", "consumeApprovalToken must not return revision identifiers from the repository mapper");
 
+const getQuoteSendGateStatusBlock = sourceBlock(repositoryText, "getQuoteSendGateStatus");
+requireMarker(getQuoteSendGateStatusBlock, "const revision = await getQuoteRevision(context, quoteRevisionId)", "getQuoteSendGateStatus must resolve revision through session company");
+requireMarker(getQuoteSendGateStatusBlock, "await getApprovalGateStatus(context, revision.id)", "getQuoteSendGateStatus must read sanitized approval gate status");
+requireMarker(getQuoteSendGateStatusBlock, "eligible_to_send: false", "getQuoteSendGateStatus must keep send non-executable");
+requireMarker(getQuoteSendGateStatusBlock, "email_provider_configured: false", "getQuoteSendGateStatus must keep email provider disabled");
+requireMarker(getQuoteSendGateStatusBlock, "quote_send_triggered: false", "getQuoteSendGateStatus must not send quote");
+requireMarker(getQuoteSendGateStatusBlock, "production_package_triggered: false", "getQuoteSendGateStatus must not create production package");
+
 const quoteStatusPolicyBlock = sourceBlock(repositoryText, "quoteStatusPolicy");
 requireMarker(quoteStatusPolicyBlock, "direct_status_update_allowed: false", "quote status policy must forbid browser direct status writes");
-requireMarker(quoteStatusPolicyBlock, "allowed_transitions: []", "quote status policy must not activate status transitions yet");
+requireMarker(quoteStatusPolicyBlock, 'allowed_transitions: normalized === "draft" ? ["approval_token_consume:draft_to_approved"] : []', "quote status policy must expose only the P9 approval-token transition");
 requireMarker(quoteStatusPolicyBlock, "quote_send", "quote status policy must keep quote send deferred or blocked");
 requireMarker(quoteStatusPolicyBlock, "quote_approve", "quote status policy must keep quote approval deferred or blocked");
 requireMarker(quoteStatusPolicyBlock, "mutable: normalized === \"draft\"", "quote status policy must make only draft revisions mutable");
 requireMarker(quoteStatusPolicyBlock, "? status : \"unknown\"", "quote status policy must not normalize unknown statuses to mutable draft");
-requireMarker(quoteStatusPolicyBlock, "normalized === \"draft\" ? riskyActions : []", "non-draft quote status policy must not advertise deferred actions");
-requireMarker(quoteStatusPolicyBlock, "[\"direct_status_update\", \"modify_revision\", ...riskyActions]", "non-draft quote status policy must block direct modification and risky actions");
+requireMarker(quoteStatusPolicyBlock, 'normalized === "approved"', "approved quote status policy must expose send/PDF/production as deferred only");
+requireMarker(quoteStatusPolicyBlock, "[\"direct_status_update\", \"modify_revision\", \"quote_approve\", ...deferredActions]", "non-draft quote status policy must block direct modification and risky actions");
 
 const appendAuditBlock = sourceBlock(repositoryText, "appendAuditEntry");
 requireMarker(appendAuditBlock, "company_id: context.companyId", "appendAuditEntry must write the server session company_id");

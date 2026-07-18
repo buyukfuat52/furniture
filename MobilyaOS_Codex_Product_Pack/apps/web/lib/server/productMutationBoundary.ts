@@ -17,6 +17,7 @@ export type PlannedMutationKind =
   | "read_quote_document"
   | "read_revision_diff"
   | "read_approval_status"
+  | "read_send_gate_status"
   | "read_quote_revision"
   | "list_project_quote_revisions"
   | "append_audit_entry"
@@ -67,7 +68,8 @@ export function planProductMutationBoundary(
     kind === "list_project_quote_revisions" ||
     kind === "read_quote_document" ||
     kind === "read_revision_diff" ||
-    kind === "read_approval_status"
+    kind === "read_approval_status" ||
+    kind === "read_send_gate_status"
   ) {
     return {
       kind,

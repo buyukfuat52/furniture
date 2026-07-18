@@ -1,7 +1,7 @@
 # MobilyaOS Implementation Status
 
 Run ID: `20260715T040315+0300`
-Current scope: P8 secure quote artifact, approval consumption, and external-delivery hardening on the Supabase Cloud path
+Current scope: P9 customer approval finalization, customer-safe approval UI, artifact/send-gate hardening on the Supabase Cloud path
 Parent orchestrator: `parent_codex`
 Created: 2026-07-15
 
@@ -21,6 +21,34 @@ Created: 2026-07-15
 | P6 - Deterministic persisted quote flow | P6 | Passed | Server-owned wardrobe calculation persists BOM/cost snapshots through Supabase RPCs and exposes sanitized snapshot reads/chat explanations. |
 | P7 - Frozen quote lifecycle | P7 | Passed | Frozen HTML quote documents, persisted revision fork/diff, admin-only approval-gate preparation, sanitized document/chat reads, and P7 security/QA smoke tests passed. |
 | P8 - Secure artifact and approval consumption | P8 | Passed | Document JSON is metadata-only, artifact HTML is served through an authenticated controlled preview route, approval-token consumption/replay/expiry is sanitized and audited, same-origin/rate-limit guards are in place, prompt-injection tests include malicious tool output, and non-Docker validation passed. |
+| P9 - Customer approval finalization and send gate | P9 | Passed | Guarded approval-token finalization, customer-safe approval UI, read-only send gate, approved-revision document guard, runtime-agent read-only send-gate tools, docs, live Supabase validation, web smokes, compute tests, pack validation, secret scan, and diff checks passed. |
+
+## P9 Customer Approval Finalization Plan
+
+Run ID: `20260718T000000+0300-p9`
+
+Sidecar assignments:
+
+- `domain_architect`: read-only review of approval finalization invariants, approved revision immutability, artifact provenance, send-gate scope, and LLM non-authority.
+- `security_reviewer`: read-only review of token leakage/replay/expiry/stale binding, status escalation, tenant/IDOR, artifact access, CSRF/fetch-metadata, rate limiting, and prompt/tool-output injection.
+- `qa_reviewer`: read-only review of P9 smoke coverage, sanitization checks, send/production deferral, and non-Docker validation commands.
+
+Implementation sequence:
+
+1. Add a non-destructive Supabase migration that promotes valid approval-token consumption into a guarded quote revision `approved` transition only when the pending approval gate still matches company, revision id, revision version, cost snapshot, generated document, snapshot hash, document hash, token hash, and expiry.
+2. Keep raw token material out of storage and responses; return only sanitized status labels, booleans, versions, and deferred action names.
+3. Preserve approved/sent revision immutability by using the existing transaction-scoped backend status-update gate only inside the service-role RPC.
+4. Add a read-only send-gate status route that reports send readiness/deferred reasons without sending email or returning delivery secrets.
+5. Add a customer-safe approval page that accepts a token in a strict POST-body flow and displays only sanitized approval outcome, quote-status-change flag, and deferred actions.
+6. Keep binary PDF generation deferred unless a deterministic local renderer is available and tested; preserve deterministic HTML artifact as the verified artifact for this sprint.
+7. Update runtime-agent policy/docs so chat can explain approval/artifact/send-gate facts but cannot approve, consume tokens, send quotes, generate PDFs, calculate totals, or create production packages.
+8. Expand static, live mutation, session/chat, compute policy, secret-scan, and Supabase verification coverage.
+
+Stop conditions:
+
+- Stop before claiming completion if tenant scope, approval-token binding, status transition, artifact access, or send deferral cannot be verified.
+- Stop before migration if environment checks fail.
+- Do not implement email send, production package generation, runtime agent mutation execution, or destructive migrations.
 
 ## Repository State
 
@@ -42,7 +70,7 @@ Created: 2026-07-15
 | Python via `python` | `Python 3.10.11` |
 | Python via `py -3.12` | Available; pack validator passed with this launcher. |
 | Go | Not found on PATH. |
-| Docker | Not found on PATH. |
+| Docker | CLI present; Docker Desktop/Linux engine unavailable locally. |
 | make | Not found on PATH. |
 
 ## Supabase Cloud Path
@@ -71,6 +99,33 @@ Created: 2026-07-15
 | `py -3.12 -m ruff check .` in `services/compute` | Passed | No lint findings. |
 | `py -3.12 -m mypy app` in `services/compute` | Passed | Strict mypy passed. |
 | `py -3.12 -m pytest tests/test_tool_gateway_policy.py tests/test_agent_runtime.py` in `services/compute` | Passed | 31 passed; known TestClient deprecation warning. |
+
+## P9 Verification Log
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required values configured; database URL structures valid; no secret values printed. |
+| `py -3.12 -m py_compile scripts\supabase_common.py scripts\check_supabase_env.py scripts\apply_supabase_migrations.py scripts\seed_supabase.py scripts\verify_supabase_connection.py scripts\secret_scan.py` | Passed | Supabase and secret-scan helpers compile. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0010_customer_approval_finalization_send_gate.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo Auth users existed and demo tenant data was reseeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live DB/RLS/storage/tenant checks passed, including approval RPC grants, quote HTML approved-revision trigger, and approved-revision document guard. |
+| `npm run test -w apps/web` | Passed | Static server-boundary check passed with P9 markers. |
+| `npm run typecheck -w apps/web` | Passed | TypeScript completed. |
+| `npm run build -w apps/web` | Passed | Production build includes `/customer-approval` and the send-gate route. |
+| `npm run test:session -w apps/web` | Passed | Session/chat smoke passed, including read-only approval/send-gate explanation and mutation/calculation denial. |
+| `npm run test:mutations -w apps/web` | Passed | Live mutation smoke passed approval finalization, replay/expiry/stale denial, approved-revision immutability, send-gate deferral, tenant/RBAC/idempotency/audit/sanitization checks. |
+| `npm run test --workspaces --if-present` | Passed | Web server-boundary check passed; contracts test remains a placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed | Web TypeScript passed; contracts typecheck remains a placeholder. |
+| `npm run build --workspaces --if-present` | Passed | Web production build passed; contracts build remains a placeholder. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | No lint findings. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Mypy passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 44 passed; one known FastAPI/Starlette TestClient deprecation warning. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Prompt/product/orchestration pack validation passed. |
+| `npm run secret-scan` | Passed | Tracked-file secret scan found no secret-like values. |
+| `git diff --check` | Passed | No whitespace errors; Git reported CRLF conversion warnings only. |
+| `go version` | Blocked | Go is not on PATH. |
+| `make --version` | Blocked | GNU Make is not on PATH. |
+| `docker info --format '{{.ServerVersion}}'` | Blocked | Docker CLI exists, but the Docker Desktop/Linux engine pipe is unavailable. |
 
 ## P0 Verification Log
 
@@ -157,6 +212,7 @@ Primary bounded contexts:
 - ADR-0005: Enforce RBAC, approval tokens, and agent tool gateway policy server-side.
 - ADR-0008: Persist frozen quote lifecycle state through audited service-role RPCs and expose only sanitized server routes.
 - ADR-0009: Secure quote artifacts through controlled server routes and treat approval-token consumption as audited non-send/non-status-changing state.
+- ADR-0010: Customer approval finalization may approve a draft only through the guarded service-role RPC while send, binary PDF, and production remain deferred.
 
 ## P1 Outputs
 

@@ -254,18 +254,35 @@ export type SupabaseApprovalGate = {
   expires_at: string | null;
   consumed_at?: string | null;
   approval_consumption_version?: string | null;
-  quote_status_changed?: false;
+  quote_status_changed?: boolean;
   deferred_actions: string[];
 };
 
 export type SupabaseApprovalConsumption = {
-  status: "consumed" | "expired" | "replayed" | "invalid";
+  status: "approved" | "consumed" | "expired" | "replayed" | "invalid";
   consumed: boolean;
   token_secret_returned: false;
-  quote_status_changed: false;
+  quote_status_changed: boolean;
   quote_send_triggered: false;
   production_package_triggered: false;
   approval_consumption_version?: string;
+  deferred_actions: string[];
+};
+
+export type SupabaseSendGateStatus = {
+  revision_id: string;
+  quote_status: string;
+  status: "not_ready" | "prepared_deferred";
+  eligible_to_send: false;
+  approved_revision: boolean;
+  frozen_document_bound: boolean;
+  document_hash_bound: boolean;
+  snapshot_hash_bound: boolean;
+  email_provider_configured: false;
+  quote_send_triggered: false;
+  production_package_triggered: false;
+  artifact_status: "html_verified_pdf_deferred";
+  blocking_reasons: string[];
   deferred_actions: string[];
 };
 

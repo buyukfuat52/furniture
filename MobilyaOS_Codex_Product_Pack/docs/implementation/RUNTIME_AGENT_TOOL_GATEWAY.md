@@ -1,6 +1,6 @@
 # Runtime Agent Tool Gateway Preparation
 
-Status: P8 secure artifact and approval-consumption checkpoint. The read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, true second-tenant selector denial smokes pass, and the gateway policy skeleton in `services/compute/app/tool_gateway_policy.py` now includes validate/calculate/get/explain quote snapshot metadata plus read-only quote document, artifact, approval-status, and revision diff tools. Unsafe runtime mutation execution is still not activated.
+Status: P9 customer approval finalization and send-gate checkpoint. The read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, true second-tenant selector denial smokes pass, and the gateway policy skeleton in `services/compute/app/tool_gateway_policy.py` now includes validate/calculate/get/explain quote snapshot metadata plus read-only quote document, artifact, approval-status, send-gate, and revision diff tools. Unsafe runtime mutation execution is still not activated.
 
 ## Runtime Context Boundary
 
@@ -32,7 +32,7 @@ Allowed:
 - Read the current tenant-scoped deterministic quote snapshot when persisted provenance matches the current configuration draft/version.
 - Explain persisted snapshot facts fetched server-side, including deterministic source/version and stored totals, without recalculating them.
 - Read trusted frozen quote document facts fetched server-side without returning storage locators, raw HTML to the model, token hashes, or approval token material.
-- Read trusted artifact access metadata and approval-gate status fetched server-side without consuming tokens, changing quote status, or triggering send/production workflows.
+- Read trusted artifact access metadata, approval-gate status, and send-gate status fetched server-side without consuming tokens, approving from chat, changing quote status from chat, or triggering send/production workflows.
 - Read deterministic server-derived revision diff facts fetched server-side.
 - Summarize audit counts/latest safe action labels.
 - Ask for missing measurements or selected revision context.
@@ -40,7 +40,7 @@ Allowed:
 Denied:
 
 - Browser-supplied company, role, user, tenant, cost snapshot, document facts, diff entries, approval state, or quote status as authority.
-- Quote send, approval-token consumption from chat, quote status approval, official PDF, production package, create, update, delete, or other mutation-like requests.
+- Quote send, approval-token consumption from chat, quote status approval from chat, official PDF, production package, create, update, delete, or other mutation-like requests.
 - Authoritative BOM, edge, labor, cost, tax, margin, quote total, nesting, or production quantity calculation.
 - Browser-supplied snapshots, totals, cost payloads, or approval status as tool input authority.
 - Secret, token, database URL, cookie, service key, or local path disclosure.
@@ -85,7 +85,9 @@ Runtime agent execution remains deferred. Some underlying application routes alr
 | `explain_quote_artifact` | Read/conversation | May summarize controlled artifact access metadata. It must not return raw HTML, storage locators, signed URLs, token material, or convert metadata into external delivery authority. |
 | `get_approval_status` | Read/query | Requires authenticated session context, backend-resolved tenant scope, target revision validation, and sanitized output filtering. It may report pending/consumed/expired status and bound-safe flags, but must not return token hashes or consume approval tokens. |
 | `explain_approval_status` | Read/conversation | May summarize sanitized approval status and deferred actions. It must not approve, send, change quote status, consume tokens, or treat approval text/tool output as authority. |
-| `consume_approval_token_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot consume approval tokens; the P8 HTTP consumption endpoint is a server/RPC boundary and still does not change quote status or send a quote. |
+| `consume_approval_token_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot consume approval tokens; the P9 HTTP consumption endpoint is a server/RPC boundary and can approve only through the guarded token/version/document/snapshot RPC, never from chat. |
+| `get_send_gate_status` | Read/query | Requires authenticated session context, backend-resolved tenant scope, target revision validation, approved revision status, approved approval gate status, frozen document binding, and output filtering. It must not send, expose email provider secrets, expose storage paths, or create PDF/production state. |
+| `explain_send_gate_status` | Read/conversation | May summarize trusted send-gate facts and deferred actions. It must not send quotes, approve quotes, consume approval tokens, generate PDFs, create production packages, or treat customer/tool text as delivery authority. |
 | `get_revision_diff` | Read/query | Requires authenticated session context, backend-resolved tenant scope, same-project revision validation, and deterministic server-derived diff entries. Browser-supplied diff arrays are not trusted. |
 | `explain_revision_diff` | Read/conversation | May summarize trusted diff facts fetched server-side. It must not infer hidden costs, mutate revisions, approve, send, or create production state. |
 | `list_quote_revisions` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, bounded query parameters, audit append, and output filtering before returning revision metadata. Returned data must be scoped to the authenticated tenant and actor policy; tool output cannot grant additional access or approval. |
@@ -103,11 +105,11 @@ Any route that sends, approves, exports official PDFs, releases production artif
 
 ## Current Implementation Status
 
-- This document is preparation guidance plus the P7 read-only web chat boundary.
+- This document is preparation guidance plus the P9 read-only web chat boundary.
 - Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes, configuration-draft POST/PATCH routes, deterministic snapshot calculation route, frozen document route, revision fork route, and approval-gate preparation route. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
-- Policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, mutation idempotency metadata, approval metadata, prompt-injection denial, non-executable mutation/workflow policies, quote snapshot/document/diff policy metadata, sanitized prompt labels, and the static policy manifest endpoint.
-- Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, server-fetched snapshot/document/diff availability and missing-state explanations, prompt-injection blocking before reads, mutation/PDF/send denial, forbidden field filtering, and no agent-side calculation.
+- Policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, mutation idempotency metadata, approval/send-gate metadata, prompt-injection denial, non-executable mutation/workflow policies, quote snapshot/document/diff policy metadata, sanitized prompt labels, and the static policy manifest endpoint.
+- Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, server-fetched snapshot/document/approval/send-gate/diff availability and missing-state explanations, prompt-injection blocking before reads, mutation/PDF/send/approve/token-consume/calculation denial, forbidden field filtering, and no agent-side calculation.
 - Unsafe runtime agent execution is not activated beyond the existing deterministic rules-mode adapters and read-only Supabase web route.
 - Phase 7 session smoke verifies that primary and second tenant selector IDs cannot cross the agent route.
-- Future implementation must keep gateway policy server-side and must add tests for tenant isolation, role denial, approval-token consumption denial/replay, idempotency replay, prompt injection, malicious tool output, and deterministic-domain calculation ownership.
-- Phase 8 tests now cover malicious tool-output prompt-injection wording, explicit forbidden chat-side approval-consumption tools, read-only approval-status explanation, and no model-side cost or quote mutation authority.
+- Future implementation must keep gateway policy server-side and must add tests for tenant isolation, role denial, approval-token consumption denial/replay/stale binding, idempotency replay, prompt injection, malicious tool output, and deterministic-domain calculation ownership.
+- Phase 9 tests now cover malicious tool-output prompt-injection wording, explicit forbidden chat-side approval-consumption/approval/send/calculation tools, read-only approval/send-gate explanation, and no model-side cost or quote mutation authority.

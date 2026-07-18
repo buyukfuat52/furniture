@@ -278,18 +278,35 @@ export type ApprovalGateRecord = {
   expires_at: string | null;
   consumed_at?: string | null;
   approval_consumption_version?: string | null;
-  quote_status_changed?: false;
+  quote_status_changed?: boolean;
   deferred_actions: string[];
 };
 
 export type ApprovalTokenConsumptionRecord = {
-  status: "consumed" | "expired" | "replayed";
+  status: "approved" | "consumed" | "expired" | "replayed";
   consumed: boolean;
   token_secret_returned: false;
-  quote_status_changed: false;
+  quote_status_changed: boolean;
   quote_send_triggered: false;
   production_package_triggered: false;
   approval_consumption_version: string;
+  deferred_actions: string[];
+};
+
+export type QuoteSendGateStatusRecord = {
+  revision_id: string;
+  quote_status: string;
+  status: "not_ready" | "prepared_deferred";
+  eligible_to_send: false;
+  approved_revision: boolean;
+  frozen_document_bound: boolean;
+  document_hash_bound: boolean;
+  snapshot_hash_bound: boolean;
+  email_provider_configured: false;
+  quote_send_triggered: false;
+  production_package_triggered: false;
+  artifact_status: "html_verified_pdf_deferred";
+  blocking_reasons: string[];
   deferred_actions: string[];
 };
 
@@ -1041,6 +1058,9 @@ export async function generateQuoteDocument(
   reservation: IdempotencyReservation
 ): Promise<QuoteDocumentRecord> {
   const snapshot = await getCurrentCalculatedQuoteSnapshot(context, quoteRevisionId);
+  if (snapshot.quote_revision.status !== "draft") {
+    throw new Error("quote document generation status conflict.");
+  }
   const project = await getProject(context, snapshot.quote_revision.project_id);
   const build = buildFrozenQuoteHtmlDocument({ project, snapshot });
   const storagePath = `${context.companyId}/${snapshot.quote_revision.id}/${build.sha256}.html`;
@@ -1283,6 +1303,44 @@ export async function consumeApprovalToken(rawToken: string): Promise<ApprovalTo
   return response.approval_consumption;
 }
 
+export async function getQuoteSendGateStatus(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteSendGateStatusRecord> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  const approvalGate = await getApprovalGateStatus(context, revision.id);
+  const document = approvalGate.generated_document_id
+    ? await getQuoteDocument(context, approvalGate.generated_document_id).catch(() => null)
+    : null;
+  const documentHashBound = Boolean(document && approvalGate.document_hash && document.sha256 === approvalGate.document_hash);
+  const snapshotHashBound = Boolean(document && approvalGate.snapshot_hash && document.snapshot_hash === approvalGate.snapshot_hash);
+  const approvedRevision = revision.status === "approved" && approvalGate.status === "approved";
+  const frozenDocumentBound = Boolean(document && documentHashBound && snapshotHashBound);
+  const blockingReasons = [
+    approvedRevision ? null : "quote_not_approved",
+    frozenDocumentBound ? null : "frozen_document_not_bound",
+    "binary_pdf_deferred",
+    "email_provider_not_configured",
+    "human_send_workflow_not_implemented"
+  ].filter((reason): reason is string => Boolean(reason));
+  return {
+    revision_id: revision.id,
+    quote_status: revision.status,
+    status: approvedRevision && frozenDocumentBound ? "prepared_deferred" : "not_ready",
+    eligible_to_send: false,
+    approved_revision: approvedRevision,
+    frozen_document_bound: frozenDocumentBound,
+    document_hash_bound: documentHashBound,
+    snapshot_hash_bound: snapshotHashBound,
+    email_provider_configured: false,
+    quote_send_triggered: false,
+    production_package_triggered: false,
+    artifact_status: "html_verified_pdf_deferred",
+    blocking_reasons: blockingReasons,
+    deferred_actions: ["quote_send", "quote_pdf", "production_package"]
+  };
+}
+
 export async function persistQuoteCalculationResult(
   context: TrustedRepositoryContext,
   calculation: QuoteCalculationResult,
@@ -1473,15 +1531,20 @@ export async function appendAuditEntry(
 export function quoteStatusPolicy(status: string): QuoteStatusPolicy {
   const normalized = status === "draft" || status === "approved" || status === "sent" ? status : "unknown";
   const riskyActions = ["quote_send", "quote_approve", "quote_pdf", "production_package"];
+  const deferredActions = normalized === "draft"
+    ? riskyActions
+    : normalized === "approved"
+      ? ["quote_send", "quote_pdf", "production_package"]
+      : [];
   return {
     status: normalized,
     mutable: normalized === "draft",
     direct_status_update_allowed: false,
-    allowed_transitions: [],
-    deferred_actions: normalized === "draft" ? riskyActions : [],
+    allowed_transitions: normalized === "draft" ? ["approval_token_consume:draft_to_approved"] : [],
+    deferred_actions: deferredActions,
     blocked_actions: normalized === "draft"
       ? ["direct_status_update"]
-      : ["direct_status_update", "modify_revision", ...riskyActions]
+      : ["direct_status_update", "modify_revision", "quote_approve", ...deferredActions]
   };
 }
 
@@ -1635,11 +1698,15 @@ function quoteDocumentArtifactFromRow(row: JsonRecord): QuoteDocumentArtifactRec
 }
 
 function approvalGateFromRow(row: JsonRecord, revisionId: string): ApprovalGateRecord {
+  const metadata = asJsonRecord(row.metadata_json);
+  const consumption = asJsonRecord(metadata.consumption);
+  const status = asString(row.status) as ApprovalGateRecord["status"];
+  const quoteStatusChanged = status === "approved" || (status === "consumed" && consumption.quote_status_changed === true);
   return {
     id: asNullableString(row.id),
     revision_id: asString(row.revision_id) || revisionId,
     action: "quote_approve",
-    status: asString(row.status) as ApprovalGateRecord["status"],
+    status,
     token_secret_returned: false,
     approval_token_version: asNullableString(row.approval_token_version),
     quote_revision_version: row.quote_revision_version === null || row.quote_revision_version === undefined
@@ -1651,8 +1718,10 @@ function approvalGateFromRow(row: JsonRecord, revisionId: string): ApprovalGateR
     expires_at: asNullableString(row.expires_at),
     consumed_at: asNullableString(row.consumed_at),
     approval_consumption_version: asNullableString(row.approval_consumption_version),
-    quote_status_changed: false,
-    deferred_actions: ["quote_send", "quote_approve", "production_package"]
+    quote_status_changed: quoteStatusChanged,
+    deferred_actions: quoteStatusChanged
+      ? ["quote_send", "quote_pdf", "production_package"]
+      : ["quote_send", "quote_approve", "quote_pdf", "production_package"]
   };
 }
 
