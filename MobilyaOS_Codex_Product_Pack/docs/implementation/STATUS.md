@@ -789,3 +789,431 @@ P3/G3 remains open until blocked verification can run cleanly. To proceed toward
 - Run the core Go test suite and fix any compile/runtime issues.
 - Add revision approval/immutability and negative authorization tests.
 - Replace in-memory state with PostgreSQL repositories and idempotency storage.
+
+## Post-P5.5 Build Train - Phase 0 and Phase 1 Checkpoint
+
+Current result: Phase 0 delegated P5.5 security completion and Phase 1 durable idempotency storage are complete for the Supabase-backed draft mutation routes.
+
+Agent reports:
+
+- `domain_architect`: confirmed idempotency scope must include tenant, actor, action, and key; raw keys are not provenance and must not be stored.
+- `backend_engineer`: added `public.idempotency_records`, atomic reservation RPC, durable Next.js route guard integration, and hashed-key replay/conflict behavior.
+- `frontend_engineer`: no user-facing idempotency records are exposed; existing mutation UI continues to send stable keys through the route layer.
+- `ai_prompt_engineer`: runtime tool-gateway docs now require idempotency keys for future mutation tools and keep LLMs out of authoritative calculations.
+- `security_reviewer`: reported no critical/high route issues after the delegated pass; remaining medium risks are second-tenant coverage and transactional hardening.
+- `qa_reviewer`: identified missing high-severity coverage for unauthenticated read routes and idempotency/audit replay checks. Corrective tests were added and rerun.
+
+Files added or materially changed:
+
+- `supabase/migrations/0004_idempotency_records.sql`
+- `apps/web/lib/server/idempotency.ts`
+- `apps/web/lib/server/routeGuards.ts`
+- `apps/web/app/api/supabase/customers/route.ts`
+- `apps/web/app/api/supabase/projects/route.ts`
+- `apps/web/app/api/supabase/projects/[projectId]/quote-drafts/route.ts`
+- `apps/web/scripts/server-boundary-check.mjs`
+- `apps/web/scripts/mutation-route-smoke.mjs`
+- `scripts/verify_supabase_connection.py`
+- `docs/adr/0007-durable-supabase-idempotency.md`
+- `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
+- `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
+- `docs/implementation/DEVELOPMENT_PLAN.md`
+- `STATUS.md`
+- `docs/implementation/STATUS.md`
+
+Phase 0/P5.5 security completion findings:
+
+| Severity | Finding | Status |
+| --- | --- | --- |
+| Critical | None found. | Closed. |
+| High | QA found missing no-session read-route coverage. | Fixed in mutation smoke and retested. |
+| High | QA found incomplete idempotency/audit replay coverage. | Fixed in mutation smoke and retested. |
+| Medium | True cross-tenant live tests need a second tenant fixture. | Open for Phase 7. |
+| Medium | Static marker checks are useful tripwires but not full integration tests. | Open; route tests should continue to expand. |
+
+Phase 1 durable idempotency behavior:
+
+- Records are stored in Supabase table `public.idempotency_records`.
+- Scope is `company_id + actor_app_user_id + action + hashed idempotency key`.
+- Request comparison uses a deterministic SHA-256 request hash.
+- Same scoped key and same request body replays the stored sanitized response.
+- Same scoped key and changed request body returns `409`.
+- Same key across a different actor or action does not replay another result.
+- Raw idempotency keys are not stored.
+- Response bodies are sanitized before durable replay storage.
+
+Phase 1 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required values configured; URL structures valid; no values printed. |
+| `py -3.12 -m py_compile scripts\supabase_common.py scripts\check_supabase_env.py scripts\apply_supabase_migrations.py scripts\seed_supabase.py scripts\verify_supabase_connection.py` | Passed | Supabase helper scripts compile. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0004_idempotency_records.sql`. |
+| Redacted RPC diagnostic | Passed after fix | Initial function had ambiguous `id` column; migration was patched and reapplied. Debug row was deleted by action label. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Required tables now `18`; RLS-enabled tables `18`; tenant company columns `17`; authenticated RLS smoke passed. |
+| `npm run test -w apps/web` | Passed | Server boundary now requires durable RPC markers and rejects old process-local cache. |
+| `npm run typecheck -w apps/web` | Passed | Strict TypeScript check passed. |
+| `npm run build -w apps/web` | Passed | Production build passed. |
+| `npm run test:session -w apps/web` | Passed | Session smoke passed. |
+| `npm run test:mutations -w apps/web` | Passed | Includes no-session reads, viewer denial, sales/admin creates, durable replay after Next restart, replay/conflict checks, no audit on replay/conflict, risky route unavailability, and forbidden payload checks. |
+| `npm run test --workspaces --if-present` | Passed | Web boundary passed; contracts test remains placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed | Web typecheck passed; contracts typecheck remains placeholder. |
+| `npm run build --workspaces --if-present` | Passed | Workspace build passed. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Compute lint passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Compute typecheck passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 13 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| Safe secret scan | Passed | No value-shaped secrets or connection strings found outside ignored `.env.local`. Literal denylist labels remain in tests/docs as expected. |
+
+Remaining Phase 1 risks:
+
+- Idempotency reservation, domain mutation, and audit append are not yet one SQL transaction in the web REST implementation.
+- Expired idempotency cleanup is scoped to the same key on reservation; global pruning is future operational work.
+- True cross-tenant replay/IDOR testing still needs a second seeded tenant fixture.
+- Go, Docker, GNU Make, and Go core verification remain unavailable locally.
+
+## Post-P5.5 Build Train - Phase 2 Checkpoint
+
+Current result: Phase 2 domain-safe quote draft workflow and revision timeline is complete for the current Supabase-backed draft/read routes. No quote send, quote approval, official PDF generation, production package generation, or direct quote status mutation route was enabled.
+
+Agent implementation reports:
+
+- `domain_architect`: documented that current quote status policy is descriptive only, direct browser status writes are invalid, and only draft quote creation is active.
+- `backend_engineer`: added a read-only project detail route, quote revision detail status policy, and sanitized audit timeline repository reads.
+- `frontend_engineer`: added a compact Supabase project/revision timeline panel with quote status policy and audit entries.
+- `ai_prompt_engineer`: no runtime agent execution changed; future tools must treat status policy as backend-owned data, not model authority.
+- `security_reviewer`: found one medium issue where public generated document overview exposed storage bucket metadata; this was removed from the public DTO/type and retested.
+- `qa_reviewer`: found no critical/high issues; medium fixture gaps remain for true second-tenant IDOR and approved/sent status-policy coverage. Low audit/risky-route coverage improvements were added and retested.
+
+Files added or materially changed:
+
+- `apps/web/app/api/supabase/projects/[projectId]/route.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/route.ts`
+- `apps/web/lib/server/supabaseRepository.ts`
+- `apps/web/lib/api.ts`
+- `apps/web/app/page.tsx`
+- `apps/web/app/globals.css`
+- `apps/web/scripts/server-boundary-check.mjs`
+- `apps/web/scripts/mutation-route-smoke.mjs`
+- `docs/implementation/DOMAIN_INVARIANTS.md`
+- `docs/implementation/STATUS.md`
+
+Routes added or changed:
+
+- Added `GET /api/supabase/projects/[projectId]`
+- Expanded `GET /api/supabase/quote-revisions/[quoteRevisionId]` to include `status_policy` and `audit_entries`
+
+Phase 2 behavior:
+
+- Project detail returns the session-tenant project, its quote revision timeline, and sanitized audit timeline rows.
+- Quote revision detail returns the session-tenant quote revision, status policy, and sanitized audit timeline rows.
+- Status policy reports current status, mutability, deferred risky actions, and `direct_status_update_allowed: false`.
+- Public generated document overview no longer exposes storage bucket metadata.
+- Browser-supplied status remains non-authoritative. Quote draft creation forces `draft`.
+- Direct `PATCH /api/supabase/quote-revisions/[quoteRevisionId]` remains unavailable.
+- Send, approve, PDF, and production package routes remain unavailable.
+
+Phase 2 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript check passed after API/UI changes. |
+| `npm run test -w apps/web` | Passed | Static boundary includes new route and quote status policy checks. |
+| `npm run build -w apps/web` | Passed | Production build includes `GET /api/supabase/projects/[projectId]`. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Supabase schema/RLS smoke still passed. |
+| `npm run test:mutations -w apps/web` | Passed | Covers no-session project detail, missing project detail 404, project detail timeline, quote status policy, direct PATCH status escalation blocked, risky route unavailability, and prior mutation gates. |
+| `npm run test:mutations -w apps/web` | Passed twice after guard fix | Confirms fresh JSON mutation responses after idempotency persistence and no empty 201 body regression. |
+
+Remaining Phase 2 risks:
+
+- Timeline audit rows expose only compact audit fields; a dedicated audit route/schema is still future work.
+- True cross-tenant project/revision detail negatives still need a second seeded tenant fixture.
+- Approved/sent immutability remains policy-described in the Supabase path because no approved/sent mutation route exists yet; approved/sent fixture coverage remains future work.
+- Idempotency now stores safe error responses for handler-level 404/422 outcomes; a future single-transaction repository should still merge reservation, write, and audit.
+
+## Post-P5.5 Build Train - Phase 3 Checkpoint
+
+Current result: Phase 3 deterministic calculation service boundary scaffolding is complete in the compute service after domain/security/QA review fixes. This is contract/validation scaffolding only and does not claim a production calculation engine.
+
+Agent implementation reports:
+
+- `domain_architect`: found high issues for weak provenance and ambiguous nesting preview output. Fixes require non-empty/source-specific provenance and make nesting preview explicitly non-authoritative with no sheet count.
+- `backend_engineer`: no Supabase persistence changed in this phase.
+- `frontend_engineer`: removed browser-supplied cost snapshot submission from chat context.
+- `ai_prompt_engineer`: calculation boundary stays separate from chat; preview endpoint reports `authoritative_calculation: false`; chat ignores untrusted browser cost snapshots.
+- `security_reviewer`: found medium public preview resource/validation echo risks. Fixes bound list sizes and sanitize validation errors so rejected input values are not echoed.
+- `qa_reviewer`: found high chat cost-snapshot authority risk. Fixes strip caller-supplied commercial snapshots during auth, retain only a safe boolean flag, and deny trusted cost explanation until a server adapter exists.
+
+Files added or materially changed:
+
+- `services/compute/app/calculation_contracts.py`
+- `services/compute/app/main.py`
+- `services/compute/tests/test_calculation_contracts.py`
+- `services/compute/tests/test_agent_runtime.py`
+- `apps/web/app/page.tsx`
+- `docs/implementation/CALCULATION_BOUNDARY.md`
+- `docs/implementation/STATUS.md`
+
+Route added:
+
+- `POST /api/v1/calculations/boundary-preview`
+
+Phase 3 behavior:
+
+- Defines typed interfaces for measurement input, product template/configuration input, BOM, edge banding, labor cost, material cost, pricing, and quote total boundaries.
+- Enforces strict integer millimetres and strict integer minor money.
+- Rejects binary-float quantity inputs and requires explicit units.
+- Rejects target gross margin at or above 100%.
+- Requires non-empty/source-specific provenance for meaningful calculation boundary data.
+- Provides a deterministic non-production adapter that validates bounded request shapes and returns a stable contract hash only.
+- Sanitizes FastAPI validation errors so rejected input values are not echoed.
+- The chat runtime no longer treats browser-supplied cost snapshots as trusted `costing_tool` facts.
+- `/api/v1/nesting/preview` reports `authoritative_calculation: false` and no longer returns a synthetic `sheet_count`.
+- Does not calculate or persist authoritative BOM, edge, labor, material cost, pricing, tax, quote totals, nesting, or production quantities.
+
+Phase 3 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Compute lint passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Strict mypy passed over 5 source files. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 25 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+
+Remaining Phase 3 risks:
+
+- This is not a production calculation engine.
+- No authoritative calculation output is persisted from the preview endpoint.
+- Future real engines still need deterministic implementations, golden wardrobe/kitchen examples, provenance storage, and Supabase/Core integration.
+
+## Post-P5.5 Build Train - Phase 4 Checkpoint
+
+Current result: complete. Phase 4 added Supabase-backed quote configuration draft persistence only; no authoritative BOM, edge, labor, cost, tax, margin, quote total, PDF, send, approval, or production package state was enabled.
+
+Planned agent ownership:
+
+- `domain_architect`: review configuration draft invariants for integer millimetres, explicit quantities, non-authoritative calculation state, and immutable approved/sent revisions.
+- `backend_engineer`: add non-destructive Supabase schema, tenant-scoped repository methods, route validation, durable idempotency, and audit append for configuration drafts.
+- `frontend_engineer`: add a small draft configuration form and readback panel without browser-side authoritative calculations.
+- `ai_prompt_engineer`: update tool-gateway documentation so future agents may collect configuration inputs but cannot calculate or persist commercial outputs.
+- `security_reviewer`: review tenant/session authority, browser payload sanitization, forbidden fields, immutable status boundary, and risky route absence.
+- `qa_reviewer`: extend static and live mutation smokes for create/read/update, invalid dimensions, idempotency replay/conflict, viewer denial, tenant 404s, audit append, and sanitized payloads.
+
+Phase 4 stop line:
+
+- Do not persist authoritative BOM, edge, labor, cost, tax, margin, quote total, generated document, approval, send, or production-package state.
+- Do not allow browser-provided company, actor, role, quote status, totals, or calculation status to become authority.
+- Stop before migrations if the schema change would be destructive.
+
+Agent implementation reports:
+
+- `domain_architect`: high findings for DB-level draft-only/approved immutability and mandatory idempotency; fixed with quote revision/config draft DB guards, required idempotency keys, explicit required configuration inputs, and smoke coverage.
+- `backend_engineer`: added `quote_configuration_drafts`, route/repository create/read/update methods, optimistic `expected_version` checks, durable idempotency, audit append, and Supabase verification guard checks.
+- `frontend_engineer`: added a compact Supabase configuration draft form/readback in the revision timeline panel. It sends only draft input and displays `not_calculated` status.
+- `ai_prompt_engineer`: updated runtime gateway documentation so future agents may request/read/update configuration drafts only through server-gated tools and cannot calculate authoritative results.
+- `security_reviewer`: high findings for direct authenticated writes, DB immutability, non-transactional idempotency, and stale updates. Direct writes and DB immutability were fixed and retested; single-transaction idempotency remains documented as a residual risk.
+- `qa_reviewer`: critical/high gaps for missing route/tests, invalid dimension coverage, approved revision denial, tenant scope, payload sanitization, audit, and no fake totals. Live mutation smoke now covers these cases except true second-tenant fixtures, which remain future work.
+
+Files added or materially changed:
+
+- `supabase/migrations/0005_quote_configuration_drafts.sql`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft/route.ts`
+- `apps/web/lib/server/supabaseRepository.ts`
+- `apps/web/lib/server/productMutationBoundary.ts`
+- `apps/web/lib/server/routeGuards.ts`
+- `apps/web/lib/api.ts`
+- `apps/web/app/page.tsx`
+- `apps/web/app/globals.css`
+- `apps/web/scripts/server-boundary-check.mjs`
+- `apps/web/scripts/mutation-route-smoke.mjs`
+- `scripts/seed_supabase.py`
+- `scripts/verify_supabase_connection.py`
+- `README.md`
+- `STATUS.md`
+- `ROADMAP.md`
+- `docs/implementation/DEVELOPMENT_PLAN.md`
+- `docs/implementation/DOMAIN_INVARIANTS.md`
+- `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
+- `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
+- `docs/implementation/SUPABASE_CLOUD_SETUP.md`
+- `docs/implementation/STATUS.md`
+
+Routes added:
+
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft`
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft`
+- `PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft`
+
+Phase 4 behavior:
+
+- Configuration drafts are attached to quote revisions and scoped by server-resolved company/session context.
+- POST creates one draft per quote revision; PATCH updates with an `expected_version` optimistic lock.
+- Validation accepts only bounded draft wardrobe input: integer-mm width/height/depth, explicit piece quantity, bounded door/shelf counts, bounded SKUs, and notes.
+- Server response includes sanitized draft input, `draft_validated`, and `not_calculated`.
+- Mutations require durable idempotency keys. Replays return the stored safe response; changed same-key bodies return `409`.
+- Viewer writes return `403`; sales/admin writes are allowed only through the server route and only for draft revisions.
+- DB guards reject quote revision status changes, approved/sent revision mutations, approved-revision configuration drafts, and invalid configuration JSON shapes.
+- Direct authenticated REST writes to quote revisions/configuration drafts are blocked or proven no-effect.
+- Audit entries are appended for `quote_configuration_created` and `quote_configuration_updated`.
+
+Phase 4 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required keys configured; URL formats/structures valid; no values printed. |
+| `py -3.12 -m py_compile scripts\supabase_common.py scripts\check_supabase_env.py scripts\apply_supabase_migrations.py scripts\seed_supabase.py scripts\verify_supabase_connection.py` | Passed | Supabase scripts compile. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0005_quote_configuration_drafts.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo users existed; demo rows reseeded with draft and approved revision fixtures. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Required tables `19`; tenant columns `18`; RLS tables `19`; DB guards and direct-write checks passed. |
+| `npm run test -w apps/web` | Passed | Static server boundary includes config route/repository markers. |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript check passed. |
+| `npm run build -w apps/web` | Passed | Production build includes config draft route. |
+| `npm run test:session -w apps/web` | Passed | Session smoke passed after build. |
+| `npm run test:mutations -w apps/web` | Passed | Includes config create/read/update, invalid input, approved revision denial, idempotency, audit, and no fake totals. |
+| `npm run test --workspaces --if-present` | Passed | Web boundary passed; contracts test remains placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed | Web typecheck passed; contracts typecheck remains placeholder. |
+| `npm run build --workspaces --if-present` | Passed | Workspace production build passed; contracts build remains placeholder. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Compute lint passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Compute typecheck passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 25 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| Safe secret scan | Passed | No value-shaped secrets or connection strings found outside ignored `.env.local`. |
+
+Remaining Phase 4 risks:
+
+- Idempotency reservation, domain write, and audit append are still separate REST/database operations rather than one SQL transaction.
+- True second-tenant live negative tests still need a seeded second tenant fixture.
+- Configuration draft JSON has DB guard coverage for shape and forbidden keys, but typed command RPCs would provide a stronger long-term boundary.
+- Edge schema still has legacy `front` edge naming from older demo paths; physical edge normalization remains future domain cleanup.
+- No authoritative calculation engine or persisted BOM/cost snapshot is implemented from these configuration drafts yet.
+
+## Post-P5.5 Build Train - Phase 5 Checkpoint
+
+Current result: complete. Phase 5 adds a runtime agent tool gateway policy skeleton without activating unsafe runtime tool execution.
+
+Agent implementation reports:
+
+- `domain_architect`: gateway metadata keeps LLMs out of authoritative calculation ownership and marks calculation-from-LLM as forbidden.
+- `backend_engineer`: no Supabase or web mutation route changed in this phase.
+- `frontend_engineer`: no user-facing UI changed in this phase.
+- `ai_prompt_engineer`: added typed gateway policy metadata and a safe manifest endpoint for future prompt/tool alignment.
+- `security_reviewer`: found high issues where chat did not use the new policy evaluator, caller-supplied diff entries were emitted as tool facts, and quote preview/approval accepted arbitrary revision IDs. Fixes route every rules-mode tool call through `evaluate_tool_request`, strip browser diff entries, deny browser-authored diffs, and validate revision IDs before preview/approval.
+- `qa_reviewer`: added compute tests for policy metadata, gateway decisions, chat/policy integration, untrusted diff denial, quote revision IDOR denial, stale approval version denial, and non-draft approval denial.
+- `domain_architect`: found medium metadata risks for config mutation executability and quote approval status/version constraints. Fixes mark config draft mutation policies as non-executable skeleton entries with draft/version/not-calculated metadata and require current draft revision/version for approval request.
+
+Files added or materially changed:
+
+- `services/compute/app/tool_gateway_policy.py`
+- `services/compute/app/main.py`
+- `services/compute/tests/test_tool_gateway_policy.py`
+- `services/compute/app/agent_runtime.py` (Ruff formatting only)
+- `services/compute/tests/test_agent_runtime.py` (Ruff formatting only)
+- `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
+- `docs/implementation/STATUS.md`
+
+Route added:
+
+- `GET /api/v1/agent/tool-gateway/policies`
+
+Phase 5 behavior:
+
+- Tool policy manifest declares no direct database access, no service-key access, and no LLM authoritative calculation authority.
+- Registered safe/future tools include customer/project/quote draft reads and draft mutations, quote configuration draft reads/mutations, quote preview, approval request metadata, and missing-measurement conversation support.
+- Forbidden tools remain non-executable: `send_quote`, `approve_quote`, `generate_pdf`, `create_production_package`, and `run_authoritative_calculation_from_llm`.
+- Policy evaluation checks agent allowlist, server-side session presence, trusted tenant scope, role permission, idempotency requirement, approval requirement, and prompt-injection/policy-bypass text.
+- Current `/api/v1/agent/chat` rules-mode adapters call the policy evaluator before returning any tool-like facts or actions.
+- Browser-supplied cost snapshots and revision diffs are ignored/denied as authority.
+- Quote preview/approval accepts only known demo revisions in the authorized tenant adapter; approval also requires mutable draft status and current expected version.
+
+Phase 5 command log so far:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 -m ruff format .` in `services/compute` | Passed | Applied formatting to compute files. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Strict mypy passed over 6 source files. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Compute lint passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 38 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+
+Remaining Phase 5 risks:
+
+- The policy skeleton is not yet wired to real Supabase-backed application tool execution.
+- Gateway audit/idempotency/approval fields are metadata and decision checks; tool invocation persistence and single-source sync against prompt/catalog metadata remain future work.
+- The current chat endpoint still uses deterministic rules-mode adapters, not a production LLM runtime.
+- Prompt/tool-output injection detection is still partly keyword-based; broader structured malicious content tests are future work.
+
+## Post-P5.5 Build Train - Phase 6 Checkpoint
+
+Current result: complete for the read-only user-facing agent prototype. The web UI now posts chat messages to a same-origin Supabase server route instead of calling compute directly from the browser.
+
+Agent implementation reports:
+
+- `domain_architect`: preserved the rule that chat may explain, navigate, and ask for missing measurements but cannot calculate BOM, edge, labor, cost, tax, margin, quote totals, PDF, send, approval, or production state.
+- `backend_engineer`: added `POST /api/supabase/agent-chat` behind `withReadSession`; the route resolves tenant/user/role from the existing HTTP-only session and reads only tenant-scoped project, revision, audit, and configuration draft data through repository helpers.
+- `frontend_engineer`: rewired the single chat panel to call `/api/supabase/agent-chat` with only a message and selected object IDs. Browser-supplied company, role, user, cost snapshot, and diff payloads are no longer sent.
+- `ai_prompt_engineer`: tightened Phase 6 policy posture so registered mutation/workflow tools remain non-executable and prompt version labels no longer expose local filesystem paths.
+- `security_reviewer`: reported a high direct-browser-to-compute chat boundary issue and medium compute metadata/policy findings. Fixes removed the browser compute chat call, removed public compute URL exposure from the health page, sanitized prompt labels, and marked mutation/workflow tool policies non-executable for Phase 6.
+- `qa_reviewer`: recommended web smoke/static assertions for unauthenticated chat blocking, viewer/read-only behavior, prompt injection, mutation denial, forbidden field scans, no calculation claims, and schema-compatible proposed action risk labels. These were integrated into `session-route-smoke.mjs` and `server-boundary-check.mjs`.
+
+Files added or materially changed:
+
+- `apps/web/app/api/supabase/agent-chat/route.ts`
+- `apps/web/app/page.tsx`
+- `apps/web/app/health/page.tsx`
+- `apps/web/lib/api.ts`
+- `apps/web/scripts/server-boundary-check.mjs`
+- `apps/web/scripts/session-route-smoke.mjs`
+- `services/compute/app/agent_runtime.py`
+- `services/compute/app/tool_gateway_policy.py`
+- `services/compute/tests/test_agent_runtime.py`
+- `services/compute/tests/test_tool_gateway_policy.py`
+- `STATUS.md`
+- `ROADMAP.md`
+- `README.md`
+- `docs/implementation/DEVELOPMENT_PLAN.md`
+- `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
+- `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
+- `docs/implementation/STATUS.md`
+
+Route added:
+
+- `POST /api/supabase/agent-chat`
+
+Phase 6 behavior:
+
+- Unauthenticated agent chat requests return `401`.
+- Authenticated chat reads only through server-derived session scope and tenant-scoped repository methods.
+- The route accepts only the message plus selected project/revision IDs as non-authoritative selectors.
+- Prompt-injection or policy-bypass wording is blocked before tool reads.
+- Mutation-like requests such as quote send, approval, PDF, production, create, update, or delete are denied by the read-only gateway.
+- Responses omit service keys, database URLs, Supabase tokens, auth user IDs, storage paths, browser-supplied authority fields, raw cost snapshots, raw diff entries, and authoritative total claims.
+- Direct compute agent tests remain useful for policy/runtime scaffolding, but the browser UI no longer calls compute chat directly.
+
+Phase 6 targeted command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required keys configured; URL formats/structures valid; no values printed. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live Supabase connection, required tables, RLS, demo fixtures, storage buckets, authenticated RLS smoke, and DB guards passed. |
+| `py -3.12 -m py_compile scripts\supabase_common.py scripts\check_supabase_env.py scripts\apply_supabase_migrations.py scripts\seed_supabase.py scripts\verify_supabase_connection.py` | Passed | Supabase helper scripts compile. |
+| `node apps/web/scripts/server-boundary-check.mjs` | Passed | Static boundary now includes `/api/supabase/agent-chat` and forbids browser compute chat/base URL exposure. |
+| `npm run test -w apps/web` | Passed | Web static server boundary passed. |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript passed. |
+| `npm run build -w apps/web` | Passed | Production build includes `/api/supabase/agent-chat`. |
+| `npm run test:session -w apps/web` | Passed | Live session smoke covers agent chat 401, read-only success, injection block, mutation denial, and sanitized payload checks. |
+| `npm run test:mutations -w apps/web` | Passed | Existing Supabase mutation smoke still passes after chat changes. |
+| `npm run test --workspaces --if-present` | Passed | Web boundary passed; contracts test remains placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed | Web typecheck passed; contracts typecheck remains placeholder. |
+| `npm run build --workspaces --if-present` | Passed | Workspace production build passed; contracts build remains placeholder. |
+| `py -3.12 -m ruff format .` in `services/compute` | Passed | Formatted one compute file. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Compute lint passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Compute typecheck passed. |
+| `py -3.12 -m pytest services\compute\tests` | Passed | 39 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| Safe secret scan | Passed | No tracked secret-like values found outside ignored `.env.local`; literal env labels remain only as docs/tests/code markers. |
+
+Remaining Phase 6 risks:
+
+- The web agent route is read-only and rules-based; it is not a production LLM runtime.
+- Direct compute agent endpoint still exists for local policy/runtime tests with static demo bearer tokens; browser UI no longer calls it.
+- Agent read tooling is limited to project/revision/configuration summaries and does not persist tool invocations or audit read events.
+- Prompt-injection detection remains keyword/rules based; malicious retrieved content and supplier/customer document injection still need broader eval coverage.
+- Real second-tenant live negative tests remain Phase 7 work.

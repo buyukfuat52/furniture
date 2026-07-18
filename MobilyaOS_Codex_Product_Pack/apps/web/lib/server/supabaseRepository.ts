@@ -60,8 +60,46 @@ export type QuoteRevisionRecord = {
   version: number;
 };
 
+export type QuoteStatusPolicy = {
+  status: string;
+  mutable: boolean;
+  direct_status_update_allowed: false;
+  allowed_transitions: string[];
+  deferred_actions: string[];
+  blocked_actions: string[];
+};
+
+export type QuoteRevisionDetailRecord = {
+  quote_revision: QuoteRevisionRecord;
+  status_policy: QuoteStatusPolicy;
+  audit_entries: AuditEntryRecord[];
+};
+
 export type QuoteDraftInput = {
   project_id: string;
+};
+
+export type QuoteConfigurationDraftValues = {
+  template_code: string;
+  width_mm: number;
+  height_mm: number;
+  depth_mm: number;
+  quantity: number;
+  door_count: number;
+  shelf_count: number;
+  material_sku: string | null;
+  edge_band_sku: string | null;
+  notes: string | null;
+};
+
+export type QuoteConfigurationDraftRecord = {
+  id: string;
+  quote_revision_id: string;
+  configuration: QuoteConfigurationDraftValues;
+  validation_status: "draft_validated";
+  calculation_status: "not_calculated";
+  version: number;
+  updated_at: string;
 };
 
 export type BomSnapshotRecord = {
@@ -89,7 +127,6 @@ export type GeneratedDocumentRecord = {
   revision_id: string;
   cost_snapshot_id: string | null;
   document_type: string;
-  storage_bucket: string;
   content_type: string;
   size_bytes: number;
 };
@@ -105,8 +142,15 @@ export type AuditEntryRecord = {
   id: string;
   action: string;
   target_type: string;
+  target_id: string | null;
   decision: string;
   created_at: string;
+};
+
+export type ProjectDetailRecord = {
+  project: ProjectRecord;
+  quote_revisions: QuoteRevisionRecord[];
+  audit_entries: AuditEntryRecord[];
 };
 
 export type DemoTenantOverview = {
@@ -182,6 +226,85 @@ function requireName(value: string, label: string): string {
     throw new Error(`${label} is required.`);
   }
   return cleaned;
+}
+
+function requireBoundedInteger(value: unknown, label: string, min: number, max: number): number {
+  let parsed: number;
+  if (typeof value === "number" && Number.isInteger(value)) {
+    parsed = value;
+  } else if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    parsed = Number(value.trim());
+  } else {
+    throw new Error(`${label} is invalid.`);
+  }
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return parsed;
+}
+
+function requireTemplateCode(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new Error("Template code is invalid.");
+  }
+  const cleaned = cleanText(value, 80).toLowerCase();
+  if (!/^[a-z0-9_-]{2,80}$/.test(cleaned)) {
+    throw new Error("Template code is invalid.");
+  }
+  return cleaned;
+}
+
+function cleanSku(value: unknown, label: string): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const cleaned = cleanText(value, 80).toUpperCase();
+  if (!cleaned) {
+    return null;
+  }
+  if (!/^[A-Z0-9][A-Z0-9._-]{1,79}$/.test(cleaned)) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return cleaned;
+}
+
+function configurationValuesFromInput(input: Record<string, unknown>): QuoteConfigurationDraftValues {
+  return {
+    template_code: requireTemplateCode(input.template_code),
+    width_mm: requireBoundedInteger(input.width_mm, "Width", 100, 6000),
+    height_mm: requireBoundedInteger(input.height_mm, "Height", 100, 4000),
+    depth_mm: requireBoundedInteger(input.depth_mm, "Depth", 100, 2000),
+    quantity: requireBoundedInteger(input.quantity, "Quantity", 1, 100),
+    door_count: requireBoundedInteger(input.door_count, "Door count", 0, 20),
+    shelf_count: requireBoundedInteger(input.shelf_count, "Shelf count", 0, 100),
+    material_sku: cleanSku(input.material_sku, "Material SKU"),
+    edge_band_sku: cleanSku(input.edge_band_sku, "Edge band SKU"),
+    notes: cleanNullableText(typeof input.notes === "string" ? input.notes : null, 240)
+  };
+}
+
+function configurationJsonFromValues(values: QuoteConfigurationDraftValues): JsonRecord {
+  return {
+    input_schema_version: "quote_configuration_draft_v1",
+    template_code: values.template_code,
+    measurements: {
+      unit: "mm",
+      width_mm: values.width_mm,
+      height_mm: values.height_mm,
+      depth_mm: values.depth_mm
+    },
+    quantity: {
+      unit: "piece",
+      value: values.quantity
+    },
+    options: {
+      door_count: values.door_count,
+      shelf_count: values.shelf_count,
+      material_sku: values.material_sku,
+      edge_band_sku: values.edge_band_sku,
+      notes: values.notes
+    }
+  };
 }
 
 function companyFromRow(row: JsonRecord): CompanyRecord {
@@ -312,9 +435,9 @@ export async function loadDemoTenantOverview(
     supabaseRest<JsonRecord[]>(tenantQuery("quote_revisions", companyId, "id,company_id,project_id,revision_number,status,version", "created_at.asc")),
     supabaseRest<JsonRecord[]>(tenantQuery("bom_snapshots", companyId, "id,company_id,revision_id,formula_version,bom_json,edge_json", "created_at.desc")),
     supabaseRest<JsonRecord[]>(tenantQuery("cost_snapshots", companyId, "id,company_id,revision_id,formula_version,currency,subtotal_minor,markup_minor,vat_minor,grand_total_minor,categories_json", "created_at.desc")),
-    supabaseRest<JsonRecord[]>(tenantQuery("generated_documents", companyId, "id,company_id,revision_id,cost_snapshot_id,document_type,storage_bucket,content_type,size_bytes", "created_at.desc")),
+    supabaseRest<JsonRecord[]>(tenantQuery("generated_documents", companyId, "id,company_id,revision_id,cost_snapshot_id,document_type,content_type,size_bytes", "created_at.desc")),
     supabaseRest<JsonRecord[]>(tenantQuery("approvals", companyId, "id,company_id,revision_id,action,status", "created_at.desc")),
-    supabaseRest<JsonRecord[]>(tenantQuery("audit_entries", companyId, "id,company_id,action,target_type,decision,created_at", "created_at.desc"))
+    supabaseRest<JsonRecord[]>(tenantQuery("audit_entries", companyId, "id,company_id,action,target_type,target_id,decision,created_at", "created_at.desc"))
   ]);
   const scopedRows = [
     ["app_users", appUserRows],
@@ -383,7 +506,6 @@ export async function loadDemoTenantOverview(
       revision_id: asString(row.revision_id),
       cost_snapshot_id: asNullableString(row.cost_snapshot_id),
       document_type: asString(row.document_type),
-      storage_bucket: asString(row.storage_bucket),
       content_type: asString(row.content_type),
       size_bytes: asNumber(row.size_bytes)
     })),
@@ -397,6 +519,7 @@ export async function loadDemoTenantOverview(
       id: asString(row.id),
       action: asString(row.action),
       target_type: asString(row.target_type),
+      target_id: asNullableString(row.target_id),
       decision: asString(row.decision),
       created_at: asString(row.created_at)
     })),
@@ -464,6 +587,50 @@ export async function listProjects(context: TrustedRepositoryContext): Promise<P
     status: asString(row.status),
     version: asNumber(row.version)
   }));
+}
+
+export async function getProject(
+  context: TrustedRepositoryContext,
+  projectId: string
+): Promise<ProjectRecord> {
+  const project = await requireProjectInCompany(context, requireUuid(projectId, "Project id"));
+  const customerId = asNullableString(project.customer_id);
+  let customerName = "";
+  if (customerId) {
+    const rows = await supabaseRest<JsonRecord[]>(
+      `customers?${new URLSearchParams({
+        id: `eq.${customerId}`,
+        company_id: `eq.${context.companyId}`,
+        select: "id,company_id,name"
+      }).toString()}`
+    );
+    if (rows.length === 1) {
+      assertCompanyScope(rows, context.companyId, "customers");
+      customerName = asString(rows[0].name);
+    }
+  }
+  return {
+    id: asString(project.id),
+    customer_id: customerId,
+    customer_name: customerName,
+    name: asString(project.name),
+    status: asString(project.status),
+    version: asNumber(project.version)
+  };
+}
+
+export async function getProjectDetail(
+  context: TrustedRepositoryContext,
+  projectId: string
+): Promise<ProjectDetailRecord> {
+  const project = await getProject(context, projectId);
+  const quoteRevisions = await listQuoteRevisions(context, project.id);
+  const auditTargetIds = [project.id, ...quoteRevisions.map((revision) => revision.id)];
+  return {
+    project,
+    quote_revisions: quoteRevisions,
+    audit_entries: await listAuditEntries(context, auditTargetIds)
+  };
 }
 
 export async function createProject(
@@ -543,6 +710,112 @@ export async function getQuoteRevision(
   return quoteRevisionFromRow(rows[0]);
 }
 
+export async function getQuoteRevisionDetail(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteRevisionDetailRecord> {
+  const quoteRevision = await getQuoteRevision(context, quoteRevisionId);
+  return {
+    quote_revision: quoteRevision,
+    status_policy: quoteStatusPolicy(quoteRevision.status),
+    audit_entries: await listAuditEntries(context, [quoteRevision.id])
+  };
+}
+
+export async function getQuoteConfigurationDraft(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteConfigurationDraftRecord | null> {
+  const quoteRevision = await getQuoteRevision(context, quoteRevisionId);
+  const rows = await supabaseRest<JsonRecord[]>(
+    `quote_configuration_drafts?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      quote_revision_id: `eq.${quoteRevision.id}`,
+      select: "id,company_id,quote_revision_id,configuration_json,validation_status,calculation_status,version,updated_at"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "quote_configuration_drafts");
+  return rows[0] ? quoteConfigurationDraftFromRow(rows[0]) : null;
+}
+
+export async function createQuoteConfigurationDraft(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string,
+  input: Record<string, unknown>
+): Promise<QuoteConfigurationDraftRecord> {
+  const quoteRevision = await getQuoteRevision(context, quoteRevisionId);
+  if (quoteRevision.status !== "draft") {
+    throw new Error("Quote revision status conflict.");
+  }
+  const existing = await getQuoteConfigurationDraft(context, quoteRevision.id);
+  if (existing) {
+    throw new Error("Configuration draft conflict.");
+  }
+  const configuration = configurationValuesFromInput(input);
+  const row = await supabaseRestObject<JsonRecord>(
+    "quote_configuration_drafts?select=id,company_id,quote_revision_id,configuration_json,validation_status,calculation_status,version,updated_at",
+    {
+      method: "POST",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({
+        company_id: context.companyId,
+        quote_revision_id: quoteRevision.id,
+        configuration_json: configurationJsonFromValues(configuration),
+        validation_status: "draft_validated",
+        calculation_status: "not_calculated",
+        created_by: context.appUserId,
+        updated_by: context.appUserId
+      })
+    }
+  );
+  assertCompanyScope([row], context.companyId, "quote_configuration_drafts");
+  return quoteConfigurationDraftFromRow(row);
+}
+
+export async function updateQuoteConfigurationDraft(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string,
+  input: Record<string, unknown>
+): Promise<QuoteConfigurationDraftRecord> {
+  const quoteRevision = await getQuoteRevision(context, quoteRevisionId);
+  if (quoteRevision.status !== "draft") {
+    throw new Error("Quote revision status conflict.");
+  }
+  const existing = await getQuoteConfigurationDraft(context, quoteRevision.id);
+  if (!existing) {
+    throw new Error("Configuration draft is required before update.");
+  }
+  const expectedVersion = requireBoundedInteger(input.expected_version, "Expected version", 1, 1_000_000);
+  const configuration = configurationValuesFromInput(input);
+  const rows = await supabaseRest<JsonRecord[]>(
+    `quote_configuration_drafts?${new URLSearchParams({
+      id: `eq.${existing.id}`,
+      company_id: `eq.${context.companyId}`,
+      quote_revision_id: `eq.${quoteRevision.id}`,
+      version: `eq.${expectedVersion}`,
+      select: "id,company_id,quote_revision_id,configuration_json,validation_status,calculation_status,version,updated_at"
+    }).toString()}`,
+    {
+      method: "PATCH",
+      headers: { Prefer: "return=representation" },
+      body: JSON.stringify({
+        configuration_json: configurationJsonFromValues(configuration),
+        validation_status: "draft_validated",
+        calculation_status: "not_calculated",
+        version: expectedVersion + 1,
+        updated_by: context.appUserId,
+        updated_at: new Date().toISOString()
+      })
+    }
+  );
+  if (rows.length !== 1) {
+    throw new Error("Configuration version conflict.");
+  }
+  const row = rows[0];
+  assertCompanyScope([row], context.companyId, "quote_configuration_drafts");
+  return quoteConfigurationDraftFromRow(row);
+}
+
 export async function createQuoteDraft(
   context: TrustedRepositoryContext,
   input: QuoteDraftInput
@@ -577,8 +850,8 @@ export async function createQuoteDraft(
 export async function appendAuditEntry(
   context: TrustedRepositoryContext,
   input: {
-    action: "customer_created" | "project_created" | "quote_draft_created";
-    target_type: "customer" | "project" | "quote_revision";
+    action: "customer_created" | "project_created" | "quote_draft_created" | "quote_configuration_created" | "quote_configuration_updated";
+    target_type: "customer" | "project" | "quote_revision" | "quote_configuration_draft";
     target_id: string;
     metadata?: Record<string, unknown>;
   }
@@ -601,12 +874,54 @@ export async function appendAuditEntry(
   );
 }
 
+export function quoteStatusPolicy(status: string): QuoteStatusPolicy {
+  const normalized = status === "draft" || status === "approved" || status === "sent" ? status : "unknown";
+  const riskyActions = ["quote_send", "quote_approve", "quote_pdf", "production_package"];
+  return {
+    status: normalized,
+    mutable: normalized === "draft",
+    direct_status_update_allowed: false,
+    allowed_transitions: [],
+    deferred_actions: normalized === "draft" ? riskyActions : [],
+    blocked_actions: normalized === "draft"
+      ? ["direct_status_update"]
+      : ["direct_status_update", "modify_revision", ...riskyActions]
+  };
+}
+
+async function listAuditEntries(
+  context: TrustedRepositoryContext,
+  targetIds: string[]
+): Promise<AuditEntryRecord[]> {
+  const validIds = targetIds.map((targetId) => requireUuid(targetId, "Audit target id"));
+  if (!validIds.length) {
+    return [];
+  }
+  const rows = await supabaseRest<JsonRecord[]>(
+    `audit_entries?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      target_id: `in.(${validIds.join(",")})`,
+      select: "id,company_id,action,target_type,target_id,decision,created_at",
+      order: "created_at.desc"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "audit_entries");
+  return rows.map((row) => ({
+    id: asString(row.id),
+    action: asString(row.action),
+    target_type: asString(row.target_type),
+    target_id: asNullableString(row.target_id),
+    decision: asString(row.decision),
+    created_at: asString(row.created_at)
+  }));
+}
+
 async function requireProjectInCompany(context: TrustedRepositoryContext, projectId: string): Promise<JsonRecord> {
   const rows = await supabaseRest<JsonRecord[]>(
     `projects?${new URLSearchParams({
       id: `eq.${projectId}`,
       company_id: `eq.${context.companyId}`,
-      select: "id,company_id,customer_id,name"
+      select: "id,company_id,customer_id,name,status,version"
     }).toString()}`
   );
   if (rows.length !== 1) {
@@ -623,6 +938,41 @@ function quoteRevisionFromRow(row: JsonRecord): QuoteRevisionRecord {
     revision_number: asNumber(row.revision_number),
     status: asString(row.status),
     version: asNumber(row.version)
+  };
+}
+
+function quoteConfigurationDraftFromRow(row: JsonRecord): QuoteConfigurationDraftRecord {
+  const configurationJson = typeof row.configuration_json === "object" && row.configuration_json !== null
+    ? row.configuration_json as JsonRecord
+    : {};
+  const measurements = typeof configurationJson.measurements === "object" && configurationJson.measurements !== null
+    ? configurationJson.measurements as JsonRecord
+    : {};
+  const quantity = typeof configurationJson.quantity === "object" && configurationJson.quantity !== null
+    ? configurationJson.quantity as JsonRecord
+    : {};
+  const options = typeof configurationJson.options === "object" && configurationJson.options !== null
+    ? configurationJson.options as JsonRecord
+    : {};
+  return {
+    id: asString(row.id),
+    quote_revision_id: asString(row.quote_revision_id),
+    configuration: {
+      template_code: asString(configurationJson.template_code),
+      width_mm: asNumber(measurements.width_mm),
+      height_mm: asNumber(measurements.height_mm),
+      depth_mm: asNumber(measurements.depth_mm),
+      quantity: asNumber(quantity.value),
+      door_count: asNumber(options.door_count),
+      shelf_count: asNumber(options.shelf_count),
+      material_sku: asNullableString(options.material_sku),
+      edge_band_sku: asNullableString(options.edge_band_sku),
+      notes: asNullableString(options.notes)
+    },
+    validation_status: "draft_validated",
+    calculation_status: "not_calculated",
+    version: asNumber(row.version),
+    updated_at: asString(row.updated_at)
   };
 }
 

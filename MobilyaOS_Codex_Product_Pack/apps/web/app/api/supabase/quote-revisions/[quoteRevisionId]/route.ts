@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getQuoteRevision } from "../../../../../lib/server/supabaseRepository";
+import { getQuoteRevisionDetail } from "../../../../../lib/server/supabaseRepository";
 import { withReadSession } from "../../../../../lib/server/routeGuards";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ type RouteContext = {
 export async function GET(request: Request, context: RouteContext) {
   const { quoteRevisionId } = await context.params;
   return withReadSession(request, async ({ session }) => {
-    const quote_revision = await getQuoteRevision(session.mutationScope, quoteRevisionId);
-    return NextResponse.json({ quote_revision });
+    const detail = await getQuoteRevisionDetail(session.mutationScope, quoteRevisionId);
+    return NextResponse.json(detail);
   });
 }

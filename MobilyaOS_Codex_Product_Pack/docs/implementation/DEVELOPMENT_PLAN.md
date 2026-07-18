@@ -175,7 +175,7 @@ Large-scale backend/frontend application coding must not start until:
 - Revision fork/diff are implemented for draft revisions first. Approval/immutability is deferred to the next hardening increment and remains a blocking G3 risk.
 - The compute/agent service is not allowed to calculate authoritative costs in P3.
 - The runtime agent layer loads versioned prompt files, classifies messages into the active specialist agents, and returns structured responses with prompt/tool references.
-- The tool gateway enforces agent allowlists and delegated roles. `quote_send` cannot execute from chat; quote document requests can preview and start the approval workflow only.
+- The tool gateway enforces agent allowlists and delegated roles. `quote_send` cannot execute from chat; quote document requests can preview demo data only until the backend approval workflow is implemented.
 - Prompt-injection cases are tracked in `evals/agent_prompt_injection_cases.yaml` and covered by compute tests.
 
 ## P5 Supabase Cloud Decisions
@@ -188,3 +188,18 @@ Large-scale backend/frontend application coding must not start until:
 - Server-side scripts may use the service key; browser code may only use `NEXT_PUBLIC_*` values.
 - Migrations are plain SQL under `supabase/migrations` and are applied in filename order by `scripts/apply_supabase_migrations.py`.
 - Seed data creation is idempotent and creates demo Auth users plus demo tenant data only after required Supabase env values are configured.
+
+## Post-P5.5 Build Train Decisions
+
+- Phase 0 delegated P5.5 security completion passed after adding QA corrective coverage for unauthenticated read routes and idempotency/audit replay checks.
+- Phase 1 replaced the process-local idempotency map with Supabase-backed durable storage for draft mutation routes.
+- Idempotency scope is `company_id + actor_app_user_id + action + hashed key`; raw keys are not stored.
+- Same scoped key and same request hash replays the sanitized stored response; same scoped key and changed request hash returns `409`.
+- Same key across another actor or another action must not replay.
+- Future runtime agent mutation tools must provide an idempotency key or receive a server-generated scoped key before dispatch.
+- Remaining durable-idempotency limitation: reservation, domain write, and audit append are not yet one SQL transaction while the web layer uses Supabase REST calls.
+- Phase 2 adds read-only project detail and quote revision detail/status policy surfaces. Direct quote status writes remain unavailable, and the current status policy has no active transitions.
+- Phase 3 adds compute-side calculation boundary contracts and a non-production preview adapter. It validates strict units, source-specific provenance, bounded payload shapes, and returns only a stable contract hash with `authoritative_calculation: false`. Browser-supplied commercial snapshots are not accepted as chat/tool authority.
+- Phase 4 adds Supabase-backed quote configuration draft persistence only. Draft configuration input is tenant-scoped, attached to a draft quote revision, server-validated, audited, and idempotent. It must not create authoritative BOM, edge, labor, cost, tax, margin, quote total, PDF, send, approval, or production-package state.
+- Phase 5 adds the runtime tool gateway policy skeleton. Tool metadata records tenant, role, audit, idempotency, approval, draft-revision, expected-version, and deterministic-calculation constraints; risky and mutation/workflow tools remain non-executable until a trusted backend gateway dispatch exists.
+- Phase 6 adds the first user-facing read-only chat prototype through `POST /api/supabase/agent-chat`. The browser no longer calls compute chat directly and does not send company, role, user, cost snapshot, or diff payload authority. The route derives scope from the HTTP-only Supabase demo session and can summarize tenant-scoped projects, revisions, audit entries, and configuration draft status only.

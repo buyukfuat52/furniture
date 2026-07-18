@@ -126,15 +126,20 @@ The web app now has a server-side Supabase session and read boundary:
 - `GET /api/supabase/projects/[projectId]/quote-revisions` lists tenant-scoped quote revisions for a project.
 - `POST /api/supabase/projects/[projectId]/quote-drafts` creates a draft-only quote revision shell.
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]` reads a tenant-scoped quote revision shell.
+- `GET/POST/PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft` reads, creates, and updates a tenant-scoped wardrobe configuration draft attached to a draft quote revision.
+- `POST /api/supabase/agent-chat` provides the read-only web chat prototype through the HTTP-only session boundary.
 - Browser-supplied `company_id` values are not trusted as authority.
 - The browser receives only sanitized demo rows and safe status fields. It does not receive Supabase access tokens, service keys, database URLs, storage paths, or `auth_user_id`.
 - The session cookie contains only minimal encrypted local-demo claims and expires automatically.
 - The server loads root `.env` and `.env.local` automatically even when Next.js is started from `apps/web`.
 - The UI's "Load demo data" action now reads from Supabase-backed API routes only after login.
-- The UI can create customer, project, and quote draft records after login.
-- `viewer` is read-only; `sales` and `admin` can create customer, project, and quote draft records.
+- The UI can create customer, project, quote draft, and quote configuration draft records after login.
+- The UI chat panel reads project/revision/configuration status through `/api/supabase/agent-chat`; it does not call compute directly or send browser-owned company, role, user, cost snapshot, or diff authority.
+- `viewer` is read-only; `sales` and `admin` can create customer, project, quote draft, and quote configuration draft records.
 - Successful mutations append server-side audit entries.
-- POST routes support lightweight in-process idempotency scoped by company, app user, action, and idempotency key. This prevents duplicate writes during the current server process but is not production-grade durable idempotency.
+- Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key.
+- Quote configuration drafts store only validated draft input: integer millimetre dimensions, explicit piece quantity, bounded option counts, SKUs, notes, validation status, and `not_calculated` calculation status. They do not create BOM, edge banding, labor, cost, tax, totals, PDFs, approval, send, or production package rows.
+- Direct authenticated table writes to quote revisions/configuration drafts are blocked or no-effect, and database guards reject quote revision status changes, approved/sent revision mutations, approved-revision config drafts, and invalid config draft shapes.
 
 Run the app without Docker:
 
@@ -150,7 +155,7 @@ Sprint boundary docs:
 - `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
 - `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
 
-`apps/web/lib/server/productMutationBoundary.ts` defines trusted server-side scope and allows only the low-risk draft mutations above. Quote send, approval, PDF generation, production package creation, and runtime agent tool execution remain disabled/deferred.
+`apps/web/lib/server/productMutationBoundary.ts` defines trusted server-side scope and allows only the low-risk draft mutations above. Quote send, approval, PDF generation, production package creation, and mutating runtime agent tool execution remain disabled/deferred.
 
 ## Optional Docker Compose
 
@@ -193,6 +198,7 @@ Blocked on this machine:
 - Demo login verifies Supabase Auth credentials server-side, maps them to seeded app users, creates an encrypted HTTP-only session cookie, exposes a sanitized session endpoint, and supports logout.
 - Supabase-backed draft mutations now work for customer creation, draft project creation, quote draft shell creation, quote revision list/read, and audit append.
 - Server-only mutation policy keeps `viewer` read-only and permits `sales`/`admin` only for the low-risk draft mutations.
+- The web chat UI has a read-only Supabase-backed route that can summarize current projects, quote revisions, audit state, and configuration draft status without authoritative calculations or mutations.
 - Compute/agent service passes tests and enforces bearer auth, role derivation, prompt-injection blocking, tool allowlists, and quote-send denial/approval gating.
 - Supabase migrations define tenant-scoped tables, composite foreign keys, RLS policies, and private storage buckets.
 - Supabase scripts support env validation, migration, seeding, and verification without printing secrets.
@@ -201,12 +207,13 @@ Blocked on this machine:
 
 - Go core tests are written but cannot be executed on this machine without Go.
 - Core still uses in-memory demo state; deterministic product calculation and document/fork/diff persistence are deferred.
-- The web product configure/calculate/quote document/fork/diff actions are not yet Supabase-persisted.
+- The web product calculate/quote document/fork/diff actions are not yet Supabase-persisted. Configuration draft persistence is Supabase-backed but non-authoritative.
 - The demo session is a local-development boundary, not a production-grade auth system with revocation, rotation, device management, or rate limiting.
-- Runtime agent/tool-gateway integration is documented but not activated for unsafe tool execution.
+- Runtime agent/tool-gateway integration is documented; the web route is read-only and mutating/official-document agent execution remains disabled.
 - Real PDF generation is not implemented; the current quote artifact is HTML.
-- Durable approval-token workflow and durable idempotency replay storage are not complete.
-- Compute agent tool adapters are still deterministic local adapters and do not yet query the Supabase-backed application repository.
+- Durable approval-token workflow is not complete.
+- Durable idempotency is implemented for current Supabase-backed draft mutations, but reservation, domain write, and audit append are not yet one SQL transaction.
+- Direct compute agent tool adapters are still deterministic local adapters and do not yet query the Supabase-backed application repository. The browser UI uses the Supabase web route instead.
 
 ## Security Status
 
@@ -221,13 +228,13 @@ Implemented/guarded:
 - Supabase web API routes use the service key only on the server and return sanitized demo payloads.
 - Demo-data requires a valid HTTP-only session cookie and uses the session company scope instead of browser-supplied tenant identifiers.
 - Route smoke tests check login cookie flags, invalid login, session, logout, session-required demo-data, and forbidden response keys.
-- Mutation smoke tests check unauthenticated 401, viewer 403, sales writes, idempotency replay, quote draft status, audit append, and forbidden response keys.
+- Mutation smoke tests check unauthenticated 401, viewer 403, sales/admin writes, idempotency replay/conflict, quote draft status, configuration draft create/read/update, invalid config rejection, approved-revision config denial, audit append, and forbidden response keys.
 - Mutation-boundary and runtime-agent docs keep authoritative calculations and approval decisions in backend/domain services.
 
 Known gaps:
 
 - Supabase live migration/seed/verify requires saved local `.env.local` values; the scripts stop safely if required values are missing.
-- Static demo passwords, in-process idempotency, and the local-demo session model are only suitable for demo/local development.
+- Static demo passwords and the local-demo session model are only suitable for demo/local development.
 - Durable approval-token workflow is still required before real quote sending.
 - Tool whitelist drift and malicious tool-output prompt injection need additional validation.
 

@@ -5,11 +5,12 @@
 High priority:
 
 - Wire the Go core service to Supabase PostgreSQL repositories using the tenant-scoped migration constraints.
-- Extend the Supabase-backed draft route set into deterministic quote configuration, BOM, cost snapshot, quote document, fork, and diff persistence.
+- Extend the Supabase-backed draft route set from persisted quote configuration drafts into deterministic BOM, edge banding, labor, cost snapshot, quote document, fork, and diff persistence.
 - Replace the remaining web P3 product calculate/document/fork/diff actions with persisted routes instead of the in-memory Go demo path.
 - Harden the local-demo session boundary into production auth with hashed/rotating sessions, revocation, device tracking, rate limiting, and audit trails.
 - Replace static compute demo tokens with hashed, expiring sessions and revocation.
-- Implement durable idempotency storage and replay handling for all mutating endpoints.
+- Extend the Phase 6 read-only web agent route into real Supabase-backed server tool execution with persisted tool invocations, read-audit policy, correlation IDs, and policy/catalog sync validation.
+- Move durable idempotency, domain write, and audit append into one SQL transaction for all mutating endpoints.
 - Implement approval-token workflow for quote approval/send:
   - bind approval to company, actor, role, revision id, revision version, document hash, action, and idempotency key
   - consume approval tokens once
@@ -21,7 +22,7 @@ High priority:
 
 Medium priority:
 
-- Add registry/runtime validation so prompt `allowed_tools` cannot drift from the gateway allowlist.
+- Add registry/runtime validation so prompt `allowed_tools`, `tools/tool_catalog.json`, and the gateway policy manifest cannot drift.
 - Add prompt-injection evals for malicious tool results, supplier files, uploaded document text, filenames, and stale retrieved content.
 - Add Supabase/PostgreSQL migration integration tests that attempt cross-company FK inserts and expect failure.
 - Add broader edge-band golden cases:
@@ -54,5 +55,5 @@ The next phase should focus on turning the current Supabase-backed draft flow in
 3. Replace web product calculate/document/fork/diff mutations with persisted routes.
 4. Add durable idempotency and approval workflow tables.
 5. Generate HTML and PDF quote artifacts from the same frozen cost snapshot.
-6. Replace compute agent demo adapters with authorized application queries through the future tool gateway.
+6. Expand the read-only web agent route into authorized application queries through the gateway policy layer with persisted tool invocation records.
 7. Add Playwright E2E, Go integration tests, session/mutation security tests, and cloud verification to CI.

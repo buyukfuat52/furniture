@@ -60,6 +60,7 @@ Route-specific invariants:
 - Create customer: creates a tenant-owned customer record only within the company resolved from the trusted server session. Browser-supplied company, tenant, owner, creator, role, or audit actor fields are ignored or rejected.
 - Create project: creates a tenant-owned project only for a customer visible within the same resolved company. Cross-company customer/project links are invalid even if the identifiers exist.
 - Create quote draft: creates only a draft quote record for a same-company project and customer. The persisted status must be `draft`; the command must not imply that totals are calculated, approval has started, approval has completed, the quote has been sent, a final PDF exists, or production may begin.
+- Create/update quote configuration draft: persists only validated draft input for a draft quote revision. Dimensions are integer millimetres, quantity is explicit pieces, option counts are bounded integers, and persisted calculation status is fixed to `not_calculated`. The command must not create or imply authoritative BOM, edge banding, labor, cost, tax, margin, quote total, PDF, approval, send, or production package state.
 - Read/list quote revisions: returns only revisions visible to the resolved company and user role. Revision reads are non-mutating and must not recalculate, approve, send, finalize, or promote a quote.
 - Append audit: records audit entries using trusted server-derived company, app user, session, timestamp, route/action, and request provenance. Browser-provided actor, company, tenant, user, role, timestamp, and session identifiers are never authoritative.
 
@@ -75,7 +76,9 @@ Idempotency expectations:
 - Mutation idempotency is scoped by resolved company, app user or trusted session, route/action, and caller-provided idempotency key.
 - Replaying the same scoped idempotency key must not create duplicate customer, project, quote draft, or audit side effects.
 - Reusing the same key for a different route/action, company, user/session, or materially different payload is invalid or treated as a separate scope according to backend policy.
-- The current sprint may implement idempotency with a lightweight local guard or audit-backed lookup until a durable idempotency table exists. This is a known limitation, not permission to accept duplicate writes silently.
+- Current Supabase-backed draft mutations use durable idempotency records scoped by company, app user, action, and hashed key.
+- Mutation routes require an idempotency key; missing keys are rejected before writes.
+- Raw idempotency keys are not stored. Replay stores only sanitized response JSON and status code.
 - Idempotency storage must not trust browser actor or company fields; it uses the same server-resolved context as authorization and audit.
 
 ## Deterministic Domain Responsibilities
@@ -103,6 +106,9 @@ Future quote send, PDF, and production package work must pass explicit approval 
 
 Required constraints for future status transitions:
 
+- Current Supabase quote draft routes may create only `draft` revisions.
+- Current quote detail responses may describe status policy, but they do not activate direct status updates.
+- Direct browser writes of `approved`, `sent`, `accepted`, `rejected`, or any other quote status are invalid. There is no PATCH/POST status route in the current Supabase surface.
 - Status changes are commands validated by the backend/domain layer, not direct browser writes.
 - A quote can move from draft to review only when required project, customer, line, pricing, and tenant context is complete.
 - A quote can move from review to approved only through an authorized approval action by a role permitted for that tenant.

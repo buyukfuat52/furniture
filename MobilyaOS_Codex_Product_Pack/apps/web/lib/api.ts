@@ -151,7 +151,6 @@ export type SupabaseDemoOverview = {
     revision_id: string;
     cost_snapshot_id: string | null;
     document_type: string;
-    storage_bucket: string;
     content_type: string;
     size_bytes: number;
   }>;
@@ -160,10 +159,63 @@ export type SupabaseDemoOverview = {
     id: string;
     action: string;
     target_type: string;
+    target_id: string | null;
     decision: string;
     created_at: string;
   }>;
   limitations: string[];
+};
+
+export type SupabaseAuditEntry = SupabaseDemoOverview["audit_entries"][number];
+export type SupabaseProject = SupabaseDemoOverview["projects"][number];
+export type SupabaseQuoteRevision = SupabaseDemoOverview["quote_revisions"][number];
+
+export type SupabaseQuoteStatusPolicy = {
+  status: string;
+  mutable: boolean;
+  direct_status_update_allowed: false;
+  allowed_transitions: string[];
+  deferred_actions: string[];
+  blocked_actions: string[];
+};
+
+export type SupabaseProjectDetail = {
+  project: SupabaseProject;
+  quote_revisions: SupabaseQuoteRevision[];
+  audit_entries: SupabaseAuditEntry[];
+};
+
+export type SupabaseQuoteRevisionDetail = {
+  quote_revision: SupabaseQuoteRevision;
+  status_policy: SupabaseQuoteStatusPolicy;
+  audit_entries: SupabaseAuditEntry[];
+};
+
+export type SupabaseQuoteConfigurationDraft = {
+  id: string;
+  quote_revision_id: string;
+  configuration: {
+    template_code: string;
+    width_mm: number;
+    height_mm: number;
+    depth_mm: number;
+    quantity: number;
+    door_count: number;
+    shelf_count: number;
+    material_sku: string | null;
+    edge_band_sku: string | null;
+    notes: string | null;
+  };
+  validation_status: "draft_validated";
+  calculation_status: "not_calculated";
+  version: number;
+  updated_at: string;
+};
+
+export type SupabaseQuoteConfigurationDraftResponse = {
+  configuration_draft: SupabaseQuoteConfigurationDraft | null;
+  calculation_status: "not_calculated";
+  deferred_actions: string[];
 };
 
 export type SupabaseDemoLoginResponse = {
@@ -187,4 +239,3 @@ export type SupabaseLogoutResponse = {
 };
 
 export const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
-export const computeBaseUrl = process.env.NEXT_PUBLIC_COMPUTE_BASE_URL ?? "http://localhost:8090";

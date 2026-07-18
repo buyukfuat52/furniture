@@ -5,13 +5,15 @@ import {
   AgentChatResponse,
   apiBaseUrl,
   ApiError,
-  computeBaseUrl,
   Customer,
   DiffResponse,
   QuoteDocument,
   QuoteRevision,
   SupabaseDemoLoginResponse,
   SupabaseDemoOverview,
+  SupabaseProjectDetail,
+  SupabaseQuoteConfigurationDraftResponse,
+  SupabaseQuoteRevisionDetail,
   SupabaseSessionResponse
 } from "../lib/api";
 
@@ -44,6 +46,9 @@ export default function HomePage() {
   const [seedSummary, setSeedSummary] = useState("");
   const [cloudData, setCloudData] = useState<SupabaseDemoOverview | null>(null);
   const [cloudSession, setCloudSession] = useState<SupabaseSessionResponse | null>(null);
+  const [cloudProjectDetail, setCloudProjectDetail] = useState<SupabaseProjectDetail | null>(null);
+  const [cloudRevisionDetail, setCloudRevisionDetail] = useState<SupabaseQuoteRevisionDetail | null>(null);
+  const [cloudConfigurationDraft, setCloudConfigurationDraft] = useState<SupabaseQuoteConfigurationDraftResponse | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [chatInput, setChatInput] = useState("Bu projenin maliyet snapshot sonucunu acikla");
   const [chatResult, setChatResult] = useState<AgentChatResponse | null>(null);
@@ -151,6 +156,8 @@ export default function HomePage() {
       });
       setCloudSession(null);
       setCloudData(null);
+      setCloudProjectDetail(null);
+      setCloudRevisionDetail(null);
       setSeedSummary("");
       setStep("login");
     } finally {
@@ -202,6 +209,133 @@ export default function HomePage() {
     return (await response.json()) as T;
   }
 
+  async function supabasePatch<T>(path: string, body: Record<string, unknown>): Promise<T> {
+    const response = await fetch(path, {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "x-idempotency-key": idempotency()
+      },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as ApiError;
+      throw new Error(payload.detail || payload.title || `HTTP ${response.status}`);
+    }
+    return (await response.json()) as T;
+  }
+
+  async function supabaseGet<T>(path: string): Promise<T> {
+    const response = await fetch(path, {
+      cache: "no-store",
+      credentials: "same-origin"
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({}))) as ApiError;
+      throw new Error(payload.detail || payload.title || `HTTP ${response.status}`);
+    }
+    return (await response.json()) as T;
+  }
+
+  async function loadSupabaseProjectDetail(projectId: string) {
+    setCloudBusy(true);
+    setError("");
+    try {
+      const detail = await supabaseGet<SupabaseProjectDetail>(`/api/supabase/projects/${projectId}`);
+      setCloudProjectDetail(detail);
+      if (detail.quote_revisions[0]) {
+        await loadSupabaseQuoteRevisionDetail(detail.quote_revisions[0].id, false);
+      }
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function loadSupabaseQuoteRevisionDetail(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const detail = await supabaseGet<SupabaseQuoteRevisionDetail>(`/api/supabase/quote-revisions/${quoteRevisionId}`);
+      setCloudRevisionDetail(detail);
+      await loadSupabaseConfigurationDraft(quoteRevisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseConfigurationDraft(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<SupabaseQuoteConfigurationDraftResponse>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/configuration-draft`
+      );
+      setCloudConfigurationDraft(result);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  function configurationBodyFromForm(form: FormData): Record<string, unknown> {
+    return {
+      template_code: form.get("template_code"),
+      width_mm: form.get("width_mm"),
+      height_mm: form.get("height_mm"),
+      depth_mm: form.get("depth_mm"),
+      quantity: form.get("quantity"),
+      door_count: form.get("door_count"),
+      shelf_count: form.get("shelf_count"),
+      material_sku: form.get("material_sku"),
+      edge_band_sku: form.get("edge_band_sku"),
+      notes: form.get("notes")
+    };
+  }
+
+  async function saveSupabaseConfigurationDraft(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    if (!revisionId) {
+      setError("Supabase revizyon secimi gerekli.");
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const body = configurationBodyFromForm(form);
+    if (cloudConfigurationDraft?.configuration_draft) {
+      body.expected_version = cloudConfigurationDraft.configuration_draft.version;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const path = `/api/supabase/quote-revisions/${revisionId}/configuration-draft`;
+      const result = cloudConfigurationDraft?.configuration_draft
+        ? await supabasePatch<SupabaseQuoteConfigurationDraftResponse>(path, body)
+        : await supabasePost<SupabaseQuoteConfigurationDraftResponse>(path, body);
+      setCloudConfigurationDraft(result);
+      setSeedSummary(`Supabase konfigurasyon taslagi kaydedildi: v${result.configuration_draft?.version ?? 0}`);
+      await refreshCloudOverview(false);
+      await loadSupabaseQuoteRevisionDetail(revisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
   async function createSupabaseCustomer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -235,6 +369,7 @@ export default function HomePage() {
       });
       setSeedSummary(`Supabase proje olustu: ${result.project.name}`);
       await refreshCloudOverview(false);
+      await loadSupabaseProjectDetail(result.project.id);
       event.currentTarget.reset();
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -260,6 +395,8 @@ export default function HomePage() {
       );
       setSeedSummary(`Supabase teklif taslagi olustu: R${result.quote_revision.revision_number} (${result.quote_revision.status})`);
       await refreshCloudOverview(false);
+      await loadSupabaseProjectDetail(projectId);
+      await loadSupabaseQuoteRevisionDetail(result.quote_revision.id);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -373,25 +510,20 @@ export default function HomePage() {
     setChatBusy(true);
     setError("");
     try {
-      const response = await fetch(`${computeBaseUrl}/api/v1/agent/chat`, {
+      const activeProjectId = cloudProjectDetail?.project.id || projectId || undefined;
+      const activeRevisionId = cloudRevisionDetail?.quote_revision.id || revision?.id || undefined;
+      const response = await fetch("/api/supabase/agent-chat", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+          "Content-Type": "application/json"
         },
+        credentials: "same-origin",
         body: JSON.stringify({
           message: chatInput,
-          context: {
-            company_id: "00000000-0000-0000-0000-000000000001",
-            user_id: "demo-sales-user",
-            roles: ["sales"],
-            project_id: projectId || undefined,
-            revision_id: revision?.id,
-            left_revision_id: revision?.id,
-            right_revision_id: forkedRevision?.id,
-            cost_snapshot: revision?.cost,
-            diff_entries: diff?.entries ?? []
-          }
+          project_id: activeProjectId,
+          quote_revision_id: activeRevisionId,
+          left_revision_id: cloudProjectDetail?.quote_revisions[0]?.id || revision?.id || undefined,
+          right_revision_id: cloudProjectDetail?.quote_revisions[1]?.id || forkedRevision?.id || undefined
         })
       });
       if (!response.ok) {
@@ -472,7 +604,24 @@ export default function HomePage() {
           </section>
         ) : null}
 
-        {cloudData ? <SupabaseOverview overview={cloudData} /> : null}
+        {cloudData ? (
+          <SupabaseOverview
+            onLoadProjectDetail={loadSupabaseProjectDetail}
+            onLoadRevisionDetail={loadSupabaseQuoteRevisionDetail}
+            overview={cloudData}
+          />
+        ) : null}
+
+        {cloudProjectDetail || cloudRevisionDetail ? (
+          <SupabaseTimelinePanel
+            busy={cloudBusy}
+            configurationDraft={cloudConfigurationDraft}
+            onSaveConfigurationDraft={saveSupabaseConfigurationDraft}
+            projectDetail={cloudProjectDetail}
+            revisionDetail={cloudRevisionDetail}
+            onLoadRevisionDetail={loadSupabaseQuoteRevisionDetail}
+          />
+        ) : null}
 
         {cloudSession && cloudData ? (
           <SupabaseMutationPanel
@@ -642,7 +791,15 @@ export default function HomePage() {
   );
 }
 
-function SupabaseOverview({ overview }: { overview: SupabaseDemoOverview }) {
+function SupabaseOverview({
+  onLoadProjectDetail,
+  onLoadRevisionDetail,
+  overview
+}: {
+  onLoadProjectDetail: (projectId: string) => void;
+  onLoadRevisionDetail: (quoteRevisionId: string) => void;
+  overview: SupabaseDemoOverview;
+}) {
   const latestCost = overview.cost_snapshots[0];
   return (
     <section className="section">
@@ -682,6 +839,7 @@ function SupabaseOverview({ overview }: { overview: SupabaseDemoOverview }) {
                   <td>{project.name}</td>
                   <td>{project.customer_name || "-"}</td>
                   <td>{project.status}</td>
+                  <td><button type="button" onClick={() => onLoadProjectDetail(project.id)}>Detay</button></td>
                 </tr>
               ))}
             </tbody>
@@ -698,6 +856,7 @@ function SupabaseOverview({ overview }: { overview: SupabaseDemoOverview }) {
                   <td>R{revision.revision_number}</td>
                   <td>{revision.status}</td>
                   <td>{revision.project_id.slice(0, 8)}</td>
+                  <td><button type="button" onClick={() => onLoadRevisionDetail(revision.id)}>Durum</button></td>
                 </tr>
               ))}
             </tbody>
@@ -721,6 +880,108 @@ function SupabaseOverview({ overview }: { overview: SupabaseDemoOverview }) {
       <div className="warningBox">
         {overview.limitations.join(" ")}
       </div>
+    </section>
+  );
+}
+
+function SupabaseTimelinePanel({
+  busy,
+  configurationDraft,
+  onLoadRevisionDetail,
+  onSaveConfigurationDraft,
+  projectDetail,
+  revisionDetail
+}: {
+  busy: boolean;
+  configurationDraft: SupabaseQuoteConfigurationDraftResponse | null;
+  onLoadRevisionDetail: (quoteRevisionId: string) => void;
+  onSaveConfigurationDraft: (event: FormEvent<HTMLFormElement>) => void;
+  projectDetail: SupabaseProjectDetail | null;
+  revisionDetail: SupabaseQuoteRevisionDetail | null;
+}) {
+  const auditEntries = projectDetail?.audit_entries ?? revisionDetail?.audit_entries ?? [];
+  const draft = configurationDraft?.configuration_draft ?? null;
+  const config = draft?.configuration;
+  return (
+    <section className="panel">
+      <p className="topline">Supabase revizyon akisi</p>
+      {projectDetail ? (
+        <>
+          <h2>{projectDetail.project.name}</h2>
+          <div className="timeline">
+            {projectDetail.quote_revisions.map((revision) => (
+              <button className="timelineItem" key={revision.id} onClick={() => onLoadRevisionDetail(revision.id)} type="button">
+                <span>R{revision.revision_number}</span>
+                <span className="status">{revision.status}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+      {revisionDetail ? (
+        <div className="statusPanel">
+          <h3>R{revisionDetail.quote_revision.revision_number} durum politikasi</h3>
+          <div className="grid">
+            <SummaryCard title="Durum" value={revisionDetail.status_policy.status} />
+            <SummaryCard title="Degistirilebilir" value={revisionDetail.status_policy.mutable ? "Evet" : "Hayir"} />
+            <SummaryCard title="Direkt durum yazimi" value={revisionDetail.status_policy.direct_status_update_allowed ? "Acik" : "Kapali"} />
+          </div>
+          <div className="buttonRow">
+            {revisionDetail.status_policy.deferred_actions.map((action) => (
+              <button disabled key={action} type="button">{action}</button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {revisionDetail ? (
+        <div className="configurationDraftPanel">
+          <h3>Konfigurasyon taslagi</h3>
+          <div className="warningBox">
+            Bu kayit yalnizca olcu ve secenek taslagidir. BOM, kenar bandi, iscilik, maliyet, vergi, toplam, PDF, onay, gonderim ve uretim paketi uretmez.
+          </div>
+          <form className="configurationForm" onSubmit={onSaveConfigurationDraft}>
+            <input name="template_code" type="hidden" value="wardrobe" readOnly />
+            <label>Genislik mm<input name="width_mm" type="number" min="100" max="6000" step="1" required defaultValue={config?.width_mm ?? 1800} /></label>
+            <label>Yukseklik mm<input name="height_mm" type="number" min="100" max="4000" step="1" required defaultValue={config?.height_mm ?? 2200} /></label>
+            <label>Derinlik mm<input name="depth_mm" type="number" min="100" max="2000" step="1" required defaultValue={config?.depth_mm ?? 600} /></label>
+            <label>Adet<input name="quantity" type="number" min="1" max="100" step="1" required defaultValue={config?.quantity ?? 1} /></label>
+            <label>Kapak<input name="door_count" type="number" min="0" max="20" step="1" required defaultValue={config?.door_count ?? 3} /></label>
+            <label>Raf<input name="shelf_count" type="number" min="0" max="100" step="1" required defaultValue={config?.shelf_count ?? 4} /></label>
+            <label>Malzeme SKU<input name="material_sku" defaultValue={config?.material_sku ?? "MDF-LAM-BEYAZ-18"} /></label>
+            <label>Kenar bandi SKU<input name="edge_band_sku" defaultValue={config?.edge_band_sku ?? "PVC-BEYAZ-1MM"} /></label>
+            <label className="wideField">Not<input name="notes" defaultValue={config?.notes ?? "Askilikli gardrop taslak konfigurasyonu"} /></label>
+            <button disabled={busy || !revisionDetail.status_policy.mutable} type="submit">
+              {draft ? "Konfigurasyonu guncelle" : "Konfigurasyonu kaydet"}
+            </button>
+          </form>
+          {draft ? (
+            <div className="configurationReadback">
+              <span>v{draft.version}</span>
+              <span>{draft.validation_status}</span>
+              <span>{draft.calculation_status}</span>
+              <span>{config?.width_mm} x {config?.height_mm} x {config?.depth_mm} mm</span>
+              <span>{config?.quantity} adet</span>
+            </div>
+          ) : (
+            <div className="warningBox">Bu revizyon icin Supabase konfigurasyon taslagi henuz yok.</div>
+          )}
+        </div>
+      ) : null}
+      <h3>Audit zaman cizelgesi</h3>
+      {auditEntries.length ? (
+        <ol className="auditList">
+          {auditEntries.map((entry) => (
+            <li key={entry.id}>
+              <span>{new Date(entry.created_at).toLocaleString("tr-TR")}</span>
+              <strong>{entry.action}</strong>
+              <span>{entry.target_type}</span>
+              <span className="status">{entry.decision}</span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="warningBox">Bu secim icin audit kaydi yok.</div>
+      )}
     </section>
   );
 }

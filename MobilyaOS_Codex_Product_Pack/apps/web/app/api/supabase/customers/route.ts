@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       metadata: {
         route: "customers",
         idempotency: Boolean(reservation),
-        idempotency_mode: "in_memory_scoped"
+        idempotency_mode: "durable_supabase_scoped"
       }
     });
     return NextResponse.json({ customer }, { status: 201 });

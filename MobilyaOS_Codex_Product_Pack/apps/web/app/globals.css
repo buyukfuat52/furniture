@@ -334,6 +334,90 @@ a {
   margin: 16px 0;
 }
 
+.timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0 18px;
+}
+
+.timelineItem {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  display: inline-flex;
+  gap: 10px;
+  min-height: 42px;
+}
+
+.statusPanel {
+  display: grid;
+  gap: 14px;
+  margin: 12px 0 18px;
+}
+
+.configurationDraftPanel {
+  display: grid;
+  gap: 12px;
+  margin: 12px 0 18px;
+}
+
+.configurationForm {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.configurationForm label {
+  display: grid;
+  gap: 6px;
+}
+
+.configurationForm button,
+.configurationForm .wideField {
+  grid-column: span 3;
+}
+
+.configurationReadback {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.configurationReadback span {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 10px;
+}
+
+.auditList {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.auditList li {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 180px 1fr 140px auto;
+  padding: 10px 12px;
+}
+
+.auditList span:first-child {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
@@ -352,6 +436,19 @@ a {
   }
 
   .splitTables {
+    grid-template-columns: 1fr;
+  }
+
+  .configurationForm {
+    grid-template-columns: 1fr;
+  }
+
+  .configurationForm button,
+  .configurationForm .wideField {
+    grid-column: span 1;
+  }
+
+  .auditList li {
     grid-template-columns: 1fr;
   }
 }

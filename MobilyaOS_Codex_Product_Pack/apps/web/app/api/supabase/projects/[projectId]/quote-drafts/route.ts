@@ -20,7 +20,7 @@ export async function POST(request: Request, context: RouteContext) {
       metadata: {
         route: "quote_drafts",
         idempotency: Boolean(reservation),
-        idempotency_mode: "in_memory_scoped",
+        idempotency_mode: "durable_supabase_scoped",
         calculated: false
       }
     });

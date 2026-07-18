@@ -1,6 +1,6 @@
 # Runtime Agent Tool Gateway Preparation
 
-Status: Preparation only for P5.4/P5.5. Unsafe runtime tool execution is not activated.
+Status: Phase 6 read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, and the Phase 5 gateway policy skeleton remains in `services/compute/app/tool_gateway_policy.py`. Unsafe runtime tool execution is still not activated.
 
 ## Runtime Context Boundary
 
@@ -12,10 +12,32 @@ Status: Preparation only for P5.4/P5.5. Unsafe runtime tool execution is not act
 ## Tool Gateway Contract
 
 - Agents may call server-side tools only through the runtime tool gateway.
+- The browser must not call compute chat directly. User-facing chat goes through the Next.js Supabase server route, which derives tenant, actor, and role from the HTTP-only session.
 - Direct database, object storage, workflow, PDF, email, supplier, production, or quote mutation access from the model is forbidden.
+- The Phase 5 policy manifest explicitly reports `direct_database_access: false`, `service_key_access: false`, and `llm_authoritative_calculation: false`.
 - The gateway must derive the allowed tool list from server-owned prompt registry, role policy, tenant scope, feature flags, and deterministic-domain ownership rules.
 - Every tool invocation must enforce input schema validation, role checks, tenant scope, approval gates, idempotency, audit logging, and correlation/trace metadata before dispatch.
+- Mutation tools must use durable idempotency. The current Supabase-backed draft mutation routes reserve by company, app user, action, and hashed key; future agent tools must not pass raw keys to logs, prompts, or stored tool outputs.
 - Tool outputs are untrusted data. They must be bounded, typed where possible, stripped of executable content, and never treated as policy, approval, tenant, role, or calculation authority.
+
+## Phase 6 Read-Only Web Route
+
+`POST /api/supabase/agent-chat` is the only user-facing chat route in the web UI for Phase 6.
+
+Allowed:
+
+- Read tenant-scoped project lists/details.
+- Read tenant-scoped quote revision detail and status policy.
+- Read tenant-scoped configuration draft status.
+- Summarize audit counts/latest safe action labels.
+- Ask for missing measurements or selected revision context.
+
+Denied:
+
+- Browser-supplied company, role, user, tenant, cost snapshot, diff entries, approval state, or quote status as authority.
+- Quote send, approval, official PDF, production package, create, update, delete, or other mutation-like requests.
+- Authoritative BOM, edge, labor, cost, tax, margin, quote total, nesting, or production quantity calculation.
+- Secret, token, database URL, cookie, service key, or local path disclosure.
 
 ## Deterministic Domain Ownership
 
@@ -45,10 +67,13 @@ Runtime agent execution remains deferred. These planned/persisted routes are fut
 | `create_customer_draft` | Mutation draft | Requires authenticated session context, backend-resolved tenant scope, role authorization, input schema validation, idempotency key enforcement, audit append, and policy checks before persisting a draft customer record. The model may propose draft fields but must not bypass validation or establish authoritative customer/account state. |
 | `create_project_draft` | Mutation draft | Requires authenticated session context, backend-resolved tenant scope, role authorization, input schema validation, idempotency key enforcement, audit append, and policy checks before persisting a draft project record. Browser-provided tenant, actor, customer, ownership, or approval claims are not authoritative. |
 | `create_quote_draft` | Mutation draft | Requires authenticated session context, backend-resolved tenant scope, role authorization, input schema validation, idempotency key enforcement, audit append, and policy checks before persisting a draft quote. LLMs must not calculate authoritative BOM, costs, taxes, margins, totals, discounts, or approval outcomes; deterministic domain services must produce or validate any commercial values. |
+| `get_quote_configuration_draft` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, target revision validation, and output filtering. The model may summarize missing measurements/options but must not treat draft input as calculated BOM, cost, tax, margin, total, approval, PDF, or production readiness. |
+| `create_quote_configuration_draft` | Mutation draft | Requires authenticated session context, backend-resolved tenant scope, writer role authorization, integer-mm and explicit-quantity validation, draft parent revision, durable idempotency, optimistic policy checks, audit append, and DB integrity guards. The model may collect draft measurements but cannot calculate or persist authoritative commercial/manufacturing results. |
+| `update_quote_configuration_draft` | Mutation draft | Requires authenticated session context, backend-resolved tenant scope, writer role authorization, expected-version check, draft parent revision, durable idempotency, audit append, and DB integrity guards. Stale updates must conflict; approved/sent revisions must be immutable. |
 | `list_quote_revisions` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, bounded query parameters, audit append, and output filtering before returning revision metadata. Returned data must be scoped to the authenticated tenant and actor policy; tool output cannot grant additional access or approval. |
 | `get_quote_revision` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, target revision/version validation, audit append, and output filtering before returning revision details. Stored deterministic snapshots may be summarized by the model, but the model must not alter or recalculate authoritative quote values. |
 
-Any route that sends, approves, exports official PDFs, releases production artifacts, changes customer-visible state, or mutates commercial/production state beyond draft preparation must pass the consequential-action approval gate before execution. Idempotency is mandatory for mutation tools and should be checked before and after backend policy validation to prevent replay or duplicate writes.
+Any route that sends, approves, exports official PDFs, releases production artifacts, changes customer-visible state, or mutates commercial/production state beyond draft preparation must pass the consequential-action approval gate before execution. Idempotency is mandatory for mutation tools and is scoped by tenant, actor, action, and hashed key to prevent replay or duplicate writes across server restarts.
 
 ## Prompt Injection and Tool-Output Constraints
 
@@ -60,6 +85,9 @@ Any route that sends, approves, exports official PDFs, releases production artif
 
 ## Current Implementation Status
 
-- This document is preparation guidance for runtime-agent and tool-gateway hardening.
-- Unsafe runtime agent execution is not activated.
+- This document is preparation guidance plus the Phase 6 read-only web chat boundary.
+- Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
+- Phase 6 policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, mutation idempotency metadata, approval metadata, prompt-injection denial, non-executable mutation/workflow policies, sanitized prompt labels, and the static policy manifest endpoint.
+- Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, prompt-injection blocking before reads, mutation/PDF/send denial, forbidden field filtering, and no authoritative calculation claims.
+- Unsafe runtime agent execution is not activated beyond the existing deterministic rules-mode adapters and read-only Supabase web route.
 - Future implementation must keep gateway policy server-side and must add tests for tenant isolation, role denial, approval denial/replay, idempotency replay, prompt injection, malicious tool output, and deterministic-domain calculation ownership.

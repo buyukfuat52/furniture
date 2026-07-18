@@ -8,6 +8,8 @@ export type PlannedMutationKind =
   | "create_customer"
   | "create_project"
   | "create_quote_revision_draft"
+  | "create_quote_configuration_draft"
+  | "update_quote_configuration_draft"
   | "read_quote_revision"
   | "list_project_quote_revisions"
   | "append_audit_entry"
@@ -28,7 +30,9 @@ const approvalRoles = new Set(["admin"]);
 const activeMutationKinds = new Set<PlannedMutationKind>([
   "create_customer",
   "create_project",
-  "create_quote_revision_draft"
+  "create_quote_revision_draft",
+  "create_quote_configuration_draft",
+  "update_quote_configuration_draft"
 ]);
 
 function hasTrustedScope(scope: TrustedMutationScope): boolean {
@@ -64,7 +68,7 @@ export function planProductMutationBoundary(
       status: writerRoles.has(scope.role) ? "allowed_mutation" : "denied",
       reason: writerRoles.has(scope.role)
         ? "Low-risk draft mutation may proceed through tenant-scoped repository methods."
-        : "Viewer and non-writer roles cannot create customer, project, or quote draft records."
+        : "Viewer and non-writer roles cannot create customer, project, quote draft, or quote configuration draft records."
     };
   }
 

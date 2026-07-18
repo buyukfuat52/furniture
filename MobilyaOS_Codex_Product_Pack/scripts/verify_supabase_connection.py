@@ -26,6 +26,7 @@ REQUIRED_TABLES = [
     "customers",
     "projects",
     "quote_revisions",
+    "quote_configuration_drafts",
     "product_templates",
     "product_variants",
     "parts",
@@ -37,6 +38,7 @@ REQUIRED_TABLES = [
     "audit_entries",
     "agent_runs",
     "tool_invocations",
+    "idempotency_records",
     "price_observations",
 ]
 
@@ -47,6 +49,7 @@ TENANT_TABLES = [
     "product_templates",
     "product_variants",
     "quote_revisions",
+    "quote_configuration_drafts",
     "parts",
     "part_edges",
     "bom_snapshots",
@@ -56,12 +59,14 @@ TENANT_TABLES = [
     "audit_entries",
     "agent_runs",
     "tool_invocations",
+    "idempotency_records",
     "price_observations",
 ]
 
 DEMO_COMPANY_ID = "11111111-1111-4111-8111-111111111111"
 DEMO_PROJECT_ID = "44444444-4444-4444-8444-444444444444"
 DEMO_REVISION_ID = "14141414-1414-4141-8141-141414141414"
+DEMO_APPROVED_REVISION_ID = "24242424-2424-4242-8242-242424242424"
 DEMO_EMAILS = ["admin@demo.local", "satis@demo.local", "viewer@demo.local"]
 REQUIRED_BUCKETS = ["quote-documents", "production-packages"]
 
@@ -90,6 +95,82 @@ def rest_request(
         return json.loads(raw) if raw else {}
 
 
+def safe_configuration_payload() -> dict[str, Any]:
+    return {
+        "input_schema_version": "quote_configuration_draft_v1",
+        "template_code": "wardrobe",
+        "measurements": {"unit": "mm", "width_mm": 1800, "height_mm": 2200, "depth_mm": 600},
+        "quantity": {"unit": "piece", "value": 1},
+        "options": {
+            "door_count": 3,
+            "shelf_count": 4,
+            "material_sku": "MDF-LAM-BEYAZ-18",
+            "edge_band_sku": "PVC-BEYAZ-1MM",
+            "notes": None,
+        },
+    }
+
+
+def expect_authenticated_rest_denied(
+    env: dict[str, str],
+    token: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any],
+    label: str,
+) -> bool:
+    try:
+        rest_request(env, method, path, token=token, payload=payload)
+    except HTTPError as exc:
+        if exc.code in {400, 401, 403, 404, 405}:
+            print(f"{label}: ok")
+            return True
+        print(f"{label}: failed ({exc.__class__.__name__})")
+        return False
+    except (URLError, TimeoutError, ValueError) as exc:
+        print(f"{label}: failed ({exc.__class__.__name__})")
+        return False
+    print(f"{label}: failed (unexpected success)")
+    return False
+
+
+def authenticated_revision_status(env: dict[str, str], token: str) -> str:
+    query = urlencode({"select": "status", "id": f"eq.{DEMO_REVISION_ID}"})
+    rows = rest_request(env, "GET", f"/rest/v1/quote_revisions?{query}", token=token)
+    if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0].get("status"), str):
+      return str(rows[0]["status"])
+    return ""
+
+
+def expect_authenticated_quote_revision_write_blocked(env: dict[str, str], token: str) -> bool:
+    label = "Authenticated direct quote revision write"
+    before_status = authenticated_revision_status(env, token)
+    quote_patch_query = urlencode({"id": f"eq.{DEMO_REVISION_ID}"})
+    try:
+        rest_request(
+            env,
+            "PATCH",
+            f"/rest/v1/quote_revisions?{quote_patch_query}",
+            token=token,
+            payload={"status": "sent"},
+        )
+    except HTTPError as exc:
+        if exc.code in {400, 401, 403, 404, 405}:
+            print(f"{label}: ok")
+            return True
+        print(f"{label}: failed ({exc.__class__.__name__})")
+        return False
+    except (URLError, TimeoutError, ValueError) as exc:
+        print(f"{label}: failed ({exc.__class__.__name__})")
+        return False
+    after_status = authenticated_revision_status(env, token)
+    if before_status and after_status == before_status:
+        print(f"{label}: ok")
+        return True
+    print(f"{label}: failed (unexpected mutation)")
+    return False
+
+
 def verify_authenticated_rls(env: dict[str, str]) -> bool:
     try:
         payload = rest_request(
@@ -109,9 +190,75 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
         return False
     if isinstance(rows, list) and len(rows) == 1 and rows[0].get("company_id") == DEMO_COMPANY_ID:
         print("Authenticated RLS smoke: ok")
-        return True
+        quote_write_blocked = expect_authenticated_quote_revision_write_blocked(env, str(access_token))
+        config_write_blocked = expect_authenticated_rest_denied(
+            env,
+            str(access_token),
+            "POST",
+            "/rest/v1/quote_configuration_drafts",
+            {
+                "company_id": DEMO_COMPANY_ID,
+                "quote_revision_id": DEMO_REVISION_ID,
+                "configuration_json": safe_configuration_payload(),
+                "validation_status": "draft_validated",
+                "calculation_status": "not_calculated",
+            },
+            "Authenticated direct configuration draft write",
+        )
+        return quote_write_blocked and config_write_blocked
     print("Authenticated RLS smoke: failed (unexpected row count)")
     return False
+
+
+def expect_database_guard_rejects(cur: Any, statement: str, params: tuple[Any, ...], label: str) -> bool:
+    cur.execute("savepoint phase4_guard")
+    try:
+        cur.execute(statement, params)
+    except Exception:
+        cur.execute("rollback to savepoint phase4_guard")
+        print(f"{label}: ok")
+        return True
+    cur.execute("rollback to savepoint phase4_guard")
+    print(f"{label}: failed (unexpected success)")
+    return False
+
+
+def verify_configuration_database_guards(cur: Any) -> bool:
+    status_guard = expect_database_guard_rejects(
+        cur,
+        """
+        update public.quote_revisions
+        set status = 'sent', updated_at = now()
+        where company_id = %s and id = %s
+        """,
+        (DEMO_COMPANY_ID, DEMO_REVISION_ID),
+        "Quote revision status DB guard",
+    )
+    approved_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_configuration_drafts (
+          company_id, quote_revision_id, configuration_json, validation_status, calculation_status
+        )
+        values (%s, %s, %s::jsonb, 'draft_validated', 'not_calculated')
+        """,
+        (DEMO_COMPANY_ID, DEMO_APPROVED_REVISION_ID, json.dumps(safe_configuration_payload())),
+        "Approved revision configuration DB guard",
+    )
+    invalid_payload = safe_configuration_payload()
+    invalid_payload["measurements"] = {"unit": "mm", "width_mm": 1800.5, "height_mm": 2200, "depth_mm": 600}
+    shape_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_configuration_drafts (
+          company_id, quote_revision_id, configuration_json, validation_status, calculation_status
+        )
+        values (%s, %s, %s::jsonb, 'draft_validated', 'not_calculated')
+        """,
+        (DEMO_COMPANY_ID, DEMO_REVISION_ID, json.dumps(invalid_payload)),
+        "Configuration shape DB guard",
+    )
+    return status_guard and approved_guard and shape_guard
 
 
 def main() -> int:
@@ -143,6 +290,7 @@ def main() -> int:
     if conn is None:
         print("Verify database connection failed for all configured database URL candidates.")
         return 1
+    guard_ok = False
     try:
         with conn:
             with conn.cursor() as cur:
@@ -235,8 +383,18 @@ def main() -> int:
                     (DEMO_COMPANY_ID, DEMO_REVISION_ID, DEMO_PROJECT_ID),
                 )
                 revision_count = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    select count(*)
+                    from public.quote_revisions
+                    where company_id = %s and id = %s and project_id = %s and status = 'approved'
+                    """,
+                    (DEMO_COMPANY_ID, DEMO_APPROVED_REVISION_ID, DEMO_PROJECT_ID),
+                )
+                approved_revision_count = cur.fetchone()[0]
                 cur.execute("select id from storage.buckets where id = any(%s)", (REQUIRED_BUCKETS,))
                 found_buckets = {row[0] for row in cur.fetchall()}
+                guard_ok = verify_configuration_database_guards(cur)
     except Exception as exc:
         print(f"Cannot verify Supabase database: {safe_exception_label(exc)}")
         return 1
@@ -246,12 +404,21 @@ def main() -> int:
     print(f"Demo app users: {demo_user_count}/{len(DEMO_EMAILS)}")
     print(f"Demo project: {'ok' if project_count == 1 else 'missing'}")
     print(f"Demo quote revision: {'ok' if revision_count == 1 else 'missing'}")
+    print(f"Demo approved quote revision: {'ok' if approved_revision_count == 1 else 'missing'}")
     if missing_buckets:
         print(f"Storage buckets: missing ({len(missing_buckets)})")
         failed = True
     else:
         print(f"Storage buckets: ok ({len(REQUIRED_BUCKETS)})")
-    if company_count != 1 or demo_user_count != len(DEMO_EMAILS) or project_count != 1 or revision_count != 1:
+    if (
+        company_count != 1
+        or demo_user_count != len(DEMO_EMAILS)
+        or project_count != 1
+        or revision_count != 1
+        or approved_revision_count != 1
+    ):
+        failed = True
+    if not guard_ok:
         failed = True
     if not verify_authenticated_rls(env):
         failed = True

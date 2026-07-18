@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { reserveIdempotency, storeIdempotencyResult, type IdempotencyReservation } from "./idempotency";
+import {
+  idempotencyKeyFromRequest,
+  reserveIdempotency,
+  storeIdempotencyResult,
+  type IdempotencyReplay,
+  type IdempotencyReservation
+} from "./idempotency";
 import { planProductMutationBoundary, type PlannedMutationKind } from "./productMutationBoundary";
 import { resolveAuthenticatedSession, type ResolvedSession } from "./sessionContext";
 
@@ -67,27 +73,44 @@ export async function withMutationSession(
   } catch {
     body = {};
   }
-  const idempotency = reserveIdempotency({
-    key: request.headers.get("x-idempotency-key") ?? request.headers.get("idempotency-key") ?? (typeof body.idempotency_key === "string" ? body.idempotency_key : null),
-    companyId: session.mutationScope.companyId,
-    appUserId: session.mutationScope.appUserId,
-    action,
-    body
-  });
+  const idempotencyKey = idempotencyKeyFromRequest(request, body);
+  if (!idempotencyKey) {
+    return safeError(422, "Idempotency key required", "A durable idempotency key is required for this mutation.");
+  }
+  let idempotency: IdempotencyReplay | IdempotencyReservation | null;
+  try {
+    idempotency = await reserveIdempotency({
+      key: idempotencyKey,
+      companyId: session.mutationScope.companyId,
+      appUserId: session.mutationScope.appUserId,
+      action,
+      body
+    });
+  } catch {
+    return safeError(503, "Idempotency unavailable", "The mutation could not be safely reserved.");
+  }
   if (idempotency && "replayed" in idempotency) {
     return NextResponse.json(idempotency.body, { status: idempotency.status });
   }
   const reservation = idempotency ?? null;
+  let response: NextResponse;
   try {
-    const response = await handler({ session }, body, reservation);
-    const responseBody = await response.clone().json().catch(() => ({}));
-    storeIdempotencyResult(reservation, response.status, responseBody);
-    return response;
+    response = await handler({ session }, body, reservation);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (message.includes("required") || message.includes("invalid")) {
-      return safeError(422, "Invalid request", "The submitted data could not be accepted.");
+    if (message.includes("conflict")) {
+      response = safeError(409, "Mutation conflict", "The submitted mutation conflicts with the current server state.");
+    } else if (message.includes("required") || message.includes("invalid")) {
+      response = safeError(422, "Invalid request", "The submitted data could not be accepted.");
+    } else {
+      response = safeError(404, "Not found", "The requested tenant-scoped resource was not found.");
     }
-    return safeError(404, "Not found", "The requested tenant-scoped resource was not found.");
   }
+  const responseBody = await response.clone().json().catch(() => ({}));
+  try {
+    await storeIdempotencyResult(reservation, response.status, responseBody);
+  } catch {
+    return safeError(503, "Idempotency unavailable", "The mutation result could not be safely persisted.");
+  }
+  return NextResponse.json(responseBody, { status: response.status });
 }

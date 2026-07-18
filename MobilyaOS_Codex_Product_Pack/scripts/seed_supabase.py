@@ -27,6 +27,7 @@ DEMO_PROJECT_ID = "44444444-4444-4444-8444-444444444444"
 DEMO_TEMPLATE_ID = "12121212-1212-4121-8121-121212121212"
 DEMO_VARIANT_ID = "13131313-1313-4131-8131-131313131313"
 DEMO_REVISION_ID = "14141414-1414-4141-8141-141414141414"
+DEMO_APPROVED_REVISION_ID = "24242424-2424-4242-8242-242424242424"
 DEMO_BOM_SNAPSHOT_ID = "15151515-1515-4151-8151-151515151515"
 DEMO_COST_SNAPSHOT_ID = "16161616-1616-4161-8161-161616161616"
 DEMO_AUDIT_ID = "17171717-1717-4171-8171-171717171717"
@@ -188,6 +189,7 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                     "demo-variant-hash-v1",
                 ),
             )
+            cur.execute("set local app.mobilyaos_allow_quote_status_update = 'on'")
             cur.execute(
                 """
                 insert into public.quote_revisions (id, company_id, project_id, product_variant_id, revision_number, status)
@@ -195,6 +197,14 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                 on conflict (id) do update set status = excluded.status, updated_at = now()
                 """,
                 (DEMO_REVISION_ID, DEMO_COMPANY_ID, DEMO_PROJECT_ID, DEMO_VARIANT_ID, 1, "draft"),
+            )
+            cur.execute(
+                """
+                insert into public.quote_revisions (id, company_id, project_id, product_variant_id, revision_number, status)
+                values (%s, %s, %s, %s, %s, %s)
+                on conflict (id) do update set status = excluded.status, updated_at = now()
+                """,
+                (DEMO_APPROVED_REVISION_ID, DEMO_COMPANY_ID, DEMO_PROJECT_ID, DEMO_VARIANT_ID, 2, "approved"),
             )
             cur.execute(
                 """

@@ -10,6 +10,7 @@ const repoRoot = findRepoRoot(appRoot);
 const fakeCustomerId = "00000000-0000-4000-8000-000000000001";
 const fakeProjectId = "00000000-0000-4000-8000-000000000002";
 const fakeQuoteRevisionId = "00000000-0000-4000-8000-000000000003";
+const demoApprovedQuoteRevisionId = "24242424-2424-4242-8242-242424242424";
 const forbiddenPayloadKeys = [
   "SUPABASE_SERVICE_KEY",
   "SUPABASE_SECRET_KEY",
@@ -20,11 +21,14 @@ const forbiddenPayloadKeys = [
   "POSTGRES_PRISMA_URL",
   "POSTGRES_URL_NON_POOLING",
   "DATABASE_PASSWORD",
+  "app_user_id",
+  "actor_id",
   "auth_user_id",
   "actor_app_user_id",
   "access_token",
   "refresh_token",
   "service_role",
+  "storage_bucket",
   "storage_path",
   "raw_storage_path",
   "database_password"
@@ -42,7 +46,13 @@ const forbiddenResponseFields = [
 ];
 const forgedPayloadMarkers = {
   company_id: "browser-supplied",
+  companyId: "browser-supplied-company",
+  app_user_id: "browser-supplied-user",
+  actor_id: "browser-supplied-actor",
+  actor_app_user_id: "browser-supplied-actor",
   auth_user_id: "browser-supplied",
+  role: "browser-supplied-admin",
+  decision: "browser-supplied-decision",
   access_token: "browser-supplied",
   refresh_token: "browser-supplied",
   service_role: "browser-supplied",
@@ -50,17 +60,37 @@ const forgedPayloadMarkers = {
   raw_storage_path: "browser-supplied",
   database_password: "browser-supplied",
   SUPABASE_SERVICE_ROLE_KEY: "browser-supplied",
-  DATABASE_URL: "browser-supplied"
+  DATABASE_URL: "browser-supplied",
+  metadata: {
+    actor_app_user_id: "browser-supplied-actor",
+    company_id: "browser-supplied-company",
+    decision: "browser-supplied-decision"
+  }
 };
 const deferredQuoteActions = ["quote_send", "quote_approve", "quote_pdf", "production_package"];
 const unavailableQuotePayloadFields = [
   "approval_id",
   "approved_at",
+  "bom",
+  "calculation_hash",
+  "calculation_version",
+  "cost",
   "document_url",
+  "edges",
+  "grand_total_minor",
+  "labor",
+  "margin",
+  "markup_minor",
   "pdf_url",
   "production_job_id",
   "production_package_id",
+  "quote_total",
   "sent_at",
+  "sheet_count",
+  "subtotal_minor",
+  "tax",
+  "total",
+  "vat_minor",
   "storage_bucket"
 ];
 
@@ -99,6 +129,25 @@ function assertNoForbiddenResponseFields(label, value) {
   }
 }
 
+function forgedMarkerValues(value = forgedPayloadMarkers) {
+  const values = [];
+  for (const marker of Object.values(value)) {
+    if (typeof marker === "string") {
+      values.push(marker);
+    } else if (marker && typeof marker === "object") {
+      values.push(...forgedMarkerValues(marker));
+    }
+  }
+  return [...new Set(values)];
+}
+
+function assertNoForgedPayloadEcho(label, value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  for (const marker of forgedMarkerValues()) {
+    requireSafe(!text.includes(marker), `${label} reflects forged payload marker ${marker}.`);
+  }
+}
+
 async function freePort() {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -133,11 +182,36 @@ async function waitForServer(baseUrl, child) {
   throw new Error("Next server did not become ready in time.");
 }
 
+async function startNextServer() {
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [nextCliPath(), "start", "-H", "127.0.0.1", "-p", String(port)], {
+    cwd: appRoot,
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+    stdio: ["ignore", "ignore", "ignore"]
+  });
+  await waitForServer(baseUrl, child);
+  return { baseUrl, child };
+}
+
+async function stopNextServer(child) {
+  if (!child || child.exitCode !== null) {
+    return;
+  }
+  await new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.kill();
+    setTimeout(resolve, 2_000);
+  });
+}
+
 async function readJson(response, label) {
   const text = await response.text();
   assertSafePayload(label, text);
+  assertNoForgedPayloadEcho(label, text);
   const payload = text ? JSON.parse(text) : {};
   assertNoForbiddenResponseFields(label, payload);
+  assertNoForgedPayloadEcho(label, payload);
   return payload;
 }
 
@@ -175,6 +249,14 @@ async function requestJson(baseUrl, path, options, label) {
   return { response, payload };
 }
 
+async function requestText(baseUrl, path, options, label) {
+  const response = await fetch(`${baseUrl}${path}`, options);
+  const text = await response.text();
+  assertSafePayload(label, text);
+  assertNoForgedPayloadEcho(label, text);
+  return { response, text };
+}
+
 function countAuditActions(entries) {
   const counts = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
@@ -191,6 +273,31 @@ function requireAuditIncrease(before, after, action) {
     (after.get(action) ?? 0) > (before.get(action) ?? 0),
     `Audit entries must append an allowed ${action} row.`
   );
+}
+
+function requireAuditDelta(before, after, action, expectedDelta) {
+  const delta = (after.get(action) ?? 0) - (before.get(action) ?? 0);
+  requireSafe(delta === expectedDelta, `Audit ${action} delta must be ${expectedDelta}, got ${delta}.`);
+}
+
+function requireAuditUnchanged(before, after, action) {
+  requireAuditDelta(before, after, action, 0);
+}
+
+function assertAuditTimelineShape(entries, label) {
+  requireSafe(Array.isArray(entries), `${label} must include an audit timeline array.`);
+  let previous = Number.POSITIVE_INFINITY;
+  for (const entry of entries) {
+    requireSafe(typeof entry.id === "string" && entry.id.length > 0, `${label} audit entry must include id.`);
+    requireSafe(typeof entry.action === "string" && entry.action.length > 0, `${label} audit entry must include action.`);
+    requireSafe(typeof entry.target_type === "string" && entry.target_type.length > 0, `${label} audit entry must include target_type.`);
+    requireSafe(entry.target_id === null || typeof entry.target_id === "string", `${label} audit entry target_id must be safe.`);
+    requireSafe(entry.decision === "allowed" || entry.decision === "denied", `${label} audit entry decision must be bounded.`);
+    const timestamp = Date.parse(entry.created_at);
+    requireSafe(Number.isFinite(timestamp), `${label} audit entry must include a valid timestamp.`);
+    requireSafe(timestamp <= previous, `${label} audit entries must be newest-first.`);
+    previous = timestamp;
+  }
 }
 
 function assertQuoteDraftDeferred(payload, label) {
@@ -210,22 +317,68 @@ function assertQuoteDraftDeferred(payload, label) {
   }
 }
 
+function assertConfigurationDraftDeferred(payload, expected, label) {
+  const draft = payload.configuration_draft;
+  requireSafe(Boolean(draft?.id), `${label} must include a safe configuration draft id.`);
+  requireSafe(draft.validation_status === "draft_validated", `${label} must report draft validation only.`);
+  requireSafe(draft.calculation_status === "not_calculated", `${label} must not report calculated state.`);
+  requireSafe(payload.calculation_status === "not_calculated", `${label} top-level calculation state must remain unavailable.`);
+  requireSafe(Array.isArray(payload.deferred_actions), `${label} response must list deferred actions.`);
+  for (const action of ["bom_calculation", "cost_snapshot", ...deferredQuoteActions]) {
+    requireSafe(payload.deferred_actions.includes(action), `${label} must keep ${action} deferred.`);
+  }
+  const configuration = draft.configuration;
+  requireSafe(configuration?.template_code === "wardrobe", `${label} template must be sanitized.`);
+  requireSafe(configuration.width_mm === expected.width_mm, `${label} width must match sanitized input.`);
+  requireSafe(configuration.height_mm === expected.height_mm, `${label} height must match sanitized input.`);
+  requireSafe(configuration.depth_mm === expected.depth_mm, `${label} depth must match sanitized input.`);
+  requireSafe(configuration.quantity === expected.quantity, `${label} quantity must match sanitized input.`);
+  requireSafe(configuration.door_count === expected.door_count, `${label} door count must match sanitized input.`);
+  requireSafe(configuration.shelf_count === expected.shelf_count, `${label} shelf count must match sanitized input.`);
+  requireSafe(configuration.material_sku === expected.material_sku, `${label} material SKU must match sanitized input.`);
+  requireSafe(configuration.edge_band_sku === expected.edge_band_sku, `${label} edge band SKU must match sanitized input.`);
+  const text = JSON.stringify(payload) ?? "";
+  for (const field of unavailableQuotePayloadFields) {
+    requireSafe(!new RegExp(`"${field}"\\s*:`, "i").test(text), `${label} exposes unavailable field ${field}.`);
+  }
+}
+
+function configurationDraftBody(overrides = {}) {
+  return {
+    ...forgedPayloadMarkers,
+    template_code: "wardrobe",
+    width_mm: 1800,
+    height_mm: 2200,
+    depth_mm: 600,
+    quantity: 1,
+    door_count: 3,
+    shelf_count: 4,
+    material_sku: "MDF-LAM-BEYAZ-18",
+    edge_band_sku: "PVC-BEYAZ-1MM",
+    notes: "Smoke test wardrobe draft",
+    status: "approved",
+    calculation_status: "calculated",
+    product_variant_id: fakeQuoteRevisionId,
+    bom: [{ code: "browser-supplied" }],
+    cost: { grand_total_minor: 1 },
+    grand_total_minor: 1,
+    quote_total: 1,
+    sheet_count: 1,
+    ...overrides
+  };
+}
+
 async function main() {
   requireSafe(existsSync(join(appRoot, ".next")), "Next build output is missing. Run npm run build -w apps/web first.");
 
   const password = process.env.DEMO_SEED_PASSWORD || "Demo1234!ChangeMe";
   requireSafe(Boolean(password), "Demo password is not configured.");
 
-  const port = await freePort();
-  const baseUrl = `http://127.0.0.1:${port}`;
-  const child = spawn(process.execPath, [nextCliPath(), "start", "-H", "127.0.0.1", "-p", String(port)], {
-    cwd: appRoot,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
-    stdio: ["ignore", "ignore", "ignore"]
-  });
+  let child;
+  let baseUrl;
 
   try {
-    await waitForServer(baseUrl, child);
+    ({ baseUrl, child } = await startNextServer());
 
     const mutationProbes = [
       {
@@ -242,10 +395,46 @@ async function main() {
         key: "quote-draft",
         path: `/api/supabase/projects/${fakeProjectId}/quote-drafts`,
         body: { ...forgedPayloadMarkers, status: "sent" }
+      },
+      {
+        key: "configuration-draft",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`,
+        body: configurationDraftBody()
       }
     ];
 
     let result;
+    const readProbes = [
+      {
+        label: "unauthenticated customers read",
+        path: "/api/supabase/customers"
+      },
+      {
+        label: "unauthenticated projects read",
+        path: "/api/supabase/projects"
+      },
+      {
+        label: "unauthenticated project detail read",
+        path: `/api/supabase/projects/${fakeProjectId}`
+      },
+      {
+        label: "unauthenticated quote revisions read",
+        path: `/api/supabase/projects/${fakeProjectId}/quote-revisions`
+      },
+      {
+        label: "unauthenticated quote revision get",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}`
+      },
+      {
+        label: "unauthenticated configuration draft get",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`
+      }
+    ];
+    for (const probe of readProbes) {
+      result = await requestJson(baseUrl, probe.path, { method: "GET" }, probe.label);
+      requireSafe(result.response.status === 401, `${probe.label} must return 401.`);
+    }
+
     for (const probe of mutationProbes) {
       result = await requestJson(baseUrl, probe.path, {
         method: "POST",
@@ -264,12 +453,21 @@ async function main() {
       }, `viewer ${probe.key} mutation`);
       requireSafe(result.response.status === 403, `Viewer ${probe.key} mutation must return 403.`);
     }
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": "viewer-denied-configuration-update-mutation-smoke" },
+      body: JSON.stringify(configurationDraftBody({ expected_version: 1, width_mm: 1900 }))
+    }, "viewer configuration draft update");
+    requireSafe(result.response.status === 403, "Viewer configuration draft update must return 403.");
 
     const salesCookie = await login(baseUrl, "satis@demo.local", password);
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const customerKey = `customer-${suffix}`;
-    const projectKey = `project-${suffix}`;
-    const quoteDraftKey = `quote-draft-${suffix}`;
+    const crossActionKey = `cross-action-${suffix}`;
+    const customerKey = crossActionKey;
+    const projectKey = crossActionKey;
+    const quoteDraftKey = crossActionKey;
+    const configCreateKey = crossActionKey;
+    const configUpdateKey = crossActionKey;
 
     result = await requestJson(baseUrl, "/api/supabase/demo-data", {
       method: "GET",
@@ -277,6 +475,68 @@ async function main() {
     }, "audit baseline");
     requireSafe(result.response.ok, "Demo data must succeed before mutation audit baseline.");
     const auditBefore = countAuditActions(result.payload.audit_entries);
+
+    const idorProbes = [
+      {
+        label: "missing customer project create",
+        path: "/api/supabase/projects",
+        method: "POST",
+        body: { ...forgedPayloadMarkers, customer_id: fakeCustomerId, name: `Missing Customer Project ${suffix}` }
+      },
+      {
+        label: "missing project detail",
+        path: `/api/supabase/projects/${fakeProjectId}`,
+        method: "GET"
+      },
+      {
+        label: "missing project quote list",
+        path: `/api/supabase/projects/${fakeProjectId}/quote-revisions`,
+        method: "GET"
+      },
+      {
+        label: "missing project quote draft",
+        path: `/api/supabase/projects/${fakeProjectId}/quote-drafts`,
+        method: "POST",
+        body: { ...forgedPayloadMarkers, status: "sent" }
+      },
+      {
+        label: "missing quote revision read",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}`,
+        method: "GET"
+      },
+      {
+        label: "missing configuration draft read",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`,
+        method: "GET"
+      },
+      {
+        label: "missing configuration draft create",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`,
+        method: "POST",
+        body: configurationDraftBody()
+      },
+      {
+        label: "missing configuration draft update",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`,
+        method: "PATCH",
+        body: configurationDraftBody({ expected_version: 1, width_mm: 1900 })
+      }
+    ];
+    for (const probe of idorProbes) {
+      result = await requestJson(baseUrl, probe.path, {
+        method: probe.method,
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: salesCookie,
+          "x-idempotency-key": `idor-${probe.label.replaceAll(" ", "-")}-${suffix}`
+        },
+        body: probe.method === "GET" ? undefined : JSON.stringify(probe.body ?? forgedPayloadMarkers)
+      }, probe.label);
+      requireSafe(
+        result.response.status === 404,
+        `${probe.label} must return tenant-scoped 404, got ${result.response.status}.`
+      );
+    }
 
     const customerBody = {
       ...forgedPayloadMarkers,
@@ -294,6 +554,42 @@ async function main() {
     const customer = result.payload.customer;
     requireSafe(Boolean(customer?.id), "Customer create payload must include a safe id.");
 
+    await stopNextServer(child);
+    ({ baseUrl, child } = await startNextServer());
+
+    result = await requestJson(baseUrl, "/api/supabase/customers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": customerKey },
+      body: JSON.stringify(customerBody)
+    }, "customer durable idempotency replay after restart");
+    requireSafe(result.response.status === 201, "Customer durable replay after restart must return the stored status.");
+    requireSafe(result.payload.customer?.id === customer.id, "Customer durable replay after restart must return the original safe result.");
+
+    const adminCookie = await login(baseUrl, "admin@demo.local", password);
+    const adminCustomerBody = {
+      ...forgedPayloadMarkers,
+      name: `Admin Smoke Customer ${suffix}`,
+      email: `admin-smoke-${suffix}@example.local`,
+      phone: "+90 555 020 20 20"
+    };
+    result = await requestJson(baseUrl, "/api/supabase/customers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": customerKey },
+      body: JSON.stringify(adminCustomerBody)
+    }, "admin customer create with sales key");
+    requireSafe(result.response.status === 201, "Admin customer create must return 201.");
+    const adminCustomer = result.payload.customer;
+    requireSafe(Boolean(adminCustomer?.id), "Admin customer create payload must include a safe id.");
+    requireSafe(adminCustomer.id !== customer.id, "Idempotency key reuse across users must not replay another actor's result.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "customer audit after creates");
+    requireSafe(result.response.ok, "Demo data must succeed after customer creates.");
+    const auditAfterCustomerCreates = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBefore, auditAfterCustomerCreates, "customer_created", 2);
+
     result = await requestJson(baseUrl, "/api/supabase/customers", {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": customerKey },
@@ -309,10 +605,23 @@ async function main() {
     }, "customer idempotency conflict");
     requireSafe(result.response.status === 409, "Customer idempotency conflict must return 409.");
 
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "customer audit after idempotency checks");
+    requireSafe(result.response.ok, "Demo data must succeed after customer idempotency checks.");
+    const auditAfterCustomerIdempotency = countAuditActions(result.payload.audit_entries);
+    requireAuditUnchanged(auditAfterCustomerCreates, auditAfterCustomerIdempotency, "customer_created");
+
+    const projectBody = {
+      customer_id: customer.id,
+      name: `Smoke Project ${suffix}`,
+      company_id: "browser-supplied"
+    };
     result = await requestJson(baseUrl, "/api/supabase/projects", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `project-${suffix}` },
-      body: JSON.stringify({ customer_id: customer.id, name: `Smoke Project ${suffix}`, company_id: "browser-supplied" })
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": projectKey },
+      body: JSON.stringify(projectBody)
     }, "project create");
     requireSafe(result.response.status === 201, "Sales project create must return 201.");
     const project = result.payload.project;
@@ -320,24 +629,108 @@ async function main() {
     requireSafe(project.status === "draft", "Project create payload must be draft.");
     requireSafe(!("company_id" in project), "Project payload must not expose company_id.");
 
+    result = await requestJson(baseUrl, "/api/supabase/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": projectKey },
+      body: JSON.stringify({ ...forgedPayloadMarkers, customer_id: adminCustomer.id, name: `Admin Smoke Project ${suffix}` })
+    }, "admin project create with sales key");
+    requireSafe(result.response.status === 201, "Admin project create must return 201.");
+    const adminProject = result.payload.project;
+    requireSafe(Boolean(adminProject?.id), "Admin project create payload must include a safe id.");
+    requireSafe(adminProject.id !== project.id, "Project idempotency key reuse across users must not replay another actor's result.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "project audit after creates");
+    requireSafe(result.response.ok, "Demo data must succeed after project creates.");
+    const auditAfterProjectCreates = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditAfterCustomerIdempotency, auditAfterProjectCreates, "project_created", 2);
+
+    result = await requestJson(baseUrl, "/api/supabase/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": projectKey },
+      body: JSON.stringify(projectBody)
+    }, "project idempotency replay");
+    requireSafe(result.response.status === 201, "Project idempotency replay must return the stored status.");
+    requireSafe(result.payload.project?.id === project.id, "Project idempotency replay must return the original safe result.");
+
+    result = await requestJson(baseUrl, "/api/supabase/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": projectKey },
+      body: JSON.stringify({ ...projectBody, name: `${projectBody.name} Conflict` })
+    }, "project idempotency conflict");
+    requireSafe(result.response.status === 409, "Project idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "project audit after idempotency checks");
+    requireSafe(result.response.ok, "Demo data must succeed after project idempotency checks.");
+    const auditAfterProjectIdempotency = countAuditActions(result.payload.audit_entries);
+    requireAuditUnchanged(auditAfterProjectCreates, auditAfterProjectIdempotency, "project_created");
+
+    result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "project detail before quote");
+    requireSafe(result.response.ok, "Project detail must succeed for session project.");
+    requireSafe(result.payload.project?.id === project.id, "Project detail must return the requested project.");
+    requireSafe(Array.isArray(result.payload.quote_revisions), "Project detail must include a quote revision timeline array.");
+    assertAuditTimelineShape(result.payload.audit_entries, "Project detail before quote");
+
+    const quoteDraftBody = { company_id: "browser-supplied", status: "sent" };
     result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}/quote-drafts`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `quote-draft-${suffix}` },
-      body: JSON.stringify({ company_id: "browser-supplied", status: "sent" })
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": quoteDraftKey },
+      body: JSON.stringify(quoteDraftBody)
     }, "quote draft create");
     requireSafe(result.response.status === 201, "Sales quote draft create must return 201.");
     const quoteRevision = result.payload.quote_revision;
-    requireSafe(Boolean(quoteRevision?.id), "Quote draft payload must include a safe id.");
-    requireSafe(quoteRevision.status === "draft", "Quote draft status must remain draft.");
-    requireSafe(Array.isArray(result.payload.deferred_actions), "Quote draft response must list deferred actions.");
+    requireSafe(Boolean(quoteRevision?.id), `Quote draft payload must include a safe id. Payload keys: ${Object.keys(result.payload).join(",")}; quote_revision keys: ${quoteRevision ? Object.keys(quoteRevision).join(",") : "missing"}.`);
+    assertQuoteDraftDeferred(result.payload, "quote draft create");
+
+    result = await requestJson(baseUrl, `/api/supabase/projects/${adminProject.id}/quote-drafts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": quoteDraftKey },
+      body: JSON.stringify({ ...forgedPayloadMarkers, status: "sent" })
+    }, "admin quote draft create with sales key");
+    requireSafe(result.response.status === 201, "Admin quote draft create must return 201.");
+    requireSafe(Boolean(result.payload.quote_revision?.id), "Admin quote draft payload must include a safe id.");
+    const adminQuoteRevision = result.payload.quote_revision;
+    requireSafe(result.payload.quote_revision.id !== quoteRevision.id, "Quote draft idempotency key reuse across users must not replay another actor's result.");
+    assertQuoteDraftDeferred(result.payload, "admin quote draft create");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote audit after creates");
+    requireSafe(result.response.ok, "Demo data must succeed after quote draft creates.");
+    const auditAfterQuoteCreates = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditAfterProjectIdempotency, auditAfterQuoteCreates, "quote_draft_created", 2);
 
     result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}/quote-drafts`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `quote-draft-${suffix}` },
-      body: JSON.stringify({ company_id: "browser-supplied", status: "sent" })
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": quoteDraftKey },
+      body: JSON.stringify(quoteDraftBody)
     }, "quote draft idempotency replay");
     requireSafe(result.response.status === 201, "Quote draft idempotency replay must return the stored status.");
     requireSafe(result.payload.quote_revision?.id === quoteRevision.id, "Quote draft idempotency replay must return the original result.");
+
+    result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}/quote-drafts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": quoteDraftKey },
+      body: JSON.stringify({ ...quoteDraftBody, status: "approved" })
+    }, "quote draft idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote draft idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote audit after idempotency checks");
+    requireSafe(result.response.ok, "Demo data must succeed after quote idempotency checks.");
+    const auditAfterQuoteIdempotency = countAuditActions(result.payload.audit_entries);
+    requireAuditUnchanged(auditAfterQuoteCreates, auditAfterQuoteIdempotency, "quote_draft_created");
 
     result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}/quote-revisions`, {
       method: "GET",
@@ -355,6 +748,203 @@ async function main() {
     }, "quote revision get");
     requireSafe(result.response.ok, "Quote revision get must succeed.");
     requireSafe(result.payload.quote_revision?.status === "draft", "Quote revision get must return draft status.");
+    requireSafe(result.payload.status_policy?.status === "draft", "Quote revision detail must include draft status policy.");
+    requireSafe(result.payload.status_policy?.direct_status_update_allowed === false, "Direct quote status writes must be blocked.");
+    assertAuditTimelineShape(result.payload.audit_entries, "Quote revision detail");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "configuration draft read before create");
+    requireSafe(result.response.ok, "Configuration draft read before create must succeed.");
+    requireSafe(result.payload.configuration_draft === null, "Configuration draft read before create must return null draft.");
+    requireSafe(result.payload.calculation_status === "not_calculated", "Configuration draft read must not report calculated state.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie },
+      body: JSON.stringify(configurationDraftBody())
+    }, "configuration draft create without idempotency");
+    requireSafe(result.response.status === 422, "Configuration draft create without idempotency must return 422.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `invalid-config-${suffix}` },
+      body: JSON.stringify(configurationDraftBody({ width_mm: 1800.5 }))
+    }, "configuration draft invalid dimension");
+    requireSafe(result.response.status === 422, "Configuration draft invalid dimension must return 422.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${demoApprovedQuoteRevisionId}/configuration-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `approved-config-create-${suffix}` },
+      body: JSON.stringify(configurationDraftBody())
+    }, "approved revision configuration draft create");
+    requireSafe(result.response.status === 409, "Approved revision configuration draft create must return 409.");
+
+    const configBody = configurationDraftBody();
+    const expectedConfig = {
+      width_mm: 1800,
+      height_mm: 2200,
+      depth_mm: 600,
+      quantity: 1,
+      door_count: 3,
+      shelf_count: 4,
+      material_sku: "MDF-LAM-BEYAZ-18",
+      edge_band_sku: "PVC-BEYAZ-1MM"
+    };
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": configCreateKey },
+      body: JSON.stringify(configBody)
+    }, "configuration draft create");
+    requireSafe(result.response.status === 201, "Configuration draft create must return 201.");
+    const configurationDraft = result.payload.configuration_draft;
+    assertConfigurationDraftDeferred(result.payload, expectedConfig, "configuration draft create");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${adminQuoteRevision.id}/configuration-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": configCreateKey },
+      body: JSON.stringify(configurationDraftBody({ notes: "Admin config actor isolation" }))
+    }, "admin configuration draft create with sales key");
+    requireSafe(result.response.status === 201, "Admin configuration draft create must return 201.");
+    requireSafe(result.payload.configuration_draft?.id !== configurationDraft.id, "Configuration idempotency key reuse across users must not replay another actor's result.");
+    assertConfigurationDraftDeferred(result.payload, expectedConfig, "admin configuration draft create");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "configuration audit after creates");
+    requireSafe(result.response.ok, "Demo data must succeed after configuration draft creates.");
+    const auditAfterConfigurationCreates = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditAfterQuoteIdempotency, auditAfterConfigurationCreates, "quote_configuration_created", 2);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": configCreateKey },
+      body: JSON.stringify(configBody)
+    }, "configuration draft idempotency replay");
+    requireSafe(result.response.status === 201, "Configuration draft replay must return the stored status.");
+    requireSafe(result.payload.configuration_draft?.id === configurationDraft.id, "Configuration draft replay must return the original draft.");
+    assertConfigurationDraftDeferred(result.payload, expectedConfig, "configuration draft replay");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": configCreateKey },
+      body: JSON.stringify(configurationDraftBody({ width_mm: 1900 }))
+    }, "configuration draft idempotency conflict");
+    requireSafe(result.response.status === 409, "Configuration draft idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "configuration audit after create idempotency checks");
+    requireSafe(result.response.ok, "Demo data must succeed after configuration idempotency checks.");
+    const auditAfterConfigurationCreateIdempotency = countAuditActions(result.payload.audit_entries);
+    requireAuditUnchanged(auditAfterConfigurationCreates, auditAfterConfigurationCreateIdempotency, "quote_configuration_created");
+
+    const updateBody = configurationDraftBody({
+      expected_version: configurationDraft.version,
+      width_mm: 1900,
+      notes: "Updated smoke test wardrobe draft"
+    });
+    const expectedUpdatedConfig = { ...expectedConfig, width_mm: 1900 };
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": configUpdateKey },
+      body: JSON.stringify(updateBody)
+    }, "configuration draft update");
+    requireSafe(result.response.status === 200, "Configuration draft update must return 200.");
+    requireSafe(result.payload.configuration_draft?.id === configurationDraft.id, "Configuration draft update must preserve draft id.");
+    requireSafe(result.payload.configuration_draft?.version === configurationDraft.version + 1, "Configuration draft update must increment version.");
+    assertConfigurationDraftDeferred(result.payload, expectedUpdatedConfig, "configuration draft update");
+    const updatedConfigurationDraft = result.payload.configuration_draft;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `stale-config-update-${suffix}` },
+      body: JSON.stringify(configurationDraftBody({ expected_version: configurationDraft.version, width_mm: 2000 }))
+    }, "configuration draft stale update");
+    requireSafe(result.response.status === 409, "Configuration draft stale update must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `invalid-config-update-${suffix}` },
+      body: JSON.stringify(configurationDraftBody({ expected_version: updatedConfigurationDraft.version, quantity: 1.5 }))
+    }, "configuration draft invalid update quantity");
+    requireSafe(result.response.status === 422, "Configuration draft invalid update quantity must return 422.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${demoApprovedQuoteRevisionId}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `approved-config-update-${suffix}` },
+      body: JSON.stringify(configurationDraftBody({ expected_version: 1, width_mm: 1900 }))
+    }, "approved revision configuration draft update");
+    requireSafe([404, 409, 422].includes(result.response.status), "Approved revision configuration draft update must not succeed.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": configUpdateKey },
+      body: JSON.stringify(updateBody)
+    }, "configuration draft update idempotency replay");
+    requireSafe(result.response.status === 200, "Configuration draft update replay must return the stored status.");
+    requireSafe(result.payload.configuration_draft?.version === updatedConfigurationDraft.version, "Configuration draft update replay must not increment version again.");
+    assertConfigurationDraftDeferred(result.payload, expectedUpdatedConfig, "configuration draft update replay");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": configUpdateKey },
+      body: JSON.stringify(configurationDraftBody({ expected_version: updatedConfigurationDraft.version, width_mm: 2100 }))
+    }, "configuration draft update idempotency conflict");
+    requireSafe(result.response.status === 409, "Configuration draft update idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "configuration audit after update checks");
+    requireSafe(result.response.ok, "Demo data must succeed after configuration update checks.");
+    const auditAfterConfigurationUpdates = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditAfterConfigurationCreateIdempotency, auditAfterConfigurationUpdates, "quote_configuration_updated", 1);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "configuration draft read after update");
+    requireSafe(result.response.ok, "Configuration draft read after update must succeed.");
+    requireSafe(result.payload.configuration_draft?.version === updatedConfigurationDraft.version, "Configuration draft read after update must return current version.");
+    assertConfigurationDraftDeferred(result.payload, expectedUpdatedConfig, "configuration draft read after update");
+
+    result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "project detail after quote");
+    requireSafe(result.response.ok, "Project detail must succeed after quote draft.");
+    requireSafe(
+      result.payload.quote_revisions.some((item) => item.id === quoteRevision.id),
+      "Project detail timeline must include the created quote draft."
+    );
+
+    const riskyRouteProbes = [
+      `/api/supabase/quote-revisions/${quoteRevision.id}/send`,
+      `/api/supabase/quote-revisions/${quoteRevision.id}/approve`,
+      `/api/supabase/quote-revisions/${quoteRevision.id}/pdf`,
+      `/api/supabase/quote-revisions/${quoteRevision.id}/production-package`
+    ];
+    for (const path of riskyRouteProbes) {
+      for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
+        const risky = await requestText(baseUrl, path, {
+          method,
+          headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `risky-${method}-${suffix}` },
+          body: method === "GET" ? undefined : JSON.stringify(forgedPayloadMarkers)
+        }, `risky route probe ${method} ${path}`);
+        requireSafe([404, 405].includes(risky.response.status), `Risky route ${method} ${path} must remain unavailable.`);
+      }
+    }
+
+    const statusEscalation = await requestText(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `status-escalation-${suffix}` },
+      body: JSON.stringify({ ...forgedPayloadMarkers, status: "approved" })
+    }, "quote status escalation patch");
+    requireSafe([404, 405].includes(statusEscalation.response.status), "Direct quote status escalation must remain unavailable.");
 
     result = await requestJson(baseUrl, "/api/supabase/demo-data", {
       method: "GET",
@@ -365,10 +955,18 @@ async function main() {
     requireSafe(auditActions.has("customer_created"), "Audit entries must include customer_created.");
     requireSafe(auditActions.has("project_created"), "Audit entries must include project_created.");
     requireSafe(auditActions.has("quote_draft_created"), "Audit entries must include quote_draft_created.");
+    requireSafe(auditActions.has("quote_configuration_created"), "Audit entries must include quote_configuration_created.");
+    requireSafe(auditActions.has("quote_configuration_updated"), "Audit entries must include quote_configuration_updated.");
+    const auditAfter = countAuditActions(result.payload.audit_entries);
+    requireAuditIncrease(auditBefore, auditAfter, "customer_created");
+    requireAuditIncrease(auditBefore, auditAfter, "project_created");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_draft_created");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_configuration_created");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_configuration_updated");
 
     console.log("web mutation route smoke passed");
   } finally {
-    child.kill();
+    await stopNextServer(child);
   }
 }
 

@@ -1,6 +1,5 @@
 export default function HealthPage() {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8080";
-  const computeBaseUrl = process.env.NEXT_PUBLIC_COMPUTE_BASE_URL ?? "http://localhost:8090";
 
   return (
     <main className="content">
@@ -14,7 +13,7 @@ export default function HealthPage() {
           </tr>
           <tr>
             <th>Compute API</th>
-            <td>{computeBaseUrl}/api/v1/health</td>
+            <td>server-side gateway only</td>
           </tr>
         </tbody>
       </table>

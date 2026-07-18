@@ -73,10 +73,20 @@ The current web wiring reads seeded Supabase data, validates the local-demo sess
 - `GET /api/supabase/projects/[projectId]/quote-revisions`
 - `POST /api/supabase/projects/[projectId]/quote-drafts`
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]`
+- `GET/POST/PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft`
 
-`viewer` can read only. `sales` and `admin` can create customers, draft projects, and draft quote revision shells. Quote drafts are always created with `draft` status and do not create authoritative BOM/cost totals, PDFs, approval, send events, or production packages.
+`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, and draft quote configuration inputs. Quote drafts/configuration drafts always remain draft/non-calculated and do not create authoritative BOM/cost totals, PDFs, approval, send events, or production packages.
 
-Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, or cost values are not authority. POST routes support lightweight in-process idempotency scoped by company, app user, action, and idempotency key. This is suitable for the local demo but must be replaced by durable idempotency storage before production use.
+Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, cost, or calculation values are not authority. Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key. Raw idempotency keys are not stored.
+
+Quote configuration drafts are protected by route validation and database guards:
+
+- dimensions are integer millimetres
+- quantity is explicit pieces
+- only bounded draft input fields are persisted
+- calculation status is fixed to `not_calculated`
+- draft writes are rejected for approved/sent revisions
+- direct authenticated writes to quote revisions/configuration drafts are blocked or no-effect
 
 Product configure/calculate/document/fork/diff mutations still use the Go core demo API path or remain deferred until deterministic persistence is implemented.
 
@@ -99,5 +109,8 @@ After env values are configured, `verify_supabase_connection.py` checks:
 - RLS enabled on required public tables
 - no public/anon policies in public or storage schemas
 - demo company, app users, project, and quote revision
+- demo approved quote revision fixture
 - `quote-documents` and `production-packages` buckets
 - authenticated RLS access with the demo sales user
+- direct authenticated write denial/no-effect checks
+- database guards for quote revision status changes, approved-revision configuration drafts, and invalid configuration draft shapes

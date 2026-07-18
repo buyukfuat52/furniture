@@ -7,6 +7,14 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from app.calculation_contracts import MoneyMinor
+from app.tool_gateway_policy import (
+    DEMO_COMPANY_ID,
+    ToolPolicyDecision,
+    evaluate_tool_request,
+    tool_policy_for_adapter,
+)
+
 
 AgentID = Literal[
     "enterprise_search",
@@ -17,7 +25,6 @@ AgentID = Literal[
 ResponseStatus = Literal["completed", "needs_input", "needs_approval", "failed", "informational"]
 ToolStatus = Literal["completed", "denied", "approval_required"]
 
-DEMO_COMPANY_ID = "11111111-1111-4111-8111-111111111111"
 DEMO_PROJECT_ID = "proj-demo-wardrobe"
 DEMO_REVISION_ID = "rev-demo-wardrobe-r1"
 DEMO_FORK_REVISION_ID = "rev-demo-wardrobe-r2"
@@ -48,6 +55,7 @@ class ProposedAction(BaseModel):
     risk: Literal["read_only", "low", "financial", "external", "production", "destructive"]
     approval_required: bool
     idempotency_key: str | None = None
+    approval_id: str | None = None
 
 
 class Approval(BaseModel):
@@ -71,11 +79,6 @@ class AgentStructuredResponse(BaseModel):
     warnings: list[str]
     missing_information: list[str]
     references: list[Reference]
-
-
-class MoneyMinor(BaseModel):
-    amount_minor: int
-    currency: str = "TRY"
 
 
 class CostCategory(BaseModel):
@@ -109,7 +112,10 @@ class ChatContext(BaseModel):
     left_revision_id: str | None = None
     right_revision_id: str | None = None
     cost_snapshot: CostSnapshot | None = None
+    untrusted_cost_snapshot_supplied: bool = False
     diff_entries: list[DiffEntry] = Field(default_factory=list)
+    untrusted_diff_entries_supplied: bool = False
+    expected_version: int | None = None
     approval_token: str | None = None
 
 
@@ -123,6 +129,8 @@ def request_with_authorized_context(request: ChatRequest, bearer_token: str) -> 
     if token_context is None:
         return None
     actor_id, roles = token_context
+    untrusted_cost_snapshot_supplied = request.context.cost_snapshot is not None
+    untrusted_diff_entries_supplied = len(request.context.diff_entries) > 0
     return request.model_copy(
         update={
             "context": request.context.model_copy(
@@ -130,6 +138,10 @@ def request_with_authorized_context(request: ChatRequest, bearer_token: str) -> 
                     "company_id": DEMO_COMPANY_ID,
                     "user_id": actor_id,
                     "roles": roles,
+                    "cost_snapshot": None,
+                    "untrusted_cost_snapshot_supplied": untrusted_cost_snapshot_supplied,
+                    "diff_entries": [],
+                    "untrusted_diff_entries_supplied": untrusted_diff_entries_supplied,
                     "approval_token": None,
                 }
             )
@@ -183,23 +195,15 @@ class PromptRegistry:
             base=base_path.read_text(encoding="utf-8"),
             agent=agent_path.read_text(encoding="utf-8"),
             references=[
-                Reference(type="prompt", id="mobilia.system.base@1.0.0", label=str(base_path)),
-                Reference(type="prompt", id=f"mobilia.agent.{agent_id}@1.0.0", label=str(agent_path)),
+                Reference(type="prompt", id="mobilia.system.base@1.0.0", label="system.base"),
+                Reference(
+                    type="prompt", id=f"mobilia.agent.{agent_id}@1.0.0", label=f"agent.{agent_id}"
+                ),
             ],
         )
 
 
 class ToolGateway:
-    _allowed_tools: dict[AgentID, set[str]] = {
-        "enterprise_search": {"project_tool", "document_tool"},
-        "costing_pricing": {"costing_tool"},
-        "revision_diff": {"manufacturing_tool", "costing_tool", "document_tool"},
-        "quote_document": {"document_tool", "workflow_tool"},
-    }
-    _read_roles = {"admin", "sales", "designer", "costing", "procurement", "production", "viewer"}
-    _quote_roles = {"admin", "sales", "costing"}
-    _approval_roles = {"admin", "sales"}
-
     def call(
         self,
         *,
@@ -207,17 +211,39 @@ class ToolGateway:
         tool: str,
         action: str,
         context: ChatContext,
+        untrusted_text: str | None = None,
     ) -> GatewayResult:
-        denied = self._authorize(agent_id, tool, action, context)
-        if denied is not None:
-            return self._denied(agent_id, tool, action, denied)
+        policy = tool_policy_for_adapter(
+            agent_id=agent_id, adapter_tool=tool, adapter_action=action
+        )
+        if policy is None:
+            return self._denied(
+                agent_id,
+                tool,
+                action,
+                "tool gateway has no policy for this agent/tool/action",
+            )
+        decision = evaluate_tool_request(
+            agent_id=agent_id,
+            tool_name=policy.name,
+            roles=context.roles,
+            company_id=context.company_id,
+            session_present=True,
+            idempotency_key=self._server_idempotency_key(policy.name, context),
+            approval_granted=False,
+            untrusted_text=untrusted_text,
+        )
+        if not decision.allowed:
+            return self._policy_blocked(agent_id, tool, action, decision)
         if tool == "project_tool" and action == "search":
             return self._project_search(agent_id, context)
         if tool == "document_tool" and action == "search":
             return self._proposal_search(agent_id, context)
         if tool == "costing_tool" and action == "get_cost_snapshot":
             return self._cost_snapshot(agent_id, context)
-        if tool in {"manufacturing_tool", "costing_tool", "document_tool"} and action.endswith("_diff"):
+        if tool in {"manufacturing_tool", "costing_tool", "document_tool"} and action.endswith(
+            "_diff"
+        ):
             return self._revision_diff(agent_id, tool, action, context)
         if tool == "document_tool" and action == "preview_quote":
             return self._quote_preview(agent_id, context)
@@ -227,22 +253,21 @@ class ToolGateway:
             return self._approval_request(agent_id, context)
         return self._denied(agent_id, tool, action, "tool gateway has no registered safe adapter")
 
-    def _authorize(
-        self, agent_id: AgentID, tool: str, action: str, context: ChatContext
-    ) -> str | None:
-        if tool not in self._allowed_tools[agent_id]:
-            return f"{agent_id} is not authorized to use {tool}"
-        if context.company_id != DEMO_COMPANY_ID:
-            return "company context is not authorized for the local tool gateway"
-        roles = set(context.roles)
-        if action == "preview_quote" and roles.isdisjoint(self._quote_roles):
-            return "role is not allowed to preview customer quote documents"
-        if action == "request_approval" and roles.isdisjoint(self._approval_roles):
-            return "role is not allowed to initiate quote approval"
-        if action == "send_quote" and roles.isdisjoint(self._approval_roles):
-            return "role is not allowed to submit quote delivery"
-        if roles.isdisjoint(self._read_roles):
-            return "no delegated MobilyaOS role was supplied"
+    def _server_idempotency_key(self, policy_name: str, context: ChatContext) -> str | None:
+        if policy_name in {
+            "create_customer_draft",
+            "create_project_draft",
+            "create_quote_draft",
+            "create_quote_configuration_draft",
+            "update_quote_configuration_draft",
+            "request_quote_approval",
+            "send_quote",
+            "approve_quote",
+            "generate_pdf",
+            "create_production_package",
+        }:
+            target = context.revision_id or context.project_id or "no-target"
+            return f"server-scoped-{policy_name}-{target}"
         return None
 
     def _record(
@@ -267,6 +292,27 @@ class ToolGateway:
     def _denied(self, agent_id: AgentID, tool: str, action: str, reason: str) -> GatewayResult:
         record = self._record(agent_id, tool, action, "denied", reason)
         return GatewayResult(record, [], [], [], [reason], [])
+
+    def _policy_blocked(
+        self,
+        agent_id: AgentID,
+        tool: str,
+        action: str,
+        decision: ToolPolicyDecision,
+    ) -> GatewayResult:
+        status: ToolStatus = (
+            "approval_required" if decision.status == "approval_required" else "denied"
+        )
+        record = self._record(
+            agent_id,
+            tool,
+            action,
+            status,
+            decision.reason,
+            approval_required=decision.requires_approval,
+        )
+        warnings = [*decision.warnings, decision.reason]
+        return GatewayResult(record, [], [], [], warnings, [])
 
     def _approval_required(self, agent_id: AgentID, tool: str, action: str) -> GatewayResult:
         record = self._record(
@@ -309,7 +355,13 @@ class ToolGateway:
             record,
             [fact],
             [],
-            [Reference(type="project", id=context.project_id or DEMO_PROJECT_ID, label="Ayse Yilmaz Vestiyer")],
+            [
+                Reference(
+                    type="project",
+                    id=context.project_id or DEMO_PROJECT_ID,
+                    label="Ayse Yilmaz Vestiyer",
+                )
+            ],
             [],
             [],
         )
@@ -322,7 +374,9 @@ class ToolGateway:
                 "search",
                 "revision_id was not found in the authorized tenant tool adapter",
             )
-        record = self._record(agent_id, "document_tool", "search", "completed", "1 proposal returned")
+        record = self._record(
+            agent_id, "document_tool", "search", "completed", "1 proposal returned"
+        )
         revision_id = context.revision_id or DEMO_REVISION_ID
         fact = Fact(
             label="Bulunan teklif",
@@ -344,48 +398,71 @@ class ToolGateway:
         )
 
     def _cost_snapshot(self, agent_id: AgentID, context: ChatContext) -> GatewayResult:
+        if context.untrusted_cost_snapshot_supplied:
+            record = self._record(
+                agent_id,
+                "costing_tool",
+                "get_cost_snapshot",
+                "denied",
+                "browser-supplied cost snapshot was ignored",
+            )
+            return GatewayResult(
+                record,
+                [],
+                [],
+                [],
+                ["browser-supplied cost snapshot is not authoritative and was ignored"],
+                ["trusted_cost_snapshot"],
+            )
         record = self._record(
             agent_id,
             "costing_tool",
             "get_cost_snapshot",
-            "completed" if context.cost_snapshot else "denied",
-            "cost snapshot returned" if context.cost_snapshot else "cost snapshot is missing",
+            "denied",
+            "trusted cost snapshot is missing",
         )
-        if context.cost_snapshot is None:
-            return GatewayResult(record, [], [], [], [], ["cost_snapshot"])
-        snapshot = context.cost_snapshot
-        revision_id = context.revision_id or DEMO_REVISION_ID
-        source = Source(
-            type="tool_result",
-            id="costing_tool.get_cost_snapshot",
-            revision_id=revision_id,
-            tool_call_id=record.id,
-        )
-        facts = [Fact(label="Formul versiyonu", value=snapshot.formula_version, source=source)]
-        if snapshot.grand_total is not None:
-            facts.append(Fact(label="Genel toplam", value=format_money(snapshot.grand_total), source=source))
-        for category in snapshot.categories:
-            facts.append(
-                Fact(
-                    label=f"Maliyet kalemi: {category.category}",
-                    value=format_money(category.amount),
-                    source=source,
-                )
-            )
-        return GatewayResult(
-            record,
-            facts,
-            [],
-            [Reference(type="quote_revision", id=revision_id, label="Maliyet snapshot")],
-            [],
-            [],
-        )
+        return GatewayResult(record, [], [], [], [], ["trusted_cost_snapshot"])
+
+    def _revision_is_authorized(self, revision_id: str) -> bool:
+        return revision_id in {DEMO_REVISION_ID, DEMO_FORK_REVISION_ID}
+
+    def _revision_status(self, revision_id: str) -> str | None:
+        if revision_id == DEMO_REVISION_ID:
+            return "draft"
+        if revision_id == DEMO_FORK_REVISION_ID:
+            return "sent"
+        return None
+
+    def _revision_version(self, revision_id: str) -> int | None:
+        if revision_id == DEMO_REVISION_ID:
+            return 1
+        if revision_id == DEMO_FORK_REVISION_ID:
+            return 2
+        return None
 
     def _revision_diff(
         self, agent_id: AgentID, tool: str, action: str, context: ChatContext
     ) -> GatewayResult:
+        if context.untrusted_diff_entries_supplied:
+            return self._denied(
+                agent_id,
+                tool,
+                action,
+                "browser-supplied revision diff was ignored; trusted deterministic diff is required",
+            )
+        left_revision_id = context.left_revision_id or DEMO_REVISION_ID
+        right_revision_id = context.right_revision_id or DEMO_FORK_REVISION_ID
+        if not self._revision_is_authorized(left_revision_id) or not self._revision_is_authorized(
+            right_revision_id
+        ):
+            return self._denied(
+                agent_id,
+                tool,
+                action,
+                "revision_id was not found in the authorized tenant tool adapter",
+            )
         record = self._record(agent_id, tool, action, "completed", "revision diff returned")
-        entries = context.diff_entries or [
+        entries = [
             DiffEntry(category="parameter", field="width_mm", before="1800", after="2000"),
             DiffEntry(category="parameter", field="quantity", before="2", after="3"),
         ]
@@ -396,7 +473,7 @@ class ToolGateway:
                 source=Source(
                     type="tool_result",
                     id=f"{tool}.{action}",
-                    revision_id=context.right_revision_id or DEMO_FORK_REVISION_ID,
+                    revision_id=right_revision_id,
                     tool_call_id=record.id,
                 ),
             )
@@ -407,8 +484,16 @@ class ToolGateway:
             facts,
             [],
             [
-                Reference(type="quote_revision", id=context.left_revision_id or DEMO_REVISION_ID, label="Once"),
-                Reference(type="quote_revision", id=context.right_revision_id or DEMO_FORK_REVISION_ID, label="Sonra"),
+                Reference(
+                    type="quote_revision",
+                    id=left_revision_id,
+                    label="Once",
+                ),
+                Reference(
+                    type="quote_revision",
+                    id=right_revision_id,
+                    label="Sonra",
+                ),
             ],
             [],
             [],
@@ -425,6 +510,23 @@ class ToolGateway:
         )
         if revision_id is None:
             return GatewayResult(record, [], [], [], [], ["revision_id"])
+        if not self._revision_is_authorized(revision_id):
+            return self._denied(
+                agent_id,
+                "document_tool",
+                "preview_quote",
+                "revision_id was not found in the authorized tenant tool adapter",
+            )
+        if (
+            context.expected_version is not None
+            and context.expected_version != self._revision_version(revision_id)
+        ):
+            return self._denied(
+                agent_id,
+                "document_tool",
+                "preview_quote",
+                "revision version is stale in the authorized tenant tool adapter",
+            )
         return GatewayResult(
             record,
             [
@@ -463,6 +565,27 @@ class ToolGateway:
         )
         if revision_id is None:
             return GatewayResult(record, [], [], [], [], ["revision_id"])
+        if not self._revision_is_authorized(revision_id):
+            return self._denied(
+                agent_id,
+                "workflow_tool",
+                "request_approval",
+                "revision_id was not found in the authorized tenant tool adapter",
+            )
+        if self._revision_status(revision_id) != "draft":
+            return self._denied(
+                agent_id,
+                "workflow_tool",
+                "request_approval",
+                "approval request requires a mutable draft revision",
+            )
+        if context.expected_version != self._revision_version(revision_id):
+            return self._denied(
+                agent_id,
+                "workflow_tool",
+                "request_approval",
+                "expected revision version is required before approval request",
+            )
         approval_id = f"approval-{revision_id}"
         return GatewayResult(
             record,
@@ -484,7 +607,7 @@ class ToolGateway:
                     description="Teklif gonderimi onaydan sonra ayri bir adimda calistirilabilir.",
                     risk="external",
                     approval_required=True,
-                    idempotency_key=approval_id,
+                    approval_id=approval_id,
                 )
             ],
             [Reference(type="approval", id=approval_id, label="Teklif onayi")],
@@ -547,7 +670,9 @@ class AgentRuntime:
         references = prompt_bundle.references + [
             reference for result in tool_results for reference in result.references
         ]
-        warnings = injection_warnings + [warning for result in tool_results for warning in result.warnings]
+        warnings = injection_warnings + [
+            warning for result in tool_results for warning in result.warnings
+        ]
         missing = sorted({item for result in tool_results for item in result.missing})
         tool_calls = [result.record for result in tool_results]
         status = determine_status(tool_calls, actions, missing)
@@ -574,8 +699,20 @@ class AgentRuntime:
         context = request.context
         if agent_id == "enterprise_search":
             return [
-                self._gateway.call(agent_id=agent_id, tool="project_tool", action="search", context=context),
-                self._gateway.call(agent_id=agent_id, tool="document_tool", action="search", context=context),
+                self._gateway.call(
+                    agent_id=agent_id,
+                    tool="project_tool",
+                    action="search",
+                    context=context,
+                    untrusted_text=request.message,
+                ),
+                self._gateway.call(
+                    agent_id=agent_id,
+                    tool="document_tool",
+                    action="search",
+                    context=context,
+                    untrusted_text=request.message,
+                ),
             ]
         if agent_id == "costing_pricing":
             return [
@@ -584,6 +721,7 @@ class AgentRuntime:
                     tool="costing_tool",
                     action="get_cost_snapshot",
                     context=context,
+                    untrusted_text=request.message,
                 )
             ]
         if agent_id == "revision_diff":
@@ -593,13 +731,32 @@ class AgentRuntime:
                     tool="manufacturing_tool",
                     action="diff_manufacturing",
                     context=context,
+                    untrusted_text=request.message,
                 ),
-                self._gateway.call(agent_id=agent_id, tool="costing_tool", action="cost_diff", context=context),
-                self._gateway.call(agent_id=agent_id, tool="document_tool", action="document_diff", context=context),
+                self._gateway.call(
+                    agent_id=agent_id,
+                    tool="costing_tool",
+                    action="cost_diff",
+                    context=context,
+                    untrusted_text=request.message,
+                ),
+                self._gateway.call(
+                    agent_id=agent_id,
+                    tool="document_tool",
+                    action="document_diff",
+                    context=context,
+                    untrusted_text=request.message,
+                ),
             ]
         send_requested = wants_quote_send(request.message)
         results = [
-            self._gateway.call(agent_id=agent_id, tool="document_tool", action="preview_quote", context=context)
+            self._gateway.call(
+                agent_id=agent_id,
+                tool="document_tool",
+                action="preview_quote",
+                context=context,
+                untrusted_text=request.message,
+            )
         ]
         if send_requested or "onay" in normalize(request.message):
             results.append(
@@ -608,11 +765,18 @@ class AgentRuntime:
                     tool="workflow_tool",
                     action="request_approval",
                     context=context,
+                    untrusted_text=request.message,
                 )
             )
         if send_requested:
             results.append(
-                self._gateway.call(agent_id=agent_id, tool="document_tool", action="send_quote", context=context)
+                self._gateway.call(
+                    agent_id=agent_id,
+                    tool="document_tool",
+                    action="send_quote",
+                    context=context,
+                    untrusted_text=request.message,
+                )
             )
         return results
 
@@ -625,7 +789,10 @@ def classify_message(message: str) -> AgentID:
         return "revision_diff"
     if contains_any(text, ["maliyet", "cost", "fiyat", "price", "snapshot", "toplam", "kar marj"]):
         return "costing_pricing"
-    if contains_any(text, ["teklif", "proposal", "pdf", "belge", "dokuman", "onizleme", "gonder", "onay", "send"]):
+    if contains_any(
+        text,
+        ["teklif", "proposal", "pdf", "belge", "dokuman", "onizleme", "gonder", "onay", "send"],
+    ):
         return "quote_document"
     return "enterprise_search"
 
@@ -711,7 +878,9 @@ def approval_for(tool_calls: list[ToolCallRecord], actions: list[ProposedAction]
     if any(call.status == "approval_required" for call in tool_calls) or any(
         action.approval_required for action in actions
     ):
-        approval_id = next((action.idempotency_key for action in actions if action.approval_required), None)
+        approval_id = next(
+            (action.approval_id for action in actions if action.approval_required), None
+        )
         return Approval(required=True, state="pending", approval_id=approval_id)
     return Approval(required=False, state="not_required")
 
