@@ -1,0 +1,78 @@
+{
+  "handoff_id": "20260715T040315+0300-P1-qa-acceptance-plan",
+  "run_id": "20260715T040315+0300",
+  "phase": "P1",
+  "assignment_id": "P1-qa-acceptance-plan",
+  "from_agent": "qa_reviewer",
+  "to_agent": "parent_codex",
+  "type": "result",
+  "status": "completed",
+  "severity": "medium",
+  "summary": "QA acceptance planning completed. Existing acceptance matrix covers core invariants but must expand into executable tests for pricing order, idempotency, contracts, PDF/object metadata, approval forgery, role escalation, seed completeness, CI, and make verify.",
+  "files_read": [
+    "AGENTS.md",
+    "CODEX_ONE_SHOT_PROMPT.md",
+    "docs/01_SCOPE_AND_VERTICAL_SLICE.md",
+    "docs/02_DOMAIN_RULES.md",
+    "docs/04_DATA_MODEL.md",
+    "docs/05_API_EVENT_CONTRACTS.md",
+    "docs/06_SECURITY_AND_AUTHORIZATION.md",
+    "docs/07_TEST_AND_ACCEPTANCE.md",
+    "docs/09_IMPLEMENTATION_SEQUENCE.md",
+    "docs/10_DEFINITION_OF_DONE.md",
+    "docs/11_DEVELOPMENT_AGENT_ORCHESTRATION.md",
+    ".codex/orchestration/workflow.yaml",
+    ".codex/orchestration/handoff.schema.json",
+    "evals/acceptance_matrix.yaml",
+    "evals/prompt_eval_cases.yaml",
+    "evals/seed_data_spec.yaml",
+    "tools/tool_catalog.json",
+    "tools/schemas/agent_response.schema.json",
+    "tools/schemas/approval_request.schema.json",
+    "tools/schemas/revision_diff.schema.json",
+    "tools/schemas/tool_error.schema.json"
+  ],
+  "files_changed": [],
+  "contract_changes": [],
+  "decisions": [
+    "Every current acceptance-matrix row remains blocking for release.",
+    "Golden fixtures must cover wardrobe quantity greater than one and kitchen base cabinet examples.",
+    "Integration coverage must prove tenant predicates, append-only prices, outbox/inbox idempotency, PDF metadata, fork/diff, and tool authorization.",
+    "E2E coverage follows docs/07_TEST_AND_ACCEPTANCE.md."
+  ],
+  "assumptions": [
+    "P1 remains read-only planning.",
+    "Seed data spec is a minimum fixture contract to expand in P2.",
+    "Money type must be selected before golden totals are finalized."
+  ],
+  "verification": [
+    {
+      "command": "Get-Content -Raw for required docs/evals/schemas and rg --files",
+      "executed": true,
+      "result": "passed",
+      "evidence": "Read-only QA context collection completed."
+    },
+    {
+      "command": "git status --short",
+      "executed": true,
+      "result": "failed",
+      "evidence": "fatal: not a git repository"
+    },
+    {
+      "command": "make verify",
+      "executed": false,
+      "result": "not_run",
+      "evidence": "No implementation/test harness exists yet."
+    }
+  ],
+  "blockers": [
+    "No executable test scaffolding, CI, OpenAPI/AsyncAPI, migrations, seed runner, or Makefile exists.",
+    "Workspace root is not a git repository."
+  ],
+  "residual_risks": [
+    "acceptance_matrix.yaml is under-specified for full G1/G2 readiness.",
+    "prompt_eval_cases.yaml lacks runner/fake-model/tool-gateway integration.",
+    "seed_data_spec.yaml lacks exact deterministic IDs, SKUs, prices, dimensions, and expected outputs."
+  ],
+  "requested_next_action": "Expand acceptance, golden fixture, schema, prompt eval, E2E, and verify gates in P2."
+}

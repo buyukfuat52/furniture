@@ -1,0 +1,338 @@
+{
+  "name": "MobilyaOS Codex Product Pack",
+  "version": "1.1.0",
+  "created": "2026-07-02",
+  "file_count": 66,
+  "files": [
+    {
+      "path": ".agents/skills/furniture-domain/SKILL.md",
+      "bytes": 943,
+      "sha256": "5d1b00a638847d6b7ce9e1a72a42f879da74cef88ea054e9a183816d820aa104"
+    },
+    {
+      "path": ".agents/skills/production-readiness/SKILL.md",
+      "bytes": 725,
+      "sha256": "7582614533a14ec3e9a32477da39549b9e69cbd80417c91a42df71fe29b29656"
+    },
+    {
+      "path": ".agents/skills/prompt-evaluation/SKILL.md",
+      "bytes": 764,
+      "sha256": "4101fbce476e41a0beb52fe53bebd2e2d1a00f7f8966f454a47a514273345d1f"
+    },
+    {
+      "path": ".codex/agents/ai-prompt-engineer.toml",
+      "bytes": 1903,
+      "sha256": "c99266fa58de8d29af8d35db28dadb23cdfeaf02421b5db941d19782be54ba38"
+    },
+    {
+      "path": ".codex/agents/backend-engineer.toml",
+      "bytes": 1835,
+      "sha256": "ae09784abb956a5738c43115206e047b3e28477725564e50ae3ae2c8fef1650f"
+    },
+    {
+      "path": ".codex/agents/domain-architect.toml",
+      "bytes": 1646,
+      "sha256": "b8d005475ec5e2823b37de36ad512e4b74020f16dd105df8646a64113ef8d039"
+    },
+    {
+      "path": ".codex/agents/frontend-engineer.toml",
+      "bytes": 1788,
+      "sha256": "91254be9636916f1dfa2b3e98d06257847e62c12bdb602693f23c43b376884ec"
+    },
+    {
+      "path": ".codex/agents/qa-reviewer.toml",
+      "bytes": 1833,
+      "sha256": "ce0329a0dcb88aa4d8b6f257b5bccddec92a1ca6c39c9de6e1b5d27e4df2496f"
+    },
+    {
+      "path": ".codex/agents/security-reviewer.toml",
+      "bytes": 1706,
+      "sha256": "a6ab051fd3992b8f64f5d9fcd3738a07c5c46b8ab1aefef7856c2eea73c4dd34"
+    },
+    {
+      "path": ".codex/config.toml",
+      "bytes": 265,
+      "sha256": "bedfba922f042a08c1a95494b5e0c2832872f9155024905dd1ac2dd00745abb9"
+    },
+    {
+      "path": ".codex/orchestration/file-ownership.yaml",
+      "bytes": 2864,
+      "sha256": "1d9a41cebe3e73311665aacb03dd5e7edc0b633d4fd4513c6f9a470d3b0cf531"
+    },
+    {
+      "path": ".codex/orchestration/handoff.schema.json",
+      "bytes": 3273,
+      "sha256": "617ddf91a3eeff6d2b371a272fa9e156dc00d44f46cb81068d6209a5c85f7d30"
+    },
+    {
+      "path": ".codex/orchestration/templates/assignment.md",
+      "bytes": 274,
+      "sha256": "52baca8c179cb3c40161d7a14636cca2513203b2a34bc0c7fb8d2665891373eb"
+    },
+    {
+      "path": ".codex/orchestration/templates/result.md",
+      "bytes": 396,
+      "sha256": "2f9d739093dbd121675a167c26fd69e169897b60e1eb1c1e6d70c725f9e95774"
+    },
+    {
+      "path": ".codex/orchestration/workflow.yaml",
+      "bytes": 5419,
+      "sha256": "0dffddff2e10cc51b14768c9f026b279601cbc2abaca9f3ef5a167a54ffcc16f"
+    },
+    {
+      "path": "AGENTS.md",
+      "bytes": 4937,
+      "sha256": "c3c471a606ba5b223a180de1e5e71f79e6d83a06d74501afe08c7618bb8856d2"
+    },
+    {
+      "path": "CLAUDE.md",
+      "bytes": 1042,
+      "sha256": "9eb4dc25a1df2f9f6a79b4b9c985869ba62fb83e0619e26ac116eb0304ad252a"
+    },
+    {
+      "path": "CODEX_ONE_SHOT_PROMPT.md",
+      "bytes": 13422,
+      "sha256": "0e027ecd945d3f871bf893c95eb2447772b5fd7f56617f3fe9871b8801c62d7d"
+    },
+    {
+      "path": "README_TR.md",
+      "bytes": 3357,
+      "sha256": "ed037e9c00f887a095530f5a704eff6907074c6c9ec73de513e75e37110a81d9"
+    },
+    {
+      "path": "apps/web/AGENTS.md",
+      "bytes": 552,
+      "sha256": "44182add52ec7445a6e70f0a8e3ae5c8143c4eca8c545104fdfdeefe36557fab"
+    },
+    {
+      "path": "config/env.example",
+      "bytes": 647,
+      "sha256": "7c10d4c129052a8ecffbfb4558d4ca33c04e337c8a9c5756b1907b3dc941526d"
+    },
+    {
+      "path": "config/feature_flags.yaml",
+      "bytes": 254,
+      "sha256": "4d20f0d1b77fa4815bc67f5d3e0eb66c3a4e17262cdbe96c6357dfe2e4599eea"
+    },
+    {
+      "path": "config/model_policy.yaml",
+      "bytes": 449,
+      "sha256": "5d07d712c3a2a582b99420b4d6c08537d7445bf2d626b24cf221495a5c92c8bf"
+    },
+    {
+      "path": "docs/00_PRODUCT_VISION.md",
+      "bytes": 1427,
+      "sha256": "fe9be483fac65cb85b972bc9565614e7e4377335f83515dc3170d763f77f6e8b"
+    },
+    {
+      "path": "docs/01_SCOPE_AND_VERTICAL_SLICE.md",
+      "bytes": 1304,
+      "sha256": "73efc9181b2ca381ca9021d85d2039712d28ce9c84981e75b248f52ace0e68be"
+    },
+    {
+      "path": "docs/02_DOMAIN_RULES.md",
+      "bytes": 4609,
+      "sha256": "5be623d04e9fe9af7fce072ea497da2b45cb983a96afcefbe600caac4bac0925"
+    },
+    {
+      "path": "docs/03_TARGET_ARCHITECTURE.md",
+      "bytes": 2135,
+      "sha256": "c642cd0c8590efebf8761eee959c5b48628fd92f35be2898d8f8a2d6b4cd110a"
+    },
+    {
+      "path": "docs/04_DATA_MODEL.md",
+      "bytes": 1329,
+      "sha256": "ade7d6e94961bebcb6927211e3be47459ea586410427eb36a0282747c8fc7886"
+    },
+    {
+      "path": "docs/05_API_EVENT_CONTRACTS.md",
+      "bytes": 1606,
+      "sha256": "e7c2fd10b36f3dfa69d6588e8093be4862dbcae9b8b90029b8e174b86c454bd6"
+    },
+    {
+      "path": "docs/06_SECURITY_AND_AUTHORIZATION.md",
+      "bytes": 1915,
+      "sha256": "d54843d34d75bf89aa37eb605178e655d81befbe0680146fc57664d75422e6cd"
+    },
+    {
+      "path": "docs/07_TEST_AND_ACCEPTANCE.md",
+      "bytes": 1725,
+      "sha256": "650c7a4f7d8bc408fea698cda4a1a646770e40f3e0589d0635ec02f5b100ad34"
+    },
+    {
+      "path": "docs/08_UX_AND_DESIGN_SYSTEM.md",
+      "bytes": 1212,
+      "sha256": "44ba4ccb3e92c0aa4a61597a8b984494111582641e95b4352bb5a8c63ab5f09e"
+    },
+    {
+      "path": "docs/09_IMPLEMENTATION_SEQUENCE.md",
+      "bytes": 1136,
+      "sha256": "a1a51c4cc87ef6261f3eeece43c08370f781a3bc3679301bc0d3dcee6993bbfa"
+    },
+    {
+      "path": "docs/10_DEFINITION_OF_DONE.md",
+      "bytes": 1056,
+      "sha256": "d2ad345f5ae520838f7e1c81ee8c36079850ac5db2d7d7b770bdfd224cd2eb61"
+    },
+    {
+      "path": "docs/11_DEVELOPMENT_AGENT_ORCHESTRATION.md",
+      "bytes": 13704,
+      "sha256": "a01a55cfc76f393dfd730978b60c3fe77c0fc22f4c153dd08c5e9dd170c010ea"
+    },
+    {
+      "path": "docs/CODE_REVIEW.md",
+      "bytes": 569,
+      "sha256": "4ea479e990af61a9b4cfbbf3e8933bdfb4e78479af35ea32f6ceae49aecc6288"
+    },
+    {
+      "path": "docs/reference/Mobilya_Agentik_Teklif_Uretim_Mimarisi.docx",
+      "bytes": 761302,
+      "sha256": "24def2c2c5be0affe4adff086f0de0988353bb4b0ca307186cb1153210199e24"
+    },
+    {
+      "path": "docs/reference/Mobilya_Agentik_Teklif_Uretim_Mimarisi.pdf",
+      "bytes": 1107783,
+      "sha256": "8f51054a61558242b65e7a94ee87177bb2f49b1fb84669dbc5727f9e4fc4d257"
+    },
+    {
+      "path": "docs/reference/README.md",
+      "bytes": 277,
+      "sha256": "544b12e836f45668ff994827f41cc52f10913dd58f9a3017a8e72a82d50ba045"
+    },
+    {
+      "path": "evals/acceptance_matrix.yaml",
+      "bytes": 1451,
+      "sha256": "b32e36ef367cba661e3edee33a82110c16fcbdbd6a3c623be23a45ebe66e063e"
+    },
+    {
+      "path": "evals/prompt_eval_cases.yaml",
+      "bytes": 2766,
+      "sha256": "4397af3ee75c1a0481969e34154b73cb5cbdbe07c6e9d10a2dfe074b9bf7e93a"
+    },
+    {
+      "path": "evals/seed_data_spec.yaml",
+      "bytes": 543,
+      "sha256": "e940188db3f4c0070ff7cc2407993cfbfbb2d1c3966f44a23c7e5ede2df76b01"
+    },
+    {
+      "path": "prompts/README.md",
+      "bytes": 895,
+      "sha256": "d83c2eebde5f0b5e5749334bee6daddbd12c87aa3e4019150509abb8996bd8c0"
+    },
+    {
+      "path": "prompts/registry.yaml",
+      "bytes": 2048,
+      "sha256": "7350335f3e1bf153253e3c79d1861102246125dcfb3c0ac77a2c852a6e5f9e0c"
+    },
+    {
+      "path": "prompts/system/agents/costing_pricing.md",
+      "bytes": 460,
+      "sha256": "ac7326d823991d937211b7f36208e94b55221b30e0bf4244a732b7f21913d39e"
+    },
+    {
+      "path": "prompts/system/agents/enterprise_search.md",
+      "bytes": 426,
+      "sha256": "12f1413d903c1b14cdbfbc0174ea0c324d7238d88e4905d92f55145c85e31784"
+    },
+    {
+      "path": "prompts/system/agents/erp_status.md",
+      "bytes": 402,
+      "sha256": "e26168b289c133e9b9602f6b1e202b18759f7a4c1b3d143a94a1e134d3fd17fb"
+    },
+    {
+      "path": "prompts/system/agents/manufacturing_planner.md",
+      "bytes": 489,
+      "sha256": "54acc8169d37664ca75161439fb8b603e768a04ab1e1605364439d0ed442aabd"
+    },
+    {
+      "path": "prompts/system/agents/measurement_intake.md",
+      "bytes": 421,
+      "sha256": "c5185b5005370ee76e79bfcb13452abbc85bbe5575bfaa24f8d5e757dc71c5b0"
+    },
+    {
+      "path": "prompts/system/agents/orchestrator.md",
+      "bytes": 465,
+      "sha256": "686677a0a79d793b11ab98aacb1f17ecb74b5641776288bdc7105671c9b687c3"
+    },
+    {
+      "path": "prompts/system/agents/product_designer.md",
+      "bytes": 448,
+      "sha256": "347ea60cf0040eb864ad14599b52c29d4a6c648adcd356ece14c81e6d2e72c19"
+    },
+    {
+      "path": "prompts/system/agents/quote_document.md",
+      "bytes": 462,
+      "sha256": "c04eaedd5114ae2736e52618221bf902a255134421ccbd6b6a39918850431f88"
+    },
+    {
+      "path": "prompts/system/agents/revision_diff.md",
+      "bytes": 424,
+      "sha256": "1c12e3761e05025e960bd4dd7037ae3d791cd66d553601508b1935f805a95177"
+    },
+    {
+      "path": "prompts/system/agents/supplier_price.md",
+      "bytes": 504,
+      "sha256": "aa6508f1c4ef7224ecad24dfb266e7fea3bd3f70db5891210c9f72f0b4654802"
+    },
+    {
+      "path": "prompts/system/base.md",
+      "bytes": 2457,
+      "sha256": "91044b81e1f51e9f311a02eb4102c41f559f6f295ea039034a00c6d766722ae5"
+    },
+    {
+      "path": "prompts/templates/tool_error_recovery.md",
+      "bytes": 293,
+      "sha256": "4848c259a7594b2b3fdee33e212ece0525624d165bc2c4174b718f2795000048"
+    },
+    {
+      "path": "prompts/templates/user_request.md",
+      "bytes": 456,
+      "sha256": "d9f29d8d8b48ca9d640ec69c0df128a8ee75d123bb3f594cd440d76cef4e7b8d"
+    },
+    {
+      "path": "scripts/install_pack.sh",
+      "bytes": 333,
+      "sha256": "0aedeaf3590b5ddd3cf62d5221ba05450d98aa792d71d481c6f38f30f3b59c05"
+    },
+    {
+      "path": "scripts/validate_pack.py",
+      "bytes": 6459,
+      "sha256": "179bc149ce10697469c072f4c5f403329344ff37b4391d3c292ceae432111ad7"
+    },
+    {
+      "path": "services/compute/AGENTS.md",
+      "bytes": 503,
+      "sha256": "44ce034f6f52b6474184196d21fc5b344156ce1adbb2e32694fd3c897bde6ce2"
+    },
+    {
+      "path": "services/core/AGENTS.md",
+      "bytes": 555,
+      "sha256": "4365d1db27a99628fa5f1a4a0ab4be1bb9130faaacb855c89f34377e9e8371b3"
+    },
+    {
+      "path": "tools/schemas/agent_response.schema.json",
+      "bytes": 3858,
+      "sha256": "f27540d998882c19f1be4ec91391be06e4a72e031c0edc19746457e755f84c44"
+    },
+    {
+      "path": "tools/schemas/approval_request.schema.json",
+      "bytes": 1104,
+      "sha256": "b1b2bb9d6c220d526346e025b9b5dd61d262b715e775e36c7c62dd86ed7034a5"
+    },
+    {
+      "path": "tools/schemas/revision_diff.schema.json",
+      "bytes": 1326,
+      "sha256": "d4aedd16f9810dcdf598414e7a5d67e19b050dafc00582792a18fcf5e0fdd5fe"
+    },
+    {
+      "path": "tools/schemas/tool_error.schema.json",
+      "bytes": 927,
+      "sha256": "cb3084fe4e901257d5d77e549e4995ee8de1b75ee49c756383902ff460667c26"
+    },
+    {
+      "path": "tools/tool_catalog.json",
+      "bytes": 15315,
+      "sha256": "dce07c24272840f5d283f0b2957b536f3952bc2ed2a80a4238f9c2a5d687f295"
+    }
+  ]
+}

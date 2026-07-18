@@ -1,0 +1,25 @@
+company:
+  name: Demo Mobilya A.Ş.
+  currency: TRY
+users:
+  - email: admin@demo.local
+    role: admin
+  - email: satis@demo.local
+    role: sales
+  - email: uretim@demo.local
+    role: production
+catalog_minimums:
+  panel_materials: 5
+  edge_bands: 4
+  hinges: 2
+  drawer_rails: 2
+  labor_operations: 6
+  suppliers: 2
+  price_observations_per_core_sku: 2
+projects:
+  - name: Demo Vestiyer Projesi
+    quantity: 2
+    revision_states: [approved, draft_fork]
+  - name: Demo Mutfak Alt Dolap Projesi
+    quantity: 1
+    revision_states: [draft]

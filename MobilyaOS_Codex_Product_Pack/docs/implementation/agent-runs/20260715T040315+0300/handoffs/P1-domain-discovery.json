@@ -1,0 +1,59 @@
+{
+  "handoff_id": "20260715T040315+0300-P1-domain-discovery-domain_architect",
+  "run_id": "20260715T040315+0300",
+  "phase": "P1",
+  "assignment_id": "P1-domain-discovery",
+  "from_agent": "domain_architect",
+  "to_agent": "parent_codex",
+  "type": "result",
+  "status": "completed",
+  "severity": "medium",
+  "summary": "Domain discovery completed read-only. Bounded contexts, aggregate boundaries, deterministic invariants, provenance requirements, transaction boundaries, and draft contract inventory were identified.",
+  "files_read": [
+    "AGENTS.md",
+    "CODEX_ONE_SHOT_PROMPT.md",
+    "docs/00_PRODUCT_VISION.md",
+    "docs/01_SCOPE_AND_VERTICAL_SLICE.md",
+    "docs/02_DOMAIN_RULES.md",
+    "docs/03_TARGET_ARCHITECTURE.md",
+    "docs/04_DATA_MODEL.md",
+    "docs/05_API_EVENT_CONTRACTS.md",
+    "docs/07_TEST_AND_ACCEPTANCE.md",
+    "docs/10_DEFINITION_OF_DONE.md",
+    "docs/11_DEVELOPMENT_AGENT_ORCHESTRATION.md",
+    ".codex/orchestration/workflow.yaml",
+    ".codex/orchestration/file-ownership.yaml",
+    ".codex/orchestration/handoff.schema.json"
+  ],
+  "files_changed": [],
+  "contract_changes": [],
+  "decisions": [
+    "Use modular-monolith domain boundaries from target architecture.",
+    "Make QuoteRevision the central commercial snapshot aggregate.",
+    "Represent edge banding as PartEdge north/east/south/west records.",
+    "Treat PriceObservation as append-only evidence and CostSnapshot as frozen provenance.",
+    "Nesting must be placement-derived with heuristic version and deterministic seed.",
+    "Agent tools may explain and draft actions but never calculate authoritative totals."
+  ],
+  "assumptions": [
+    "Money type, ID type, workflow adapter, template formula contract, and snapshot transaction boundaries require ADRs or contract decisions before implementation.",
+    "Initial nesting can use a deterministic heuristic if tests prove bounds, overlap, grain, kerf, trim, and reproducibility."
+  ],
+  "verification": [
+    {
+      "command": "Get-Content -Raw for required P1 documents and orchestration files",
+      "executed": true,
+      "result": "passed",
+      "evidence": "Read-only discovery completed; no files edited."
+    }
+  ],
+  "blockers": [
+    "Executable OpenAPI, AsyncAPI, schemas, and golden fixtures are not frozen yet."
+  ],
+  "residual_risks": [
+    "ProductTemplate formula DSL/schema is not yet specified enough for safe consumers.",
+    "Calculation job and async workflow transaction boundaries need explicit idempotency and outbox rules.",
+    "Domain rules are documented but not yet mapped to executable schemas and tests."
+  ],
+  "requested_next_action": "Parent should consolidate P1 handoffs, record ADRs, and freeze initial contracts before P2 fan-out."
+}

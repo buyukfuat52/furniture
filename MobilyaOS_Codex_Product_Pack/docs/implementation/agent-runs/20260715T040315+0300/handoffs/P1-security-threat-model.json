@@ -1,0 +1,72 @@
+{
+  "handoff_id": "handoff-20260715T040315+0300-P1-security-threat-model",
+  "run_id": "20260715T040315+0300",
+  "phase": "P1",
+  "assignment_id": "P1-security-threat-model",
+  "from_agent": "security_reviewer",
+  "to_agent": "parent_codex",
+  "type": "result",
+  "status": "completed",
+  "severity": "high",
+  "summary": "Security review completed read-only. G1 security readiness is conditional on freezing RBAC/action matrix, tenant repository contract, approval-token semantics, object-storage key policy, and agent tool-gateway enforcement requirements.",
+  "files_read": [
+    "AGENTS.md",
+    "CODEX_ONE_SHOT_PROMPT.md",
+    "docs/02_DOMAIN_RULES.md",
+    "docs/03_TARGET_ARCHITECTURE.md",
+    "docs/04_DATA_MODEL.md",
+    "docs/05_API_EVENT_CONTRACTS.md",
+    "docs/06_SECURITY_AND_AUTHORIZATION.md",
+    "docs/07_TEST_AND_ACCEPTANCE.md",
+    "docs/11_DEVELOPMENT_AGENT_ORCHESTRATION.md",
+    ".codex/orchestration/workflow.yaml",
+    ".codex/orchestration/file-ownership.yaml",
+    ".codex/orchestration/handoff.schema.json",
+    "prompts/registry.yaml",
+    "prompts/README.md",
+    "prompts/system/base.md",
+    "tools/tool_catalog.json",
+    "tools/schemas/agent_response.schema.json",
+    "tools/schemas/approval_request.schema.json",
+    "tools/schemas/revision_diff.schema.json",
+    "tools/schemas/tool_error.schema.json",
+    "config/env.example",
+    "config/model_policy.yaml",
+    "config/feature_flags.yaml",
+    "evals/prompt_eval_cases.yaml"
+  ],
+  "files_changed": [],
+  "contract_changes": [],
+  "decisions": [
+    "Treat browser/API, API/database/object/event, core/compute/model, external systems, and uploaded/retrieved content as explicit trust boundaries.",
+    "Enforce tenant scope server-side with company_id from authenticated context.",
+    "Freeze per-endpoint and per-tool RBAC before P2.",
+    "Approval tokens must be short-lived, single-purpose, company/actor/entity/action/idempotency bound, auditable, and checked immediately before execution.",
+    "Prompt text is not a security control; the tool gateway enforces policy.",
+    "Object storage requires generated keys, MIME/extension/size validation, scan adapter, short-lived URLs, SHA-256 metadata, and no executable rendering of untrusted HTML.",
+    "Logs and traces redact tokens, credentials, prompts, sensitive tool payloads, PII, supplier credentials, and raw external documents."
+  ],
+  "assumptions": [
+    "No production implementation was reviewed.",
+    "Demo credentials are acceptable only as dev-only examples and must fail production validation if placeholders remain."
+  ],
+  "verification": [
+    {
+      "command": "Get-Content -Raw on security, prompt, tool, config, and orchestration files",
+      "executed": true,
+      "result": "passed",
+      "evidence": "P1 read-only security review completed."
+    }
+  ],
+  "blockers": [
+    "G1 should not pass security readiness until RBAC/action matrix, tenant rules, approval-token contract, and upload/object safety rules are explicit."
+  ],
+  "residual_risks": [
+    "Broad tool payload schemas may permit overposting or confused-deputy writes.",
+    "company_id in tool inputs can cause cross-tenant access if not overwritten or verified.",
+    "Optional approval_token fields must be centrally enforced.",
+    "Prompt-injection tests need expansion for tool-output injection, malicious PDFs/CSVs, filenames, and stale tool results.",
+    "Production startup must reject placeholder secrets."
+  ],
+  "requested_next_action": "Freeze RBAC/tool authorization matrix, approval-token semantics, tenant repository contract, object/file safety contract, logging redaction policy, and required negative tests."
+}

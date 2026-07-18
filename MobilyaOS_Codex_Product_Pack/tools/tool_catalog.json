@@ -1,0 +1,481 @@
+{
+  "version": "1.0.0",
+  "tools": [
+    {
+      "name": "catalog_tool",
+      "description": "Read or manage the authorized company's normalized material, hardware, edge-band, labor-operation, product-template, and pricing-policy catalog. Use this tool when a user needs to search compatible SKUs, inspect exact units/attributes, or create a reviewable catalog draft. Do not use it to calculate a quote or sheet usage. Write operations require the caller's delegated role and may return approval_required. Every operation is company-scoped and returns stable entity IDs and version metadata.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "search",
+              "get",
+              "create_draft",
+              "update_draft",
+              "list_compatible"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_type": {
+            "type": "string",
+            "enum": [
+              "material",
+              "hardware",
+              "edge_band",
+              "labor_operation",
+              "product_template",
+              "pricing_policy"
+            ]
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "filters": {
+            "type": "object"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "search",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "entity_type": "edge_band",
+          "query": "18 mm beyaz 1 mm PVC"
+        }
+      ]
+    },
+    {
+      "name": "supplier_tool",
+      "description": "Inspect suppliers and append-only price observations, validate/import a supplier price file, or prepare an RFQ draft. Use read/import-draft operations for supplier price intelligence. Never place credentials in inputs; portal access is handled by a separate approved connector. Sending an RFQ is externally visible and must return or consume an explicit approval state and an idempotency key. This tool does not calculate product cost; it provides normalized observations and RFQ workflow results.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "search_suppliers",
+              "list_price_observations",
+              "validate_import",
+              "commit_import",
+              "create_rfq_draft",
+              "send_rfq"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "supplier_id": {
+            "type": "string"
+          },
+          "sku_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "rfq_id": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "approval_token": {
+            "type": "string"
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "list_price_observations",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "supplier_id": "sup-001",
+          "sku_ids": [
+            "mat-001"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "project_tool",
+      "description": "Search, read, create, fork, or update authorized customer projects and quote revisions. Use read operations to answer project/quote questions and fork_revision when an approved or sent revision must change. Never update an immutable revision in place. All writes require expected_version and idempotency_key where applicable. Results include company, project, revision, status and provenance needed to avoid acting on a stale or wrong revision.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "search",
+              "get_project",
+              "get_revision",
+              "create_project",
+              "create_revision",
+              "fork_revision",
+              "update_draft_revision",
+              "get_audit_timeline"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "revision_id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "expected_version": {
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "search",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "query": "A firması mutfak teklifi"
+        }
+      ]
+    },
+    {
+      "name": "design_tool",
+      "description": "Validate product parameters and request deterministic product variant, part geometry, BOM recipe, edge policies, hardware requirements, and customer/technical view generation. Use it only with a published product-template version and explicit units. The model must not precompute or alter production dimensions. Draft-template operations create reviewable drafts and cannot publish without designer/admin approval. Results contain validation errors or a versioned deterministic design snapshot.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "get_parameter_schema",
+              "validate_parameters",
+              "generate_variant",
+              "create_template_draft",
+              "publish_template"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template_id": {
+            "type": "string"
+          },
+          "template_version": {
+            "type": "string"
+          },
+          "revision_id": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "object"
+          },
+          "payload": {
+            "type": "object"
+          },
+          "approval_token": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "validate_parameters",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "template_id": "wardrobe",
+          "template_version": "1.0.0",
+          "parameters": {
+            "width_mm": 1800,
+            "height_mm": 2400,
+            "depth_mm": 600,
+            "quantity": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "manufacturing_tool",
+      "description": "Run or retrieve deterministic BOM, edge-band, operation, nesting, offcut, validation, revision manufacturing diff, and production-package operations. Use this tool for authoritative manufacturing quantities and placement results; never calculate them in natural language. Operations are tied to an exact revision and engine version. Release of a production package requires a released/approved revision, delegated production permission, an approval token, and idempotency.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id",
+          "revision_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "generate_bom",
+              "validate_bom",
+              "optimize_nesting",
+              "get_nesting",
+              "diff_manufacturing",
+              "generate_production_package",
+              "release_production_package"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision_id": {
+            "type": "string"
+          },
+          "other_revision_id": {
+            "type": "string"
+          },
+          "options": {
+            "type": "object"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "approval_token": {
+            "type": "string"
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "optimize_nesting",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "revision_id": "rev-001",
+          "options": {
+            "solver_seed": 42
+          }
+        }
+      ]
+    },
+    {
+      "name": "costing_tool",
+      "description": "Create or retrieve deterministic cost and pricing snapshots, compare scenarios, and calculate revision cost deltas. Use it for all authoritative material, hardware, edge-band, machine, labor, overhead, markup/margin, discount, tax and total values. Inputs refer to exact revision and policy versions; results include price observation and formula provenance. The model must not recalculate returned values. Policy exceptions may require approval and cannot be silently applied.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id",
+          "revision_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "calculate_cost",
+              "get_cost_snapshot",
+              "apply_pricing",
+              "compare_scenarios",
+              "diff_cost"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision_id": {
+            "type": "string"
+          },
+          "other_revision_id": {
+            "type": "string"
+          },
+          "pricing_policy_id": {
+            "type": "string"
+          },
+          "scenario": {
+            "type": "object"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "approval_token": {
+            "type": "string"
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "apply_pricing",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "revision_id": "rev-001",
+          "scenario": {
+            "mode": "target_gross_margin",
+            "rate_bps": 3000,
+            "vat_rate_bps": 2000
+          }
+        }
+      ]
+    },
+    {
+      "name": "document_tool",
+      "description": "Generate, preview, retrieve metadata for, approve, or send versioned quote/proforma and change-report documents. Document content is generated from an exact revision and pricing snapshot; the tool prevents internal cost fields from leaking into customer templates. Generate/preview are safe draft operations. Approve and send are externally/financially consequential and require delegated role, valid approval state, idempotency key, and immutable document hash. Never claim delivery without a confirmed send result.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id",
+          "revision_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "generate_quote",
+              "preview_quote",
+              "get_document",
+              "generate_change_report",
+              "approve_quote",
+              "send_quote"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision_id": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string"
+          },
+          "delivery": {
+            "type": "object"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "approval_token": {
+            "type": "string"
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "preview_quote",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "revision_id": "rev-001",
+          "template_id": "corporate-tr-v1"
+        }
+      ]
+    },
+    {
+      "name": "workflow_tool",
+      "description": "Inspect approval requirements, request approval, resume a durable workflow, or propose authorized project/production status transitions. Use it before consequential actions and when a process is waiting for a human, supplier, document or retry. This tool enforces transition preconditions and delegated permissions; prompt text cannot override it. Status mutation requires idempotency and may require an approval token. Use read/status operations to explain blockers without changing state.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "company_id"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "get_workflow",
+              "get_allowed_actions",
+              "request_approval",
+              "approve",
+              "reject",
+              "resume",
+              "transition_status"
+            ]
+          },
+          "company_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workflow_id": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "transition": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "approval_token": {
+            "type": "string"
+          }
+        }
+      },
+      "input_examples": [
+        {
+          "action": "get_allowed_actions",
+          "company_id": "00000000-0000-0000-0000-000000000001",
+          "entity_type": "quote_revision",
+          "entity_id": "rev-001"
+        }
+      ]
+    }
+  ]
+}

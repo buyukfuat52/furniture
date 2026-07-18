@@ -1,0 +1,62 @@
+{
+  "handoff_id": "P1-ai-recon-20260715T040315+0300",
+  "run_id": "20260715T040315+0300",
+  "phase": "P1",
+  "assignment_id": "P1-ai-recon",
+  "from_agent": "ai_prompt_engineer",
+  "to_agent": "parent_codex",
+  "type": "result",
+  "status": "completed",
+  "severity": "medium",
+  "summary": "AI reconnaissance completed. Prompt/tool/model policy is clear at contract level, but services/compute contains only AGENTS.md and lacks prompt loading, schema validation, fake model, adapters, tool gateway client, and prompt eval runner.",
+  "files_read": [
+    "AGENTS.md",
+    "services/compute/AGENTS.md",
+    "CODEX_ONE_SHOT_PROMPT.md",
+    "prompts/README.md",
+    "prompts/registry.yaml",
+    "prompts/system/base.md",
+    "tools/tool_catalog.json",
+    "tools/schemas/agent_response.schema.json",
+    "tools/schemas/approval_request.schema.json",
+    "tools/schemas/revision_diff.schema.json",
+    "tools/schemas/tool_error.schema.json",
+    "config/model_policy.yaml",
+    "docs/05_API_EVENT_CONTRACTS.md",
+    "docs/06_SECURITY_AND_AUTHORIZATION.md",
+    "docs/11_DEVELOPMENT_AGENT_ORCHESTRATION.md",
+    ".codex/orchestration/handoff.schema.json",
+    "evals/prompt_eval_cases.yaml"
+  ],
+  "files_changed": [],
+  "contract_changes": [],
+  "decisions": [
+    "Runtime prompts load by id/version from prompts/registry.yaml.",
+    "Outputs validate against agent_response.schema.json.",
+    "Authoritative values come from tools, never model reasoning.",
+    "Consequential actions require approval handling.",
+    "Model policy must support disabled, fake, OpenAI-compatible, and local modes."
+  ],
+  "assumptions": [
+    "Prompt specialist files were not all loaded by AI recon except as needed.",
+    "prompt_eval_cases.yaml is a seed contract, not an executable harness."
+  ],
+  "verification": [
+    {
+      "command": "Get-Content -Raw for prompt/tool/model docs and Get-ChildItem services/compute",
+      "executed": true,
+      "result": "passed",
+      "evidence": "Prompt and tool assets exist; compute implementation does not."
+    }
+  ],
+  "blockers": [
+    "No executable compute/agent service exists.",
+    "Tool gateway enforcement and prompt-injection evals are not implemented."
+  ],
+  "residual_risks": [
+    "Invalid model JSON must be rejected or repaired before trusting action proposals.",
+    "Approval bypass remains a risk until server-side enforcement and tests exist.",
+    "Revision diff schema may be too generic for rich UI/QA assertions."
+  ],
+  "requested_next_action": "In P2, build prompt registry loader, structured-output validator, fake model, adapter interface, tool schema loader, gateway boundary, and eval runner."
+}

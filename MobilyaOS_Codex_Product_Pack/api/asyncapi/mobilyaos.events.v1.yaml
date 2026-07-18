@@ -1,0 +1,86 @@
+asyncapi: 3.0.0
+info:
+  title: MobilyaOS Events
+  version: 0.1.0
+channels:
+  projectCreated:
+    address: project.created.v1
+    messages:
+      projectCreated:
+        $ref: "#/components/messages/ProjectCreated"
+  revisionCreated:
+    address: revision.created.v1
+    messages:
+      revisionCreated:
+        $ref: "#/components/messages/RevisionCreated"
+  quoteApproved:
+    address: quote.approved.v1
+    messages:
+      quoteApproved:
+        $ref: "#/components/messages/QuoteApproved"
+operations:
+  publishProjectCreated:
+    action: send
+    channel:
+      $ref: "#/channels/projectCreated"
+components:
+  messages:
+    ProjectCreated:
+      name: project.created.v1
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
+    RevisionCreated:
+      name: revision.created.v1
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
+    QuoteApproved:
+      name: quote.approved.v1
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
+  schemas:
+    CloudEvent:
+      type: object
+      required:
+        - specversion
+        - id
+        - source
+        - type
+        - subject
+        - time
+        - datacontenttype
+        - correlationid
+        - causationid
+        - companyid
+        - actorid
+        - data
+      properties:
+        specversion:
+          type: string
+          const: "1.0"
+        id:
+          type: string
+          format: uuid
+        source:
+          type: string
+        type:
+          type: string
+        subject:
+          type: string
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          const: application/json
+        correlationid:
+          type: string
+        causationid:
+          type: string
+        companyid:
+          type: string
+          format: uuid
+        actorid:
+          type: string
+          format: uuid
+        data:
+          type: object

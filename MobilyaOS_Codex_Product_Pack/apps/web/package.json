@@ -1,0 +1,27 @@
+{
+  "name": "@mobilyaos/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "build": "next build",
+    "lint": "npm run typecheck",
+    "typecheck": "npx tsc --noEmit",
+    "test": "node scripts/server-boundary-check.mjs",
+    "test:session": "node scripts/session-route-smoke.mjs",
+    "test:mutations": "node scripts/mutation-route-smoke.mjs",
+    "clean": "node -e \"require('fs').rmSync('.next', { recursive: true, force: true })\""
+  },
+  "dependencies": {
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}

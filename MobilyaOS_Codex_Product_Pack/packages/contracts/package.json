@@ -1,0 +1,13 @@
+{
+  "name": "@mobilyaos/contracts",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"console.log('contracts: no generated artifacts yet')\"",
+    "lint": "node -e \"console.log('contracts: lint placeholder')\"",
+    "typecheck": "node -e \"console.log('contracts: typecheck placeholder')\"",
+    "test": "node -e \"console.log('contracts: test placeholder')\"",
+    "clean": "node -e \"console.log('contracts: clean placeholder')\""
+  }
+}

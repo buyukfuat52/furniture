@@ -1,0 +1,468 @@
+openapi: 3.1.0
+info:
+  title: MobilyaOS Core API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080/api/v1
+paths:
+  /health:
+    get:
+      summary: Core API health
+      responses:
+        "200":
+          description: Service health state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /auth/login:
+    post:
+      summary: Demo login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Demo access token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/Problem"
+  /tenant/current:
+    get:
+      summary: Current tenant context
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tenant context.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantContext"
+        "401":
+          $ref: "#/components/responses/Problem"
+  /demo-seed:
+    get:
+      summary: Demo company, catalog, customer and project seed data
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Demo seed data.
+  /customers:
+    get:
+      summary: List tenant customers
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Customer list.
+    post:
+      summary: Create customer
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCustomerRequest"
+      responses:
+        "201":
+          description: Customer created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+  /projects:
+    get:
+      summary: List tenant projects
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Project list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Project"
+    post:
+      summary: Create draft project
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "201":
+          description: Project created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "400":
+          $ref: "#/components/responses/Problem"
+  /catalog/materials:
+    get:
+      summary: List tenant panel material SKUs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Material SKU list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MaterialSku"
+  /revisions/wardrobe:
+    post:
+      summary: Create deterministic wardrobe quote revision
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WardrobeConfig"
+      responses:
+        "201":
+          description: Created revision with BOM, edge banding, labor, and cost snapshot.
+  /revisions/{revision_id}:
+    get:
+      summary: Get quote revision snapshot
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Quote revision.
+  /revisions/{revision_id}/quote-document:
+    post:
+      summary: Generate customer-safe HTML quote document
+      description: Generates a draft customer quote document for a mutable revision. The response includes SHA-256, size, formula version, cost_snapshot_id and cost_snapshot_hash metadata; approved or sent revisions reject regeneration.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Generated quote document.
+        "403":
+          description: Caller role cannot generate quote documents.
+        "409":
+          description: Revision is immutable.
+  /revisions/{revision_id}/approve:
+    post:
+      summary: Approve a quote revision
+      description: Demo durable-local approval transition. Requires a generated document and an authorized sales/admin caller. Approved revisions become immutable; changes must fork a new revision.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Approved revision.
+        "403":
+          description: Caller role cannot approve revisions.
+        "409":
+          description: Revision is already immutable.
+  /revisions/{revision_id}/fork:
+    post:
+      summary: Fork a quote revision and apply deterministic config patch
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Forked revision.
+  /revisions/{left_revision_id}/diff/{right_revision_id}:
+    get:
+      summary: Structured revision diff
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: left_revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: right_revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Structured diff.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+  responses:
+    Problem:
+      description: Structured problem response.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service, version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service:
+          type: string
+        version:
+          type: string
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+    LoginResponse:
+      type: object
+      required: [access_token, token_type, expires_in_seconds, user, company_id]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          const: Bearer
+        expires_in_seconds:
+          type: integer
+        user:
+          $ref: "#/components/schemas/User"
+        company_id:
+          type: string
+          format: uuid
+    User:
+      type: object
+      required: [id, company_id, email, roles]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [admin, sales, designer, costing, procurement, production, viewer]
+    TenantContext:
+      type: object
+      required: [company_id, actor_id, roles]
+      properties:
+        company_id:
+          type: string
+          format: uuid
+        actor_id:
+          type: string
+          format: uuid
+        roles:
+          type: array
+          items:
+            type: string
+    Project:
+      type: object
+      required: [id, company_id, customer_name, name, status, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        customer_name:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, archived]
+        version:
+          type: integer
+    Customer:
+      type: object
+      required: [id, company_id, name, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        version:
+          type: integer
+    CreateCustomerRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        email:
+          type: string
+        phone:
+          type: string
+    CreateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        customer_name:
+          type: string
+        name:
+          type: string
+          minLength: 1
+    MaterialSku:
+      type: object
+      required: [id, company_id, sku, name, thickness_mm, sheet_width_mm, sheet_height_mm]
+      properties:
+        id:
+          type: string
+          format: uuid
+        company_id:
+          type: string
+          format: uuid
+        sku:
+          type: string
+        name:
+          type: string
+        thickness_mm:
+          type: integer
+        sheet_width_mm:
+          type: integer
+        sheet_height_mm:
+          type: integer
+        price_per_sheet:
+          $ref: "#/components/schemas/MoneyMinor"
+    WardrobeConfig:
+      type: object
+      required: [project_id, quantity, width_mm, height_mm, depth_mm, material_sku, edge_band_sku, shelf_count, door_count, markup_bps, vat_bps]
+      properties:
+        project_id:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        width_mm:
+          type: integer
+        height_mm:
+          type: integer
+        depth_mm:
+          type: integer
+        material_sku:
+          type: string
+        edge_band_sku:
+          type: string
+        shelf_count:
+          type: integer
+        door_count:
+          type: integer
+        markup_bps:
+          type: integer
+        vat_bps:
+          type: integer
+    MoneyMinor:
+      type: object
+      required: [amount_minor, currency]
+      properties:
+        amount_minor:
+          type: integer
+        currency:
+          type: string
+    Problem:
+      type: object
+      required: [type, title, status, code, detail, trace_id]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+        detail:
+          type: string
+        trace_id:
+          type: string

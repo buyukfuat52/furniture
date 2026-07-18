@@ -1,0 +1,193 @@
+version: 1.0.0
+orchestrator: parent_codex
+source_of_truth: docs/11_DEVELOPMENT_AGENT_ORCHESTRATION.md
+agents:
+  - domain_architect
+  - backend_engineer
+  - frontend_engineer
+  - ai_prompt_engineer
+  - security_reviewer
+  - qa_reviewer
+states:
+  - idle
+  - reconnaissance
+  - lead
+  - implement
+  - review
+  - fix
+  - blocked
+  - done
+rules:
+  direct_agent_to_agent_coordination: false
+  parent_routes_all_handoffs: true
+  frozen_contract_required_before_parallel_consumers: true
+  shared_files_require_parent_lease: true
+  unassigned_agents_may_edit: false
+  reviewers_may_edit_production_code: false
+  repeated_identical_retry_limit: 2
+phases:
+  - id: P0
+    name: bootstrap_and_repository_survey
+    lead: parent_codex
+    assignments:
+      domain_architect: idle
+      backend_engineer: idle
+      frontend_engineer: idle
+      ai_prompt_engineer: idle
+      security_reviewer: idle
+      qa_reviewer: idle
+    gate:
+      id: G0
+      requires:
+        - repository_state_recorded
+        - toolchain_recorded
+        - run_id_created
+        - file_ownership_assigned
+        - blockers_recorded
+  - id: P1
+    name: discovery_and_contract_readiness
+    lead: domain_architect
+    assignments:
+      domain_architect: lead
+      backend_engineer: reconnaissance
+      frontend_engineer: reconnaissance
+      ai_prompt_engineer: reconnaissance
+      security_reviewer: review
+      qa_reviewer: review
+    parallel_groups:
+      - [domain_architect, security_reviewer, qa_reviewer]
+      - [backend_engineer, frontend_engineer, ai_prompt_engineer]
+    outputs:
+      - bounded_contexts
+      - invariants_and_formulas
+      - transaction_and_provenance_rules
+      - draft_contract_inventory
+      - threat_model
+      - acceptance_and_golden_test_plan
+    gate:
+      id: G1
+      requires:
+        - critical_domain_ambiguities_resolved_or_adr
+        - tenant_money_revision_and_calculation_rules_testable
+        - contract_inventory_approved
+        - critical_trust_boundaries_identified
+  - id: P2
+    name: contract_skeleton_and_foundations
+    lead: backend_engineer
+    assignments:
+      domain_architect: review
+      backend_engineer: implement
+      frontend_engineer: implement
+      ai_prompt_engineer: implement
+      security_reviewer: review
+      qa_reviewer: implement
+    parallel_groups:
+      - [backend_engineer, frontend_engineer, ai_prompt_engineer, qa_reviewer]
+      - [domain_architect, security_reviewer]
+    constraints:
+      - frontend_must_not_invent_api_fields
+      - ai_must_not_call_unfinished_production_tools
+      - parent_owns_shared_contract_files
+    gate:
+      id: G2
+      requires:
+        - clean_database_migration
+        - api_event_tool_schema_validation
+        - typed_boundaries_compile
+        - deterministic_fake_adapters_available
+        - repository_boots
+        - critical_high_contract_security_findings_resolved
+  - id: P3
+    name: vertical_slice_implementation
+    lead: parent_codex
+    assignments:
+      domain_architect: review
+      backend_engineer: implement
+      frontend_engineer: implement
+      ai_prompt_engineer: implement
+      security_reviewer: review
+      qa_reviewer: implement
+    parallel_groups:
+      - [backend_engineer, frontend_engineer, ai_prompt_engineer]
+      - [domain_architect, security_reviewer, qa_reviewer]
+    ordered_slices:
+      - identity_company_rbac_catalog
+      - project_and_draft_revision
+      - product_template_and_configuration
+      - bom_edges_hardware_operations_labor
+      - nesting_and_cost_snapshot
+      - pricing_and_proforma
+      - approval_immutability_fork_diff
+      - authorized_agent_chat
+    gate:
+      id: G3
+      requires:
+        - seeded_flow_works_via_api_and_ui
+        - authoritative_calculations_are_deterministic
+        - mandatory_negative_tests_exist
+        - no_hardcoded_critical_totals
+        - no_fake_success_in_critical_path
+  - id: P4
+    name: integration_adversarial_review_and_repair
+    lead: qa_reviewer
+    co_lead: security_reviewer
+    assignments:
+      domain_architect: review
+      backend_engineer: idle
+      frontend_engineer: idle
+      ai_prompt_engineer: idle
+      security_reviewer: lead
+      qa_reviewer: lead
+    dynamic_fix_owners:
+      - backend_engineer
+      - frontend_engineer
+      - ai_prompt_engineer
+    gate:
+      id: G4
+      requires:
+        - critical_high_findings_closed_and_retested
+        - medium_low_risks_documented
+        - tenant_isolation_passes
+        - immutable_revision_passes
+        - money_precision_passes
+        - idempotency_passes
+        - prompt_injection_passes
+        - approval_authorization_passes
+  - id: P5
+    name: release_verification_and_handover
+    lead: parent_codex
+    assignments:
+      domain_architect: review
+      backend_engineer: idle
+      frontend_engineer: idle
+      ai_prompt_engineer: idle
+      security_reviewer: review
+      qa_reviewer: lead
+    gate:
+      id: G5
+      requires:
+        - definition_of_done_satisfied
+        - clean_make_verify_passes
+        - status_contains_exact_evidence
+        - critical_high_security_signoff
+        - golden_domain_signoff
+        - run_and_demo_documentation_complete
+transitions:
+  - from: P0
+    to: P1
+    gate: G0
+  - from: P1
+    to: P2
+    gate: G1
+  - from: P2
+    to: P3
+    gate: G2
+  - from: P3
+    to: P4
+    gate: G3
+  - from: P4
+    to: P5
+    gate: G4
+  - from: P5
+    to: done
+    gate: G5

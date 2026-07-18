@@ -1,0 +1,117 @@
+version: 1.0.0
+owner_of_shared_files: parent_codex
+shared_locked_paths:
+  - AGENTS.md
+  - CLAUDE.md
+  - CODEX_ONE_SHOT_PROMPT.md
+  - Makefile
+  - docker-compose.yml
+  - docker-compose.yaml
+  - go.work
+  - package.json
+  - pnpm-lock.yaml
+  - package-lock.json
+  - yarn.lock
+  - .github/**
+  - docs/03_TARGET_ARCHITECTURE.md
+  - docs/05_API_EVENT_CONTRACTS.md
+  - docs/09_IMPLEMENTATION_SEQUENCE.md
+  - docs/10_DEFINITION_OF_DONE.md
+  - docs/11_DEVELOPMENT_AGENT_ORCHESTRATION.md
+  - docs/adr/**
+  - api/openapi/**
+  - api/asyncapi/**
+  - proto/**
+  - .codex/orchestration/**
+leases:
+  required_for_shared_paths: true
+  granted_by: parent_codex
+  expires_on_handoff: true
+  fields:
+    - path
+    - agent
+    - purpose
+    - phase
+    - assignment_id
+ownership:
+  domain_architect:
+    writable:
+      - docs/implementation/domain/**
+      - docs/implementation/agent-runs/**/domain_architect/**
+    review_only:
+      - services/core/**
+      - services/compute/**
+      - apps/web/**
+      - api/**
+      - migrations/**
+  backend_engineer:
+    writable:
+      - services/core/**
+      - migrations/**
+      - internal/**
+      - cmd/**
+      - api/generated/backend/**
+      - docs/implementation/agent-runs/**/backend_engineer/**
+    leased_only:
+      - api/openapi/**
+      - api/asyncapi/**
+      - Makefile
+      - docker-compose.yml
+      - docker-compose.yaml
+  frontend_engineer:
+    writable:
+      - apps/web/**
+      - packages/ui/**
+      - packages/api-client/**
+      - docs/implementation/agent-runs/**/frontend_engineer/**
+    leased_only:
+      - package.json
+      - pnpm-lock.yaml
+      - package-lock.json
+      - yarn.lock
+  ai_prompt_engineer:
+    writable:
+      - services/compute/**
+      - prompts/**
+      - tools/**
+      - evals/prompt*/**
+      - evals/agent*/**
+      - docs/implementation/agent-runs/**/ai_prompt_engineer/**
+    leased_only:
+      - api/openapi/**
+      - api/asyncapi/**
+      - config/model_policy.yaml
+  qa_reviewer:
+    writable:
+      - tests/**
+      - e2e/**
+      - evals/acceptance_matrix.yaml
+      - scripts/test*/**
+      - scripts/verify*/**
+      - docs/implementation/agent-runs/**/qa_reviewer/**
+      - docs/implementation/verification/**
+    review_only:
+      - services/**
+      - apps/**
+      - prompts/**
+      - tools/**
+    leased_only:
+      - .github/**
+      - Makefile
+  security_reviewer:
+    writable:
+      - docs/implementation/agent-runs/**/security_reviewer/**
+      - docs/implementation/security/**
+      - docs/THREAT_MODEL.md
+    review_only:
+      - services/**
+      - apps/**
+      - prompts/**
+      - tools/**
+      - config/**
+      - api/**
+conflict_policy:
+  - agents_must_not_edit_outside_writable_or_leased_paths
+  - same_path_edits_are_serialized_by_parent
+  - reviewers_do_not_silently_fix_production_code
+  - contract_change_requires_handoff_and_parent_approval

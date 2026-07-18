@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mobilyaos.local/schemas/development-agent-handoff.schema.json",
+  "title": "MobilyaOS Development Agent Handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "handoff_id",
+    "run_id",
+    "phase",
+    "assignment_id",
+    "from_agent",
+    "to_agent",
+    "type",
+    "status",
+    "summary",
+    "files_read",
+    "files_changed",
+    "contract_changes",
+    "decisions",
+    "assumptions",
+    "verification",
+    "blockers",
+    "residual_risks",
+    "requested_next_action"
+  ],
+  "properties": {
+    "handoff_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "phase": {"type": "string", "enum": ["P0", "P1", "P2", "P3", "P4", "P5"]},
+    "assignment_id": {"type": "string", "minLength": 1},
+    "from_agent": {
+      "type": "string",
+      "enum": [
+        "parent_codex",
+        "domain_architect",
+        "backend_engineer",
+        "frontend_engineer",
+        "ai_prompt_engineer",
+        "security_reviewer",
+        "qa_reviewer"
+      ]
+    },
+    "to_agent": {
+      "type": "string",
+      "enum": [
+        "parent_codex",
+        "domain_architect",
+        "backend_engineer",
+        "frontend_engineer",
+        "ai_prompt_engineer",
+        "security_reviewer",
+        "qa_reviewer"
+      ]
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "result",
+        "decision_request",
+        "contract_change",
+        "blocker",
+        "review_finding",
+        "fix_request",
+        "gate_evidence"
+      ]
+    },
+    "status": {"type": "string", "enum": ["completed", "partial", "blocked", "failed"]},
+    "severity": {"type": "string", "enum": ["none", "low", "medium", "high", "critical"]},
+    "summary": {"type": "string", "minLength": 1},
+    "files_read": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "files_changed": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "contract_changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["artifact", "change", "compatibility", "approved"],
+        "properties": {
+          "artifact": {"type": "string"},
+          "change": {"type": "string"},
+          "compatibility": {"type": "string", "enum": ["none", "backward_compatible", "breaking"]},
+          "approved": {"type": "boolean"}
+        }
+      }
+    },
+    "decisions": {"type": "array", "items": {"type": "string"}},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "executed", "result"],
+        "properties": {
+          "command": {"type": "string"},
+          "executed": {"type": "boolean"},
+          "result": {"type": "string", "enum": ["passed", "failed", "not_run"]},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "blockers": {"type": "array", "items": {"type": "string"}},
+    "residual_risks": {"type": "array", "items": {"type": "string"}},
+    "requested_next_action": {"type": "string", "minLength": 1}
+  }
+}

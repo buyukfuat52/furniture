@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "revision_diff.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "left_revision_id",
+    "right_revision_id",
+    "lineage_valid",
+    "categories",
+    "total_cost_delta_minor",
+    "currency"
+  ],
+  "properties": {
+    "left_revision_id": {
+      "type": "string"
+    },
+    "right_revision_id": {
+      "type": "string"
+    },
+    "lineage_valid": {
+      "type": "boolean"
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "category",
+          "changes"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "parameters",
+              "bom",
+              "hardware",
+              "edge_band",
+              "operations",
+              "nesting",
+              "cost",
+              "document"
+            ]
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "total_cost_delta_minor": {
+      "type": "integer"
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$"
+    }
+  }
+}
