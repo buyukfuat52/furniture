@@ -9,11 +9,13 @@ import {
   getQuoteRevisionDiff,
   getQuoteSendGateStatus,
   getQuoteSnapshot,
+  listQuoteArtifacts,
   listQuoteDocuments,
   listProjects,
   type ApprovalGateRecord,
   type AuditEntryRecord,
   type ProjectDetailRecord,
+  type QuoteArtifactRecord,
   type QuoteConfigurationDraftRecord,
   type QuoteDocumentRecord,
   type QuoteRevisionDetailRecord,
@@ -104,7 +106,7 @@ function classifyMessage(message: string): { agentId: AgentId; classification: s
   if (/\b(cost|pricing|maliyet|fiyat|toplam|snapshot|kenar|edge|labor|iscilik)\b/u.test(normalized)) {
     return { agentId: "costing_pricing", classification: "costing_pricing_explanation_read_only" };
   }
-  if (/\b(quote|proposal|teklif|pdf|document|dokuman|onay|approve|send|gonder)\b/u.test(normalized)) {
+  if (/\b(quote|proposal|teklif|pdf|artifact|artefakt|document|dokuman|onay|approve|send|gonder)\b/u.test(normalized)) {
     return { agentId: "quote_document", classification: "quote_document_read_only" };
   }
   return { agentId: "enterprise_search", classification: "enterprise_search_read_only" };
@@ -117,7 +119,7 @@ function looksLikePromptInjection(message: string): boolean {
 
 function asksForMutation(message: string): boolean {
   const normalized = searchText(message);
-  return /send|gonder|approve|onayla|finalize|finalise|tamamla|consume approval|consume token|approval token.*consume|token.*tuket|onay token.*tuket|calculate|recalculate|hesapla|yeniden hesapla|pdf|production|uretim|create|update|delete|sil|degistir|kaydet/i.test(normalized);
+  return /send|gonder|approve|onayla|finalize|finalise|tamamla|consume approval|consume token|approval token.*consume|token.*tuket|onay token.*tuket|calculate|recalculate|hesapla|yeniden hesapla|generate|olustur|uret|download|indir|prepare send|send intent|gonderim niyeti|production|uretim|create|update|delete|sil|degistir|kaydet/i.test(normalized);
 }
 
 function responseBody(input: {
@@ -291,11 +293,37 @@ function sendGateFacts(sendGate: QuoteSendGateStatusRecord | null): Array<{ labe
   return [
     { label: "Gonderim kapisi", value: sendGate.status },
     { label: "Gonderime uygun", value: sendGate.eligible_to_send },
+    { label: "Gonderim hazirligina uygun", value: sendGate.eligible_to_prepare_send },
     { label: "Onayli revizyon", value: sendGate.approved_revision },
     { label: "Frozen belge bagli", value: sendGate.frozen_document_bound },
+    { label: "Artefakt bagli", value: sendGate.artifact_bound },
     { label: "PDF/artifact durumu", value: sendGate.artifact_status },
+    { label: "Son gonderim niyeti", value: sendGate.latest_send_intent_status },
     { label: "Teklif gonderildi", value: sendGate.quote_send_triggered },
     { label: "Gonderim blokajlari", value: sendGate.blocking_reasons.join(", ") }
+  ];
+}
+
+function artifactFacts(artifacts: QuoteArtifactRecord[]): Array<{ label: string; value: unknown }> {
+  const latest = artifacts[0] ?? null;
+  if (!latest) {
+    return [
+      { label: "Saklanan artefakt", value: "yok" },
+      { label: "Artefakt erisimi", value: "server_mediated_download" },
+      { label: "Signed URL", value: "not_returned" }
+    ];
+  }
+  return [
+    { label: "Saklanan artefakt", value: latest.status },
+    { label: "Artefakt tipi", value: latest.artifact_type },
+    { label: "Artefakt hash", value: latest.sha256 },
+    { label: "Kaynak belge hash", value: latest.source_document_hash },
+    { label: "Artefakt surumu", value: latest.artifact_version },
+    { label: "Renderer surumu", value: latest.renderer_version },
+    { label: "PDF durumu", value: latest.pdf_status },
+    { label: "Artefakt erisimi", value: latest.access_model },
+    { label: "Signed URL", value: latest.signed_url_returned ? "returned" : "not_returned" },
+    { label: "Harici URL", value: latest.external_url_generated ? "generated" : "not_generated" }
   ];
 }
 
@@ -344,8 +372,8 @@ export async function POST(request: Request) {
         agentId,
         classification: mutationToolBlockedMarker,
         status: "failed",
-        summary: "Bu sohbet katmani P9'da salt okunur; teklif gonderme, onay token tuketimi, final onay, PDF, uretim veya veri degisikligi yapamaz.",
-        toolCalls: [deniedTool("agent-tool-1", "mutating_tool_request", "P9 salt okunur politika mutasyonu engelledi.")],
+        summary: "Bu sohbet katmani P10'da salt okunur; teklif gonderme, onay token tuketimi, final onay, PDF/artefakt uretimi, indirme, uretim veya veri degisikligi yapamaz.",
+        toolCalls: [deniedTool("agent-tool-1", "mutating_tool_request", "P10 salt okunur politika mutasyonu engelledi.")],
         proposedActions: [{
           action: "request_backend_approval_gate",
           description: "Riskli islemler icin once backend/domain onay kapisi tamamlanmali.",
@@ -373,6 +401,7 @@ export async function POST(request: Request) {
     let quoteDocument: QuoteDocumentRecord | null = null;
     let approvalGate: ApprovalGateRecord | null = null;
     let sendGate: QuoteSendGateStatusRecord | null = null;
+    let quoteArtifacts: QuoteArtifactRecord[] = [];
 
     if (projectId) {
       projectDetail = await getProjectDetail(session.mutationScope, projectId);
@@ -397,17 +426,20 @@ export async function POST(request: Request) {
       quoteSnapshot = await getQuoteSnapshot(session.mutationScope, revisionId);
       approvalGate = await getApprovalGateStatus(session.mutationScope, revisionId);
       sendGate = await getQuoteSendGateStatus(session.mutationScope, revisionId);
+      quoteArtifacts = await listQuoteArtifacts(session.mutationScope, revisionId);
       toolCalls.push(completedTool("agent-tool-2", "get_quote_revision_detail", "Oturum sirketine ait revizyon okundu."));
       toolCalls.push(completedTool("agent-tool-3", "get_quote_configuration_draft", "Konfigurasyon taslagi salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-4", "get_quote_snapshot", "Deterministik snapshot salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-approval-status", "get_approval_status", "Onay kapisi durumu salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-send-gate", "get_send_gate_status", "Gonderim kapisi salt okunur okundu."));
+      toolCalls.push(completedTool("agent-tool-artifact-status", "get_quote_artifact_status", "Saklanan artefakt durumu salt okunur okundu."));
       facts.push(
         ...revisionFacts(revisionDetail),
         ...configurationFacts(configurationDraft),
         ...snapshotFacts(quoteSnapshot),
         ...approvalFacts(approvalGate),
-        ...sendGateFacts(sendGate)
+        ...sendGateFacts(sendGate),
+        ...artifactFacts(quoteArtifacts)
       );
     } else {
       missingInformation.push("Supabase proje veya revizyon secimi");

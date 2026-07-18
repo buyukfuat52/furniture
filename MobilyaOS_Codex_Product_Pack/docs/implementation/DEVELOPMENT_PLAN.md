@@ -196,6 +196,17 @@ Large-scale backend/frontend application coding must not start until:
 - The send gate is read-only in P9. It can report prepared/deferred state for an approved revision with a bound frozen document, but `eligible_to_send`, email delivery, binary PDF generation, and production package creation remain disabled.
 - Runtime agents may explain approval and send-gate facts fetched by server-owned read tools. They cannot consume tokens, approve, send, generate PDFs, create production packages, or calculate authoritative totals.
 
+## P10 Decisions
+
+- Deterministic HTML remains the only verified quote artifact in this sprint. Binary PDF generation is deferred until a deterministic renderer/adapter can be added and tested without Docker/Go/Make assumptions.
+- Approved quote HTML artifact bytes are copied from the frozen generated document into the private Supabase `quote-documents` bucket through a server-owned object path. Browser requests never provide or receive raw storage paths, signed URL internals, provider secrets, recipient email, or storage credentials.
+- `quote_artifacts` is append-only in practice through the service-role `persist_quote_artifact_with_idempotency` RPC. The RPC rechecks approved revision status/version, approved approval-gate binding, frozen document hash, snapshot hash, content type, size, server-derived path, and idempotency scope.
+- Stored artifact download is server-mediated. The route fetches bytes with server credentials, verifies the SHA-256 hash against stored metadata, and returns no-store HTML as an attachment.
+- Send is still not executable. `quote_send_intents` records an audited, idempotent preparation result only after approved revision plus stored artifact binding. It hardcodes provider unavailable state until a safe delivery provider exists.
+- The send-intent path keeps `email_provider_configured: false`, `external_delivery_attempted: false`, `quote_sent: false`, and `production_package_triggered: false`. The database rejects forged sent/provider states.
+- Runtime agent/chat policy can explain stored artifact and send-preparation status through read-only tools. Artifact generation, PDF generation, external quote send, approval-token consumption, authoritative calculation, and production package creation remain forbidden from chat.
+- P10 security/QA corrective tasks closed high-risk gaps for browser-forged artifact/send fields, storage locator leakage, tool whitelist drift, prompt injection wording, tenant/RBAC denial, idempotency replay/conflict, audit evidence, and artifact/PDF-to-cost snapshot compatibility for the current HTML artifact.
+
 ## P5 Supabase Cloud Decisions
 
 - Docker Desktop is not the active local runtime on this machine.
@@ -237,7 +248,7 @@ Large-scale backend/frontend application coding must not start until:
 ## P7 Frozen Quote Lifecycle Decisions
 
 - Frozen quote documents are generated from the current persisted calculated cost snapshot only. The browser cannot submit totals, document hashes, snapshot hashes, approval data, storage locators, or revision status as authority.
-- The first official artifact is deterministic HTML with `quote-html-v1.0.0`; binary PDF generation and object-storage uploads remain future work.
+- The first official artifact is deterministic HTML with `quote-html-v1.0.0`; P10 stores approved HTML bytes in private object storage, while binary PDF generation remains future work.
 - Generated documents bind to company, project, quote revision, revision version, cost snapshot, calculation version, snapshot hash, document version, and SHA-256 hash.
 - Document persistence, revision fork, and approval-gate preparation use service-role-only Supabase RPCs that validate state, append audit, and complete durable idempotency after route-level reservation.
 - Authenticated public-key reads of `generated_documents` and `approvals` are intentionally blocked; server routes return sanitized DTOs without storage paths, token hashes, or raw approval token material.
@@ -249,7 +260,7 @@ Large-scale backend/frontend application coding must not start until:
 ## Next Phase Plan
 
 1. Add deterministic binary PDF generation from the exact frozen HTML/cost snapshot inputs and compare PDF totals to the cost snapshot in tests.
-2. Add object-storage upload metadata for generated artifacts without exposing bucket/path locators to browser DTOs.
-3. Promote the P9 read-only send gate into a tested explicit quote-send workflow with provider configuration, idempotency, audit, delivery proof, and no-secret outbound logs.
+2. Add a deterministic binary-PDF artifact beside the verified stored HTML artifact without exposing bucket/path locators to browser DTOs.
+3. Promote the P10 send-intent gate into a tested explicit quote-send workflow with provider configuration, idempotency, audit, delivery proof, and no-secret outbound logs.
 4. Move the P6/P7 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
 5. Add CSRF/fetch-metadata controls, rate limiting, production session revocation/rotation, and persisted tool invocation audit records.

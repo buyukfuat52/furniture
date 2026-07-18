@@ -35,6 +35,8 @@ REQUIRED_TABLES = [
     "cost_snapshots",
     "approvals",
     "generated_documents",
+    "quote_artifacts",
+    "quote_send_intents",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -56,6 +58,8 @@ TENANT_TABLES = [
     "cost_snapshots",
     "approvals",
     "generated_documents",
+    "quote_artifacts",
+    "quote_send_intents",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -141,6 +145,37 @@ def expect_authenticated_rest_denied(
     return False
 
 
+def expect_storage_list_no_direct_visibility(
+    env: dict[str, str],
+    token: str,
+    bucket: str,
+    label: str,
+) -> bool:
+    try:
+        rows = rest_request(
+            env,
+            "POST",
+            f"/storage/v1/object/list/{bucket}",
+            token=token,
+            payload={"limit": 1, "offset": 0, "prefix": ""},
+        )
+    except HTTPError as exc:
+        if exc.code in {400, 401, 403, 404, 405}:
+            print(f"{label}: ok")
+            return True
+        print(f"{label}: failed ({exc.__class__.__name__})")
+        return False
+    except (URLError, TimeoutError, ValueError) as exc:
+        print(f"{label}: failed ({exc.__class__.__name__})")
+        return False
+
+    if isinstance(rows, list) and len(rows) == 0:
+        print(f"{label}: ok")
+        return True
+    print(f"{label}: failed (direct object metadata visible)")
+    return False
+
+
 def authenticated_revision_status(env: dict[str, str], token: str) -> str:
     query = urlencode({"select": "status", "id": f"eq.{DEMO_REVISION_ID}"})
     rows = rest_request(env, "GET", f"/rest/v1/quote_revisions?{query}", token=token)
@@ -199,8 +234,15 @@ def tenant_revision_rows(env: dict[str, str], token: str, revision_id: str) -> A
     return rest_request(env, "GET", f"/rest/v1/quote_revisions?{query}", token=token)
 
 
-def sensitive_table_rows(env: dict[str, str], token: str, table: str, select: str, revision_id: str) -> Any:
-    query = urlencode({"select": select, "revision_id": f"eq.{revision_id}"})
+def sensitive_table_rows(
+    env: dict[str, str],
+    token: str,
+    table: str,
+    select: str,
+    revision_id: str,
+    revision_column: str = "revision_id",
+) -> Any:
+    query = urlencode({"select": select, revision_column: f"eq.{revision_id}"})
     return rest_request(env, "GET", f"/rest/v1/{table}?{query}", token=token)
 
 
@@ -277,6 +319,22 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             "id,token_hash,metadata_json",
             DEMO_REVISION_ID,
         )
+        direct_quote_artifacts = sensitive_table_rows(
+            env,
+            access_token,
+            "quote_artifacts",
+            "id,storage_bucket,storage_path,metadata_json",
+            DEMO_REVISION_ID,
+            "quote_revision_id",
+        )
+        direct_quote_send_intents = sensitive_table_rows(
+            env,
+            access_token,
+            "quote_send_intents",
+            "id,metadata_json",
+            DEMO_REVISION_ID,
+            "quote_revision_id",
+        )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Authenticated RLS smoke: failed ({exc.__class__.__name__})")
         return False
@@ -305,8 +363,18 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             and len(direct_documents) == 0
             and isinstance(direct_approvals, list)
             and len(direct_approvals) == 0
+            and isinstance(direct_quote_artifacts, list)
+            and len(direct_quote_artifacts) == 0
+            and isinstance(direct_quote_send_intents, list)
+            and len(direct_quote_send_intents) == 0
         )
         print(f"Authenticated direct sensitive table read: {'ok' if direct_sensitive_read_blocked else 'failed'}")
+        direct_storage_read_blocked = expect_storage_list_no_direct_visibility(
+            env,
+            access_token,
+            "quote-documents",
+            "Authenticated direct quote-documents storage list",
+        )
         cross_write_blocked = expect_authenticated_rest_denied(
             env,
             second_access_token,
@@ -325,6 +393,7 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
         return (
             cross_read_ok
             and direct_sensitive_read_blocked
+            and direct_storage_read_blocked
             and cross_write_blocked
             and sales_direct_write_blocked
             and viewer_direct_write_blocked
@@ -438,6 +507,83 @@ def verify_approval_consumption_rpc(cur: Any) -> bool:
     trigger_ok = trigger_count == 1
     print(f"Quote HTML approved-revision trigger: {'ok' if trigger_ok else 'missing'}")
     return ok and trigger_ok
+
+
+def verify_p10_rpc_grants(cur: Any) -> bool:
+    expected_functions = [
+        "persist_quote_artifact_with_idempotency",
+        "prepare_quote_send_intent_with_idempotency",
+    ]
+    ok = True
+    for function_name in expected_functions:
+        cur.execute(
+            """
+            select count(*)
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public'
+              and p.proname = %s
+            """,
+            (function_name,),
+        )
+        function_count = cur.fetchone()[0]
+        if function_count != 1:
+            print(f"{function_name} RPC: missing")
+            ok = False
+            continue
+        cur.execute(
+            """
+            select grantee
+            from information_schema.routine_privileges
+            where specific_schema = 'public'
+              and routine_name = %s
+              and privilege_type = 'EXECUTE'
+            """,
+            (function_name,),
+        )
+        grantees = {row[0] for row in cur.fetchall()}
+        grants_ok = "service_role" in grantees and "anon" not in grantees and "authenticated" not in grantees
+        print(f"{function_name} RPC grants: {'ok' if grants_ok else 'failed'}")
+        ok = ok and grants_ok
+    return ok
+
+
+def verify_p10_schema_guards(cur: Any) -> bool:
+    expected_constraints = {
+        "quote_artifacts": [
+            "sha256 = source_document_hash",
+            "content_type = 'text/html; charset=utf-8'::text",
+            "storage_bucket = 'quote-documents'::text",
+            "pdf_status = 'deferred'::text",
+        ],
+        "quote_send_intents": [
+            "status <> 'sent'::text",
+            "external_delivery_attempted = false",
+            "quote_sent = false",
+            "production_package_triggered = false",
+            "email_provider_configured = false",
+            "provider_status <> 'provider_configured'::text",
+        ],
+    }
+    ok = True
+    for table, markers in expected_constraints.items():
+        cur.execute(
+            """
+            select pg_get_constraintdef(c.oid)
+            from pg_constraint c
+            join pg_class t on t.oid = c.conrelid
+            join pg_namespace n on n.oid = t.relnamespace
+            where n.nspname = 'public'
+              and t.relname = %s
+              and c.contype = 'c'
+            """,
+            (table,),
+        )
+        defs = "\n".join(row[0] for row in cur.fetchall())
+        table_ok = all(marker in defs for marker in markers)
+        print(f"P10 {table} DB guards: {'ok' if table_ok else 'failed'}")
+        ok = ok and table_ok
+    return ok
 
 
 def main() -> int:
@@ -595,6 +741,8 @@ def main() -> int:
                 cur.execute("select id from storage.buckets where id = any(%s)", (REQUIRED_BUCKETS,))
                 found_buckets = {row[0] for row in cur.fetchall()}
                 approval_consumption_rpc_ok = verify_approval_consumption_rpc(cur)
+                p10_rpc_grants_ok = verify_p10_rpc_grants(cur)
+                p10_schema_guards_ok = verify_p10_schema_guards(cur)
                 guard_ok = verify_configuration_database_guards(cur)
     except Exception as exc:
         print(f"Cannot verify Supabase database: {safe_exception_label(exc)}")
@@ -630,6 +778,10 @@ def main() -> int:
     if not guard_ok:
         failed = True
     if not approval_consumption_rpc_ok:
+        failed = True
+    if not p10_rpc_grants_ok:
+        failed = True
+    if not p10_schema_guards_ok:
         failed = True
     if not verify_authenticated_rls(env):
         failed = True

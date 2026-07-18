@@ -96,7 +96,7 @@ Validation rules:
 - Generated object keys; no user-controlled path segments.
 - SHA-256, content type, size, source revision, and object key/version metadata.
 - Malware scanning adapter, deterministic local no-op/mock allowed for dev.
-- Short-lived signed URLs.
+- Short-lived signed URLs only when a future route can safely issue and audit them. P10 uses server-mediated downloads and does not return signed URL internals.
 - No executable rendering of untrusted HTML or SVG from uploads.
 
 ## Logging and Secret Contract

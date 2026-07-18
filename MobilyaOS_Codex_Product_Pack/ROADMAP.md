@@ -6,20 +6,21 @@ High priority:
 
 - Wire the Go core service to Supabase PostgreSQL repositories using the tenant-scoped migration constraints.
 - Move the P6/P7 deterministic wardrobe snapshot and quote lifecycle paths from the Next.js server boundary into the long-term backend/domain service or clearly preserve them as audited adapters until Go repositories are live.
-- Extend the P9 frozen HTML and guarded customer approval lifecycle into deterministic binary PDF generation, customer-facing delivery, quote send transitions, and production-package persistence.
+- Extend the P10 frozen HTML, stored artifact, guarded customer approval, and audited send-intent lifecycle into deterministic binary PDF generation, customer-facing delivery, quote send transitions, and production-package persistence.
 - Replace or remove the remaining lower-page legacy P3 Go demo controls now that the Supabase lifecycle panel owns persisted document/fork/diff behavior.
 - Harden the local-demo session boundary into production auth with hashed/rotating sessions, revocation, device tracking, rate limiting, and audit trails.
 - Replace the current process-local development rate limits with a durable distributed limiter for production deployment.
 - Replace static compute demo tokens with hashed, expiring sessions and revocation.
 - Extend the Phase 6 read-only web agent route into real Supabase-backed server tool execution with persisted tool invocations, read-audit policy, correlation IDs, and policy/catalog sync validation.
 - Move durable idempotency, domain write, and audit append into one SQL/RPC transaction for all mutating endpoints, matching the P6 snapshot persistence pattern.
-- Extend the approval-token workflow into delivery/send:
+- Extend the approval-token and P10 send-intent workflow into delivery/send:
   - keep the P9 one-time consumption contract, replay/expiry/stale binding handling, no-secret response shape, and guarded draft-to-approved transition
-  - add explicit human/customer delivery intent before any quote send
+  - keep P10 stored-artifact binding, no locator leakage, and audited send-intent preparation
+  - add explicit human/customer delivery intent before any external quote send
   - bind send transition to company, actor/customer identity, revision id/version, document hash, approved status, action, and idempotency key
   - audit issue, deny, consume, replay, final approval, and send decisions
 - Implement deterministic PDF generation from the same cost snapshot used by HTML preview.
-- Move generated quote artifacts from database-held HTML into object storage with server-only keys, versioned metadata, checksums, and authenticated/signed short-lived retrieval when binary PDF generation lands.
+- Add a deterministic binary-PDF renderer/adapter that writes a second object-storage artifact with server-only keys, versioned metadata, checksums, controlled retrieval, and PDF-total-to-cost-snapshot tests.
 - Run and fix `go test ./...` in an environment with Go installed.
 - Add CI-hosted verification for the cloud path. Docker Desktop is not an active local requirement for this machine.
 
@@ -53,11 +54,11 @@ Lower priority:
 
 ## Recommended Next Phase
 
-The next phase should focus on turning the P9 approved HTML quote lifecycle into a controlled delivery and production-readiness workflow:
+The next phase should focus on turning the P10 approved, stored HTML quote lifecycle into a controlled delivery and production-readiness workflow:
 
 1. Wire core repositories to Supabase PostgreSQL with tenant predicates.
-2. Add deterministic binary PDF generation and object-storage metadata from the same frozen cost snapshot and document hash.
-3. Promote the P9 read-only send gate into an explicit quote-send workflow only after provider configuration, idempotency, audit, no-secret delivery, and customer intent tests exist.
+2. Add deterministic binary PDF generation and object-storage metadata from the same frozen cost snapshot, document hash, and approved revision version.
+3. Promote the P10 send-intent gate into an explicit quote-send workflow only after provider configuration, idempotency, audit, no-secret delivery, and customer intent tests exist.
 4. Transactionally integrate remaining draft mutations with domain write/audit append.
 5. Expand the read-only web agent route into authorized application queries through the gateway policy layer with persisted tool invocation records.
 6. Add Playwright E2E, Go integration tests, session/mutation security tests, and cloud verification to CI.

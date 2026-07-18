@@ -1,7 +1,7 @@
 # MobilyaOS Implementation Status
 
 Run ID: `20260715T040315+0300`
-Current scope: P9 customer approval finalization, customer-safe approval UI, artifact/send-gate hardening on the Supabase Cloud path
+Current scope: P10 deterministic artifact storage and audited quote send-intent workflow on the Supabase Cloud path
 Parent orchestrator: `parent_codex`
 Created: 2026-07-15
 
@@ -22,6 +22,69 @@ Created: 2026-07-15
 | P7 - Frozen quote lifecycle | P7 | Passed | Frozen HTML quote documents, persisted revision fork/diff, admin-only approval-gate preparation, sanitized document/chat reads, and P7 security/QA smoke tests passed. |
 | P8 - Secure artifact and approval consumption | P8 | Passed | Document JSON is metadata-only, artifact HTML is served through an authenticated controlled preview route, approval-token consumption/replay/expiry is sanitized and audited, same-origin/rate-limit guards are in place, prompt-injection tests include malicious tool output, and non-Docker validation passed. |
 | P9 - Customer approval finalization and send gate | P9 | Passed | Guarded approval-token finalization, customer-safe approval UI, read-only send gate, approved-revision document guard, runtime-agent read-only send-gate tools, docs, live Supabase validation, web smokes, compute tests, pack validation, secret scan, and diff checks passed. |
+| P10 - Deterministic artifact storage and send intent | P10 | Passed | Deterministic approved HTML artifact storage, controlled artifact download, audited send-intent preparation, P10 Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
+
+## P10 Deterministic Artifact Storage And Send Intent Plan
+
+Run ID: `20260718T010000+0300-p10`
+
+Sidecar assignments:
+
+- `domain_architect`: read-only review of official artifact/PDF invariants, artifact provenance/immutability, send eligibility/status vocabulary, production deferral, and LLM non-authority.
+- `security_reviewer`: read-only review of artifact access/storage leakage, send-state/recipient forgery, provider secret leakage, tenant/IDOR, CSRF/fetch-metadata, rate limiting, idempotency, audit, and prompt/tool-output injection.
+- `qa_reviewer`: read-only review of artifact generation/access and send-intent smoke coverage.
+
+Implementation sequence:
+
+1. Inspect available dependencies before choosing PDF scope. Current local dependencies do not include a safe binary-PDF renderer, so P10 will keep deterministic HTML as the verified official artifact and add a documented PDF adapter boundary.
+2. Add a non-destructive Supabase migration for `quote_artifacts` and `quote_send_intents`, both tenant-owned, RLS-enabled, no direct authenticated reads, and persisted only through service-role routes/RPCs.
+3. Store deterministic HTML artifact bytes in the existing private `quote-documents` bucket with server-chosen paths and sanitized database metadata. Browser responses must never expose raw storage paths or signed URL internals.
+4. Add server-mediated artifact list/detail/download routes. Artifact generation must require an approved revision, approved approval gate, frozen document binding, current hash provenance, writer role, idempotency, audit, and same-origin/fetch-metadata controls.
+5. Promote send gate into send-intent preparation. Send-intent POST must require approved revision plus stored artifact state, derive recipient availability server-side, append audit, be idempotent, and keep external delivery disabled when no safe provider is configured.
+6. Update UI, read-only chat facts/policy, smoke tests, Supabase verification, docs, and OpenAPI.
+
+Stop conditions:
+
+- Stop before claiming completion if artifact access, storage path leakage, send-intent policy, tenant isolation, or provider-secret handling cannot be verified.
+- Do not implement external email delivery, production package generation, runtime agent mutation execution, destructive migrations, or Docker/Go/Make-dependent PDF generation.
+
+## P10 Decisions And Sidecar Findings
+
+- `domain_architect` severity: no critical blockers after adopting append-only/content-addressed artifact metadata, approved-revision binding, stored HTML as the only verified official artifact, and non-authoritative chat summaries. Binary PDF remains deferred until a deterministic renderer is present.
+- `security_reviewer` severity: high findings were identified for incomplete P10 route/tests, browser-forgeable artifact metadata, provider/send-state forgery, and storage locator leakage. Correctives added server-derived artifact path/hash/size/content type, service-role-only RPCs, metadata constraints, route body allowlists, no direct table reads, no signed URL/raw path responses, and live smoke/verifier coverage.
+- `qa_reviewer` severity: high coverage gaps were identified for artifact list/detail/download, send-intent preconditions, tenant/role boundaries, idempotency, audit, prompt injection, and artifact/hash compatibility. Correctives expanded session and mutation smokes plus compute policy tests.
+- Approved quote artifacts are persisted only after the quote revision is approved, the approval gate is approved, the frozen document hash matches, and the stored object hash equals the frozen document hash.
+- The browser never supplies artifact storage path, hash, content type, status, provider status, recipient, send status, or delivery flags as authority.
+- Direct authenticated table reads of `quote_artifacts` and `quote_send_intents` return no rows; direct quote-documents storage listing either denies or exposes no object metadata.
+- Send-intent preparation is audited and idempotent, but external delivery remains disabled with `email_provider_configured: false`, `quote_sent: false`, and `production_package_triggered: false`.
+- Runtime agent/chat policy remains read-only. It can explain artifact/send-preparation status and must deny artifact generation, PDF generation, quote send, approval-token consumption, authoritative calculation, and production actions.
+
+## P10 Verification Log
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required values configured; database URL structures valid; no values printed. |
+| `py -3.12 -m py_compile scripts\supabase_common.py scripts\check_supabase_env.py scripts\apply_supabase_migrations.py scripts\seed_supabase.py scripts\verify_supabase_connection.py scripts\secret_scan.py` | Passed | Supabase and secret-scan helpers compile. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0011_quote_artifact_storage_send_intents.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo Auth users existed or were updated; demo tenant data was reseeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live DB/RLS/storage/tenant checks passed, including P10 tables, RPC grants, table guards, direct sensitive read denial, and quote-documents object metadata non-visibility. |
+| `npm run test -w apps/web` | Passed | Static server-boundary check passed with P10 route/policy markers. |
+| `npm run typecheck -w apps/web` | Passed | TypeScript completed. |
+| `npm run build -w apps/web` | Passed | Production build includes artifact and send-intent routes. |
+| `npm run test:session -w apps/web` | Passed | Session/chat smoke passed with artifact/send-gate explanation and mutation denial coverage. |
+| `npm run test:mutations -w apps/web` | Passed | Live mutation smoke passed artifact storage/list/detail/download, hash/document/snapshot compatibility, send-intent preparation, tenant/RBAC/idempotency/audit/sanitization, and no external send. |
+| `npm run test --workspaces --if-present` | Passed with placeholder contracts | Web boundary check passed; contracts test remains a placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed with placeholder contracts | Web TypeScript passed; contracts typecheck remains a placeholder. |
+| `npm run build --workspaces --if-present` | Passed with placeholder contracts | Web production build passed; contracts build remains a placeholder. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | No lint findings. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Mypy passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 44 passed; one known FastAPI/Starlette TestClient deprecation warning. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Prompt/product/orchestration pack validation passed. |
+| `npm run secret-scan` | Passed | Tracked-file secret scan found no secret-like values. |
+| `git diff --check` | Passed with warnings | No whitespace errors; Git reported CRLF conversion warnings only. |
+| `go version` | Blocked | Go is not on PATH, so Go core tests remain blocked. |
+| `make --version` | Blocked | GNU Make is not on PATH, so Makefile gates remain blocked. |
+| `docker info --format '{{.ServerVersion}}'` | Blocked | Docker CLI cannot reach the Docker Desktop/Linux engine pipe. |
 
 ## P9 Customer Approval Finalization Plan
 
@@ -213,6 +276,7 @@ Primary bounded contexts:
 - ADR-0008: Persist frozen quote lifecycle state through audited service-role RPCs and expose only sanitized server routes.
 - ADR-0009: Secure quote artifacts through controlled server routes and treat approval-token consumption as audited non-send/non-status-changing state.
 - ADR-0010: Customer approval finalization may approve a draft only through the guarded service-role RPC while send, binary PDF, and production remain deferred.
+- ADR-0011: Approved quote HTML artifacts are stored in private object storage through server-owned paths, while send remains an audited intent until binary PDF and provider delivery are safely implemented.
 
 ## P1 Outputs
 

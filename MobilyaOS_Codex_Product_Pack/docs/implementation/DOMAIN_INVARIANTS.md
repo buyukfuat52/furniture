@@ -1,6 +1,6 @@
 # Domain Invariants
 
-MobilyaOS is in a Supabase-backed post-P5.5 demo/session phase. The application may still keep selected demo behaviors lightweight, but the domain boundary must already assume that tenant, session, role, quote, costing, and approval decisions are server-side responsibilities.
+MobilyaOS is in a Supabase-backed P10 demo/session phase. The application may still keep selected demo behaviors lightweight, but the domain boundary must already assume that tenant, session, role, quote, costing, artifact, send-intent, and approval decisions are server-side responsibilities.
 
 ## Tenant, Session, User, and Role Invariants
 
@@ -33,7 +33,7 @@ Allowed during the current Supabase-backed build-train checkpoint:
 
 - Establish authenticated tenant context through a durable local-demo session.
 - Read seeded Supabase demo company, customer, project, quote, BOM, cost, document, approval, revision, and audit data through server-side tenant scope.
-- Accept the first Supabase-backed mutation commands only for creating customers, creating projects, creating quote drafts, creating/updating quote configuration drafts, calculating the narrow wardrobe snapshot, generating frozen HTML quote documents, forking quote revisions, preparing admin-only approval gates, consuming approval tokens through the guarded approval-finalization RPC, and appending audit entries.
+- Accept the first Supabase-backed mutation commands only for creating customers, creating projects, creating quote drafts, creating/updating quote configuration drafts, calculating the narrow wardrobe snapshot, generating frozen HTML quote documents, forking quote revisions, preparing admin-only approval gates, consuming approval tokens through the guarded approval-finalization RPC, storing approved deterministic HTML artifacts, preparing audited send intents without delivery, and appending audit entries.
 - Accept the first deterministic persisted calculation command only for the saved wardrobe configuration draft on a tenant-scoped draft quote revision.
 - Read and list quote revisions through tenant-scoped backend routes.
 - Read current project/revision/configuration/snapshot context through the read-only web agent chat route.
@@ -74,15 +74,18 @@ Route-specific invariants:
 - Prepare approval gate: `admin` only. Creates a pending approval gate bound to revision version, frozen document, document hash, cost snapshot, snapshot hash, expiry, and approval token version. It stores only token hash material and never returns a raw token or token hash.
 - Consume approval token: accepts only a strict token body, hashes it server-side, validates token hash, expiry, replay state, company, quote revision id/version, current configuration provenance, cost snapshot id/hash, frozen document id/hash, and draft quote status. A valid pending token may transition the bound draft quote revision to `approved` inside the service-role RPC and append audit rows. Invalid, expired, replayed, stale, mismatched, or non-draft tokens must not change quote status. The response must not send a quote, expose tenant/document/revision identifiers, expose token material, or create a production package.
 - Read send gate: returns only sanitized, tenant-scoped readiness/deferred-action metadata for the authenticated session. P9 send-gate status must not send email, expose delivery secrets, mark PDF final, or create production state.
+- Store quote artifact: `sales` or `admin` only. Stores deterministic HTML artifact bytes only after the revision is approved, the approval gate is approved, the frozen document binding matches, and the object hash equals the frozen document hash. The browser must not supply storage path, bucket, hash, content type, size, status, PDF state, recipient, provider, send state, or metadata authority. Responses must not expose raw storage paths, signed URL internals, storage credentials, provider secrets, recipient email, or raw HTML.
+- Read/download quote artifact: metadata reads and downloads are tenant-scoped server routes. Download must fetch bytes with server credentials, verify SHA-256 before returning content, use no-store/nosniff/sandboxed headers, and never expose object-storage locators or signed URL internals.
+- Prepare send intent: `sales` or `admin` only. Requires approved revision, approved approval gate, frozen document binding, stored HTML artifact binding, current revision version, and durable idempotency. Recipient availability is derived server-side. Until a safe email provider exists, the command must keep external delivery disabled, quote status unchanged, and production package creation disabled.
 - Read/list quote revisions: returns only revisions visible to the resolved company and user role. Revision reads are non-mutating and must not recalculate, approve, send, finalize, or promote a quote.
 - Append audit: records audit entries using trusted server-derived company, app user, session, timestamp, route/action, and request provenance. Browser-provided actor, company, tenant, user, role, timestamp, and session identifiers are never authoritative.
 
 Role invariants for these routes:
 
 - `viewer` is read-only. A viewer may read tenant-authorized data and quote revisions, but must not create customers, projects, quote drafts, configuration drafts, snapshots, documents, forks, audit entries through user commands, sends, approvals, PDFs, or production packages.
-- `sales` may create customers, projects, quote drafts, create/update quote configuration drafts, run the deterministic snapshot calculation, generate frozen HTML quote documents, and fork revisions for the resolved company when route-specific validation passes.
+- `sales` may create customers, projects, quote drafts, create/update quote configuration drafts, run the deterministic snapshot calculation, generate frozen HTML quote documents, fork revisions, store approved HTML artifacts, and prepare non-delivering send intents for the resolved company when route-specific validation passes.
 - `admin` may do the same writer actions as `sales` and may prepare approval gates.
-- Risky quote actions remain deferred for all roles unless an explicit domain gate exists. P9 allows only approval-token-consumption-driven draft-to-approved finalization through the service-role RPC. Quote send, final binary PDF generation, production package creation, and downstream operational release remain deferred.
+- Risky quote actions remain deferred for all roles unless an explicit domain gate exists. P9 allows only approval-token-consumption-driven draft-to-approved finalization through the service-role RPC. P10 allows only audited send-intent preparation after artifact binding. External quote send, final binary PDF generation, production package creation, and downstream operational release remain deferred.
 
 Idempotency expectations:
 
@@ -96,7 +99,7 @@ Idempotency expectations:
 
 ## Deterministic Domain Responsibilities
 
-BOM, cost, tax, margin, edge banding, labor, quote totals, frozen documents, revision fork/diff, approval-gate preparation, approval-token finalization, and send-gate status remain deterministic backend/domain responsibilities. P6/P7/P8/P9 implement one narrow wardrobe persisted quote lifecycle; everything outside that slice remains deferred to future deterministic backend/domain services.
+BOM, cost, tax, margin, edge banding, labor, quote totals, frozen documents, stored artifacts, revision fork/diff, approval-gate preparation, approval-token finalization, send-gate status, and send-intent preparation remain deterministic backend/domain responsibilities. P6/P7/P8/P9/P10 implement one narrow wardrobe persisted quote lifecycle; everything outside that slice remains deferred to future deterministic backend/domain services.
 
 LLM output and frontend calculations may be used only as suggestions, previews, or input collection aids. They must not become the source of truth for:
 
@@ -124,8 +127,8 @@ Required constraints for future status transitions:
 - Direct browser writes of `approved`, `sent`, `accepted`, `rejected`, or any other quote status are invalid. There is no PATCH/POST status route in the current Supabase surface.
 - Status changes are commands validated by the backend/domain layer, not direct browser writes.
 - In P9, a quote can move from draft to approved only through the service-role approval-token consumption RPC after all token, revision-version, snapshot, document, and current-provenance bindings match.
-- A quote can move from approved to sent only after deterministic totals are current and the backend confirms send eligibility.
-- A PDF can be marked final only when generated from the approved quote snapshot and linked to that immutable quote version.
+- A quote can move from approved to sent only after deterministic totals are current, approved artifacts are bound, a safe provider is configured, human/customer delivery intent is captured, and the backend confirms send eligibility.
+- A PDF can be marked final only when generated from the approved quote snapshot and linked to that immutable quote version. P10 stored HTML artifacts do not imply binary PDF readiness.
 - A production package can be created only from an approved or otherwise explicitly production-authorized quote snapshot.
 - Rejection, cancellation, expiry, or revision must prevent stale send/PDF/production actions from using superseded totals or artifacts.
 - Every approval, send, final PDF, and production package transition must record backend-derived tenant, timestamp, source quote version, resulting status, and the safest available actor/customer provenance without exposing token material.
@@ -142,7 +145,9 @@ Current Supabase-backed scope:
 - Tenant-scoped create/update routes for quote configuration draft input with `not_calculated` status.
 - Tenant-scoped deterministic wardrobe BOM/cost snapshot calculation and current snapshot reads.
 - Tenant-scoped guarded approval-token finalization from draft to approved when the current revision/document/snapshot bindings match.
-- Tenant-scoped read-only send-gate status that keeps email delivery, binary PDF generation, and production-package creation deferred.
+- Tenant-scoped private object-storage-backed HTML artifact storage and controlled download after approved revision/document/snapshot binding.
+- Tenant-scoped audited send-intent preparation that keeps email delivery, binary PDF generation, quote sent state, and production-package creation deferred.
+- Tenant-scoped read-only send-gate status that reports artifact/send-intent state while keeping email delivery, binary PDF generation, and production-package creation deferred.
 - Backend-owned audit append for accepted route actions.
 - Backend/database policy enforcement for tenant-scoped reads, authenticated direct-write denial, and first scoped mutations wired into the current demo flow.
 - A local-demo browser session intended to survive reloads until expiry or logout.
@@ -151,7 +156,7 @@ Current Supabase-backed scope:
 Remaining in-memory or mock scope:
 
 - Any flow not yet wired to Supabase persistence.
-- Quote send, official binary PDF, production package, and downstream operational mutations in the current web flow.
+- External quote send, official binary PDF, production package, and downstream operational mutations in the current web flow.
 - Any customer, project, quote, revision, or audit behavior outside the first scoped routes defined above.
 - Placeholder catalogs, pricing tables, quote send records, PDF outputs, production package records, and downstream operational integrations.
 - Client previews that help users understand pending changes before backend/domain acceptance.

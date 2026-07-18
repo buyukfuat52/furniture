@@ -219,6 +219,30 @@ export type SupabaseQuoteDocument = {
 
 export type SupabaseQuoteDocumentPreview = SupabaseQuoteDocument;
 
+export type SupabaseQuoteArtifact = {
+  id: string;
+  revision_id: string;
+  generated_document_id: string;
+  cost_snapshot_id: string | null;
+  artifact_type: "quote_html_storage" | "quote_pdf";
+  status: "stored" | "metadata_recorded" | "failed";
+  content_type: string;
+  sha256: string;
+  size_bytes: number;
+  artifact_version: string;
+  renderer_version: string;
+  revision_version: number;
+  snapshot_hash: string;
+  source_document_hash: string;
+  pdf_status: "deferred" | "generated";
+  storage_status: "object_stored";
+  access_model: "server_mediated_download";
+  signed_url_returned: false;
+  external_url_generated: false;
+  created_at: string;
+  deferred_actions: string[];
+};
+
 export type SupabaseQuoteForkResponse = {
   quote_revision: SupabaseQuoteRevision;
   configuration_draft: SupabaseQuoteConfigurationDraft | null;
@@ -272,17 +296,38 @@ export type SupabaseApprovalConsumption = {
 export type SupabaseSendGateStatus = {
   revision_id: string;
   quote_status: string;
-  status: "not_ready" | "prepared_deferred";
+  status: "send_blocked" | "send_deferred" | "send_prepared";
   eligible_to_send: false;
+  eligible_to_prepare_send: boolean;
   approved_revision: boolean;
   frozen_document_bound: boolean;
   document_hash_bound: boolean;
   snapshot_hash_bound: boolean;
+  artifact_bound: boolean;
   email_provider_configured: false;
+  latest_send_intent_status: "none" | "send_prepared" | "send_deferred" | "send_blocked" | "sent";
   quote_send_triggered: false;
   production_package_triggered: false;
-  artifact_status: "html_verified_pdf_deferred";
+  artifact_status: "html_storage_missing" | "html_stored_pdf_deferred";
   blocking_reasons: string[];
+  deferred_actions: string[];
+};
+
+export type SupabaseQuoteSendIntent = {
+  id: string;
+  revision_id: string;
+  artifact_id: string;
+  generated_document_id: string;
+  status: "send_prepared" | "send_deferred" | "send_blocked" | "sent";
+  provider_status: "provider_missing" | "provider_configured" | "not_attempted";
+  recipient_source: "project_customer" | "missing_customer_email";
+  recipient_available: boolean;
+  email_provider_configured: boolean;
+  external_delivery_attempted: false;
+  quote_sent: false;
+  production_package_triggered: false;
+  send_version: string;
+  created_at: string;
   deferred_actions: string[];
 };
 

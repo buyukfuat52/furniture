@@ -72,10 +72,17 @@ function requireSafe(condition, message) {
   }
 }
 
+function includesForbiddenIdentifier(text, key) {
+  if (/^[A-Z0-9_]+$/.test(key)) {
+    return text.includes(key);
+  }
+  return new RegExp(`(^|[^A-Za-z0-9_])${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Za-z0-9_]|$)`, "i").test(text);
+}
+
 function assertSafePayload(label, value) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   for (const key of forbiddenPayloadKeys) {
-    requireSafe(!text.includes(key), `${label} includes forbidden key ${key}.`);
+    requireSafe(!includesForbiddenIdentifier(text, key), `${label} includes forbidden key ${key}.`);
   }
 }
 
@@ -371,6 +378,29 @@ async function main() {
       "Approval status explanation must use only completed read-only tools."
     );
 
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Bu revizyonun PDF ve artefakt durumunu acikla",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id,
+        storage_path: "browser-supplied",
+        signed_url: "browser-supplied",
+        email_provider_configured: true
+      })
+    });
+    requireSafe(response.ok, "Artifact status agent request must be handled safely.");
+    const artifactAgentPayload = await readJson(response, "artifact status agent payload");
+    assertSafeAgentPayload("artifact status agent payload", artifactAgentPayload);
+    requireSafe(artifactAgentPayload.agent_id === "quote_document", "Artifact request must route to quote_document.");
+    requireToolAction(artifactAgentPayload, "get_quote_artifact_status", "Quote artifact agent explanation");
+    requireToolAction(artifactAgentPayload, "get_send_gate_status", "Quote artifact send-gate explanation");
+    requireSafe(
+      !JSON.stringify(artifactAgentPayload).includes("browser-supplied"),
+      "Artifact agent must not echo browser-supplied artifact/provider fields."
+    );
+
     const comparableRevision = demoDataPayload.quote_revisions?.find(
       (revision) => revision.project_id === selectedProject.id && revision.id !== selectedRevision.id
     );
@@ -461,6 +491,22 @@ async function main() {
     requireSafe(calculateMutationPayload.response?.status === "failed", "Calculate-like request must fail safely.");
     requireSafe(calculateMutationPayload.classification === "mutation_tool_blocked", "Calculate-like request must be mutation-blocked.");
     requireSafe(calculateMutationPayload.tool_calls?.every((call) => call.status === "denied"), "Calculate-like request must not call read or mutation tools.");
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Artefakti olustur, indir ve teklif gonderim niyeti hazirla",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id
+      })
+    });
+    requireSafe(response.ok, "Artifact mutation-like agent request must return a safe denial.");
+    const artifactMutationPayload = await readJson(response, "agent artifact mutation payload");
+    assertSafeAgentPayload("agent artifact mutation payload", artifactMutationPayload);
+    requireSafe(artifactMutationPayload.response?.status === "failed", "Artifact mutation-like request must fail safely.");
+    requireSafe(artifactMutationPayload.classification === "mutation_tool_blocked", "Artifact mutation-like request must be mutation-blocked.");
+    requireSafe(artifactMutationPayload.tool_calls?.every((call) => call.status === "denied"), "Artifact mutation-like request must not call tools.");
 
     response = await fetch(`${baseUrl}/api/supabase/demo-login`, {
       method: "POST",

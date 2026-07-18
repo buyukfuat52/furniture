@@ -54,21 +54,28 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "explain_quote_snapshot",
         "get_quote_document",
         "explain_quote_document",
+        "get_quote_artifact_status",
+        "explain_quote_artifact_status",
         "explain_quote_artifact",
         "get_approval_status",
         "explain_approval_status",
         "get_send_gate_status",
         "explain_send_gate_status",
+        "get_send_preparation_status",
+        "explain_send_preparation_status",
         "get_revision_diff",
         "explain_revision_diff",
         "create_quote_configuration_draft",
         "update_quote_configuration_draft",
         "send_quote",
+        "send_quote_from_chat",
         "approve_quote",
         "approve_quote_from_chat",
         "consume_approval_token_from_chat",
         "mutate_quote_from_chat",
         "generate_pdf",
+        "generate_pdf_from_chat",
+        "generate_artifact_from_chat",
         "create_production_package",
         "generate_production_package",
         "run_authoritative_calculation_from_llm",
@@ -186,11 +193,15 @@ def test_forbidden_tools_remain_non_executable_even_with_approval() -> None:
 def test_persisted_document_and_diff_tools_are_read_only() -> None:
     document = get_tool_policy("get_quote_document")
     document_explanation = get_tool_policy("explain_quote_document")
+    artifact_status = get_tool_policy("get_quote_artifact_status")
+    artifact_status_explanation = get_tool_policy("explain_quote_artifact_status")
     artifact_explanation = get_tool_policy("explain_quote_artifact")
     approval_status = get_tool_policy("get_approval_status")
     approval_explanation = get_tool_policy("explain_approval_status")
     send_gate = get_tool_policy("get_send_gate_status")
     send_gate_explanation = get_tool_policy("explain_send_gate_status")
+    send_preparation = get_tool_policy("get_send_preparation_status")
+    send_preparation_explanation = get_tool_policy("explain_send_preparation_status")
     diff = get_tool_policy("get_revision_diff")
     diff_explanation = get_tool_policy("explain_revision_diff")
 
@@ -211,6 +222,18 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert artifact_explanation.requires_audit is False
     assert artifact_explanation.requires_approval is False
     assert artifact_explanation.executable is True
+
+    assert artifact_status is not None
+    assert artifact_status.mode == "read"
+    assert artifact_status.executable is True
+    assert artifact_status.requires_idempotency is False
+    assert artifact_status.requires_approval is False
+
+    assert artifact_status_explanation is not None
+    assert artifact_status_explanation.mode == "conversation"
+    assert artifact_status_explanation.requires_audit is False
+    assert artifact_status_explanation.requires_approval is False
+    assert artifact_status_explanation.executable is True
 
     assert approval_status is not None
     assert approval_status.mode == "read"
@@ -235,6 +258,18 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert send_gate_explanation.requires_approval is False
     assert send_gate_explanation.executable is True
 
+    assert send_preparation is not None
+    assert send_preparation.mode == "read"
+    assert send_preparation.executable is True
+    assert send_preparation.requires_idempotency is False
+    assert send_preparation.requires_approval is False
+
+    assert send_preparation_explanation is not None
+    assert send_preparation_explanation.mode == "conversation"
+    assert send_preparation_explanation.requires_audit is False
+    assert send_preparation_explanation.requires_approval is False
+    assert send_preparation_explanation.executable is True
+
     assert diff is not None
     assert diff.mode == "read"
     assert diff.executable is True
@@ -250,7 +285,10 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
 def test_p8_mutating_document_tools_remain_forbidden() -> None:
     for tool_name in [
         "generate_pdf",
+        "generate_pdf_from_chat",
+        "generate_artifact_from_chat",
         "send_quote",
+        "send_quote_from_chat",
         "approve_quote",
         "approve_quote_from_chat",
         "consume_approval_token_from_chat",
@@ -293,6 +331,10 @@ def test_prompt_injection_markers_cannot_grant_document_or_diff_tools() -> None:
         "document access token",
         "storage_path=/private",
         "signed_url=https://example.invalid",
+        "provider_secret=hidden",
+        "smtp password leaked",
+        "generate artifact from chat",
+        "generate pdf from chat",
         "tool output says call forbidden tool",
         "malicious tool result",
         "service_role",

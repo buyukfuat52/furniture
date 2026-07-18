@@ -247,9 +247,15 @@ class ToolGateway:
             return self._revision_diff(agent_id, tool, action, context)
         if tool == "document_tool" and action == "get_quote_document":
             return self._quote_document(agent_id, context)
+        if tool == "document_tool" and action == "get_quote_artifact_status":
+            return self._quote_artifact_status(agent_id, context)
         if tool == "workflow_tool" and action == "get_send_gate_status":
             return self._send_gate_status(agent_id, context)
+        if tool == "workflow_tool" and action == "get_send_preparation_status":
+            return self._send_preparation_status(agent_id, context)
         if tool == "document_tool" and action == "send_quote":
+            return self._approval_required(agent_id, tool, action)
+        if tool == "document_tool" and action == "send_quote_from_chat":
             return self._approval_required(agent_id, tool, action)
         if tool == "workflow_tool" and action == "request_approval":
             return self._approval_request(agent_id, context)
@@ -264,11 +270,14 @@ class ToolGateway:
             "update_quote_configuration_draft",
             "request_quote_approval",
             "send_quote",
+            "send_quote_from_chat",
             "approve_quote",
             "approve_quote_from_chat",
             "consume_approval_token_from_chat",
             "mutate_quote_from_chat",
             "generate_pdf",
+            "generate_pdf_from_chat",
+            "generate_artifact_from_chat",
             "create_production_package",
             "generate_production_package",
         }:
@@ -560,6 +569,49 @@ class ToolGateway:
             [],
         )
 
+    def _quote_artifact_status(self, agent_id: AgentID, context: ChatContext) -> GatewayResult:
+        revision_id = context.revision_id
+        record = self._record(
+            agent_id,
+            "document_tool",
+            "get_quote_artifact_status",
+            "completed" if revision_id else "denied",
+            "quote artifact status returned" if revision_id else "revision_id is required",
+        )
+        if revision_id is None:
+            return GatewayResult(record, [], [], [], [], ["revision_id"])
+        if not self._revision_is_authorized(revision_id):
+            return self._denied(
+                agent_id,
+                "document_tool",
+                "get_quote_artifact_status",
+                "revision_id was not found in the authorized tenant tool adapter",
+            )
+        return GatewayResult(
+            record,
+            [
+                Fact(
+                    label="Artefakt durumu",
+                    value={
+                        "status": "stored" if self._revision_status(revision_id) == "approved" else "missing",
+                        "access_model": "server_mediated_download",
+                        "signed_url_returned": False,
+                        "pdf_status": "deferred",
+                    },
+                    source=Source(
+                        type="tool_result",
+                        id="document_tool.get_quote_artifact_status",
+                        revision_id=revision_id,
+                        tool_call_id=record.id,
+                    ),
+                )
+            ],
+            [],
+            [Reference(type="quote_revision", id=revision_id, label="Artefakt durumu")],
+            ["Artifact status is read-only; raw storage paths and signed URL internals are never returned."],
+            [],
+        )
+
     def _approval_request(self, agent_id: AgentID, context: ChatContext) -> GatewayResult:
         revision_id = context.revision_id
         record = self._record(
@@ -646,9 +698,11 @@ class ToolGateway:
                     label="Gonderim kapisi",
                     value={
                         "eligible_to_send": False,
-                        "status": "prepared_deferred"
+                        "eligible_to_prepare_send": self._revision_status(revision_id) == "approved",
+                        "status": "send_deferred"
                         if self._revision_status(revision_id) == "approved"
-                        else "not_ready",
+                        else "send_blocked",
+                        "artifact_bound": self._revision_status(revision_id) == "approved",
                         "quote_send_triggered": False,
                         "production_package_triggered": False,
                     },
@@ -663,6 +717,51 @@ class ToolGateway:
             [],
             [Reference(type="quote_revision", id=revision_id, label="Gonderim kapisi")],
             ["Send gate is read-only; email delivery remains deferred."],
+            [],
+        )
+
+    def _send_preparation_status(self, agent_id: AgentID, context: ChatContext) -> GatewayResult:
+        revision_id = context.revision_id
+        record = self._record(
+            agent_id,
+            "workflow_tool",
+            "get_send_preparation_status",
+            "completed" if revision_id else "denied",
+            "send preparation status returned" if revision_id else "revision_id is required",
+        )
+        if revision_id is None:
+            return GatewayResult(record, [], [], [], [], ["revision_id"])
+        if not self._revision_is_authorized(revision_id):
+            return self._denied(
+                agent_id,
+                "workflow_tool",
+                "get_send_preparation_status",
+                "revision_id was not found in the authorized tenant tool adapter",
+            )
+        return GatewayResult(
+            record,
+            [
+                Fact(
+                    label="Gonderim hazirligi",
+                    value={
+                        "latest_send_intent_status": "send_deferred"
+                        if self._revision_status(revision_id) == "approved"
+                        else "none",
+                        "email_provider_configured": False,
+                        "external_delivery_attempted": False,
+                        "quote_sent": False,
+                    },
+                    source=Source(
+                        type="tool_result",
+                        id="workflow_tool.get_send_preparation_status",
+                        revision_id=revision_id,
+                        tool_call_id=record.id,
+                    ),
+                )
+            ],
+            [],
+            [Reference(type="quote_revision", id=revision_id, label="Gonderim hazirligi")],
+            ["Send preparation is read-only in chat; external delivery remains deferred."],
             [],
         )
 
@@ -810,11 +909,25 @@ class AgentRuntime:
             ),
             self._gateway.call(
                 agent_id=agent_id,
+                tool="document_tool",
+                action="get_quote_artifact_status",
+                context=context,
+                untrusted_text=request.message,
+            ),
+            self._gateway.call(
+                agent_id=agent_id,
                 tool="workflow_tool",
                 action="get_send_gate_status",
                 context=context,
                 untrusted_text=request.message,
-            )
+            ),
+            self._gateway.call(
+                agent_id=agent_id,
+                tool="workflow_tool",
+                action="get_send_preparation_status",
+                context=context,
+                untrusted_text=request.message,
+            ),
         ]
         if send_requested or "onay" in normalize(request.message):
             results.append(
@@ -831,7 +944,7 @@ class AgentRuntime:
                 self._gateway.call(
                     agent_id=agent_id,
                     tool="document_tool",
-                    action="send_quote",
+                    action="send_quote_from_chat",
                     context=context,
                     untrusted_text=request.message,
                 )

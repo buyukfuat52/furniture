@@ -223,7 +223,7 @@ paths:
   /supabase/quote-revisions/{revision_id}/send-gate:
     get:
       summary: Read quote send-gate status
-      description: Returns server-derived send eligibility and blocker metadata for a tenant-scoped quote revision. P9 keeps send non-executable, binary PDF deferred, and production package generation unavailable.
+      description: Returns server-derived send eligibility and blocker metadata for a tenant-scoped quote revision. P10 reports stored-artifact and send-intent preparation state, while external send, binary PDF, and production package generation remain unavailable.
       security:
         - bearerAuth: []
       parameters:
@@ -239,6 +239,144 @@ paths:
           description: Session required.
         "404":
           description: Tenant-scoped quote revision was not found.
+  /supabase/quote-revisions/{revision_id}/artifacts:
+    get:
+      summary: List stored quote artifacts
+      description: Returns sanitized tenant-scoped artifact metadata. The response never includes storage bucket/path values, signed URL internals, raw HTML, provider secrets, or recipient email.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized artifact list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifacts]
+                properties:
+                  artifacts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/QuoteArtifact"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
+    post:
+      summary: Store approved quote HTML artifact
+      description: Stores deterministic HTML artifact bytes in private object storage after approved revision, approved approval gate, frozen document, hash, snapshot, content type, size, and idempotency checks. The browser may provide only an idempotency key.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Sanitized stored artifact metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifact]
+                properties:
+                  artifact:
+                    $ref: "#/components/schemas/QuoteArtifact"
+        "403":
+          description: Caller role cannot store artifacts.
+        "409":
+          description: Approved revision, approval gate, or artifact binding is not ready.
+        "422":
+          description: Request body shape was rejected.
+  /supabase/artifacts/{artifact_id}:
+    get:
+      summary: Read stored quote artifact metadata
+      description: Returns sanitized tenant-scoped artifact metadata without storage locators, signed URLs, or raw HTML.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: artifact_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized artifact metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifact]
+                properties:
+                  artifact:
+                    $ref: "#/components/schemas/QuoteArtifact"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped artifact was not found.
+  /supabase/artifacts/{artifact_id}/download:
+    get:
+      summary: Download stored quote HTML artifact
+      description: Serves the private stored HTML artifact through an authenticated server-mediated route after SHA-256 verification. No storage path or signed URL is returned.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: artifact_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: HTML artifact attachment.
+          content:
+            text/html:
+              schema:
+                type: string
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped artifact was not found.
+  /supabase/quote-revisions/{revision_id}/send-intents:
+    post:
+      summary: Prepare audited quote send intent
+      description: Creates a non-delivering send intent after approved revision and stored-artifact binding. External delivery, quote-sent state, binary PDF finalization, and production-package creation remain disabled.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Sanitized send intent.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [send_intent]
+                properties:
+                  send_intent:
+                    $ref: "#/components/schemas/QuoteSendIntent"
+        "403":
+          description: Caller role cannot prepare send intents.
+        "409":
+          description: Approved revision or stored artifact binding is not ready.
+        "422":
+          description: Request body shape was rejected.
   /revisions/{revision_id}/fork:
     post:
       summary: Fork a quote revision and apply deterministic config patch
@@ -472,6 +610,145 @@ components:
           type: integer
         vat_bps:
           type: integer
+    QuoteArtifact:
+      type: object
+      required:
+        - id
+        - revision_id
+        - generated_document_id
+        - artifact_type
+        - status
+        - content_type
+        - sha256
+        - size_bytes
+        - artifact_version
+        - renderer_version
+        - revision_version
+        - snapshot_hash
+        - source_document_hash
+        - pdf_status
+        - storage_status
+        - access_model
+        - signed_url_returned
+        - external_url_generated
+        - deferred_actions
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        generated_document_id:
+          type: string
+          format: uuid
+        cost_snapshot_id:
+          type: string
+          format: uuid
+        artifact_type:
+          type: string
+          enum: [quote_html_storage, quote_pdf]
+        status:
+          type: string
+          enum: [stored, metadata_recorded, failed]
+        content_type:
+          type: string
+        sha256:
+          type: string
+        size_bytes:
+          type: integer
+        artifact_version:
+          type: string
+        renderer_version:
+          type: string
+        revision_version:
+          type: integer
+        snapshot_hash:
+          type: string
+        source_document_hash:
+          type: string
+        pdf_status:
+          type: string
+          enum: [deferred, generated]
+        storage_status:
+          type: string
+          enum: [object_stored]
+        access_model:
+          type: string
+          enum: [server_mediated_download]
+        signed_url_returned:
+          type: boolean
+          const: false
+        external_url_generated:
+          type: boolean
+          const: false
+        created_at:
+          type: string
+        deferred_actions:
+          type: array
+          items:
+            type: string
+    QuoteSendIntent:
+      type: object
+      required:
+        - id
+        - revision_id
+        - artifact_id
+        - generated_document_id
+        - status
+        - provider_status
+        - recipient_source
+        - recipient_available
+        - email_provider_configured
+        - external_delivery_attempted
+        - quote_sent
+        - production_package_triggered
+        - send_version
+        - deferred_actions
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        artifact_id:
+          type: string
+          format: uuid
+        generated_document_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [send_prepared, send_deferred, send_blocked]
+        provider_status:
+          type: string
+          enum: [provider_missing, not_attempted]
+        recipient_source:
+          type: string
+          enum: [project_customer, missing_customer_email]
+        recipient_available:
+          type: boolean
+        email_provider_configured:
+          type: boolean
+          const: false
+        external_delivery_attempted:
+          type: boolean
+          const: false
+        quote_sent:
+          type: boolean
+          const: false
+        production_package_triggered:
+          type: boolean
+          const: false
+        send_version:
+          type: string
+        created_at:
+          type: string
+        deferred_actions:
+          type: array
+          items:
+            type: string
     MoneyMinor:
       type: object
       required: [amount_minor, currency]

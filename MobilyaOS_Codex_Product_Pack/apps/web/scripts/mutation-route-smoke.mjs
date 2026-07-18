@@ -12,6 +12,7 @@ const fakeCustomerId = "00000000-0000-4000-8000-000000000001";
 const fakeProjectId = "00000000-0000-4000-8000-000000000002";
 const fakeQuoteRevisionId = "00000000-0000-4000-8000-000000000003";
 const fakeDocumentId = "00000000-0000-4000-8000-000000000004";
+const fakeArtifactId = "00000000-0000-4000-8000-000000000005";
 const demoCustomerId = "77777777-7777-4777-8777-777777777777";
 const demoProjectId = "44444444-4444-4444-8444-444444444444";
 const demoQuoteRevisionId = "14141414-1414-4141-8141-141414141414";
@@ -44,7 +45,10 @@ const forbiddenPayloadKeys = [
   "token_hash",
   "artifact_html",
   "raw_storage_path",
-  "database_password"
+  "database_password",
+  "provider_secret",
+  "smtp_password",
+  "provider_message_id"
 ];
 const forbiddenResponseFields = [
   "company_id",
@@ -60,7 +64,11 @@ const forbiddenResponseFields = [
   "approval_token",
   "artifact_html",
   "raw_storage_path",
-  "database_password"
+  "database_password",
+  "provider_secret",
+  "smtp_password",
+  "provider_message_id",
+  "recipient_email"
 ];
 const forgedPayloadMarkers = {
   company_id: "browser-supplied",
@@ -76,6 +84,11 @@ const forgedPayloadMarkers = {
   service_role: "browser-supplied",
   storage_path: "browser-supplied",
   raw_storage_path: "browser-supplied",
+  signed_url: "browser-supplied",
+  recipient_email: "browser-supplied@example.invalid",
+  provider_secret: "browser-supplied",
+  smtp_password: "browser-supplied",
+  provider_message_id: "browser-supplied",
   artifact_html: "browser-supplied",
   database_password: "browser-supplied",
   SUPABASE_SERVICE_ROLE_KEY: "browser-supplied",
@@ -136,11 +149,17 @@ function requireSafe(condition, message) {
   }
 }
 
+function includesForbiddenIdentifier(text, key) {
+  if (/^[A-Z0-9_]+$/.test(key)) {
+    return text.includes(key);
+  }
+  return new RegExp(`(^|[^A-Za-z0-9_])${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Za-z0-9_]|$)`, "i").test(text);
+}
+
 function assertSafePayload(label, value) {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
-  const normalized = text.toLowerCase();
   for (const key of forbiddenPayloadKeys) {
-    requireSafe(!normalized.includes(key.toLowerCase()), `${label} includes forbidden marker ${key}.`);
+    requireSafe(!includesForbiddenIdentifier(text, key), `${label} includes forbidden marker ${key}.`);
   }
 }
 
@@ -675,12 +694,75 @@ function assertSendGate(payload, expected, label) {
   requireSafe(sendGate?.revision_id === expected.quoteRevisionId, `${label} must bind to the quote revision.`);
   requireSafe(sendGate.quote_status === expected.quoteStatus, `${label} quote status must be ${expected.quoteStatus}.`);
   requireSafe(sendGate.approved_revision === expected.approved, `${label} approved flag must be ${expected.approved}.`);
-  requireSafe(sendGate.eligible_to_send === false, `${label} must never become send-executable in P9.`);
+  requireSafe(sendGate.eligible_to_send === false, `${label} must never become send-executable in P10.`);
+  if (typeof expected.eligibleToPrepare === "boolean") {
+    requireSafe(
+      sendGate.eligible_to_prepare_send === expected.eligibleToPrepare,
+      `${label} prepare flag must be ${expected.eligibleToPrepare}.`
+    );
+  }
+  if (typeof expected.artifactBound === "boolean") {
+    requireSafe(sendGate.artifact_bound === expected.artifactBound, `${label} artifact bound flag must be ${expected.artifactBound}.`);
+  }
   requireSafe(sendGate.quote_send_triggered === false, `${label} must not send a quote.`);
   requireSafe(sendGate.production_package_triggered === false, `${label} must not trigger production package.`);
   requireSafe(sendGate.email_provider_configured === false, `${label} must report no configured email provider.`);
-  requireSafe(sendGate.artifact_status === "html_verified_pdf_deferred", `${label} must keep binary PDF deferred.`);
+  if (expected.artifactStatus) {
+    requireSafe(sendGate.artifact_status === expected.artifactStatus, `${label} artifact status must be ${expected.artifactStatus}.`);
+  } else {
+    requireSafe(
+      ["html_storage_missing", "html_stored_pdf_deferred"].includes(sendGate.artifact_status),
+      `${label} must report a P10 artifact status.`
+    );
+  }
   requireSafe(Array.isArray(sendGate.blocking_reasons), `${label} must include blocking reasons.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
+function assertStoredQuoteArtifact(payload, expected, label) {
+  const artifact = payload.artifact;
+  requireSafe(Boolean(artifact?.id), `${label} must include an artifact id.`);
+  requireSafe(artifact.revision_id === expected.quoteRevisionId, `${label} must bind to quote revision.`);
+  requireSafe(artifact.generated_document_id === expected.documentId, `${label} must bind to generated document.`);
+  requireSafe(artifact.cost_snapshot_id === expected.costSnapshotId, `${label} must bind to cost snapshot.`);
+  requireSafe(artifact.artifact_type === "quote_html_storage", `${label} type must be quote_html_storage.`);
+  requireSafe(artifact.status === "stored", `${label} status must be stored.`);
+  requireSafe(artifact.content_type === "text/html; charset=utf-8", `${label} content type must be HTML.`);
+  requireSafe(artifact.sha256 === expected.documentHash, `${label} artifact hash must match frozen document hash.`);
+  requireSafe(artifact.source_document_hash === expected.documentHash, `${label} source hash must match frozen document hash.`);
+  requireSafe(artifact.snapshot_hash === expected.costSnapshotHash, `${label} snapshot hash must match cost snapshot.`);
+  requireSafe(artifact.revision_version === expected.quoteRevisionVersion, `${label} revision version must bind.`);
+  requirePositiveInteger(artifact.size_bytes, `${label} artifact size`);
+  requireSafe(artifact.size_bytes === expected.documentSizeBytes, `${label} artifact bytes must match frozen document size.`);
+  requireSafe(artifact.artifact_version === "quote-html-storage-v1.0.0", `${label} artifact version must be deterministic.`);
+  requireSafe(artifact.renderer_version === "quote-html-storage-adapter-v1.0.0", `${label} renderer version must be deterministic.`);
+  requireSafe(artifact.storage_status === "object_stored", `${label} storage status must be object_stored.`);
+  requireSafe(artifact.access_model === "server_mediated_download", `${label} access model must be server mediated.`);
+  requireSafe(artifact.signed_url_returned === false, `${label} must not return signed URL.`);
+  requireSafe(artifact.external_url_generated === false, `${label} must not return external URL.`);
+  requireSafe(artifact.pdf_status === "deferred", `${label} binary PDF must remain deferred.`);
+  requireSafe(Array.isArray(artifact.deferred_actions), `${label} must include deferred actions.`);
+  requireSafe(artifact.deferred_actions.includes("quote_pdf"), `${label} must keep quote_pdf deferred.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
+function assertSendIntent(payload, expected, label) {
+  const intent = payload.send_intent;
+  requireSafe(Boolean(intent?.id), `${label} must include a send intent id.`);
+  requireSafe(intent.revision_id === expected.quoteRevisionId, `${label} must bind quote revision.`);
+  requireSafe(intent.artifact_id === expected.artifactId, `${label} must bind stored artifact.`);
+  requireSafe(intent.generated_document_id === expected.documentId, `${label} must bind generated document.`);
+  requireSafe(["send_deferred", "send_blocked"].includes(intent.status), `${label} must stay deferred or blocked without provider.`);
+  requireSafe(intent.provider_status === "provider_missing", `${label} provider status must be missing.`);
+  requireSafe(["project_customer", "missing_customer_email"].includes(intent.recipient_source), `${label} recipient source must be server-derived.`);
+  requireSafe(intent.email_provider_configured === false, `${label} email provider must remain unconfigured.`);
+  requireSafe(intent.external_delivery_attempted === false, `${label} must not attempt external delivery.`);
+  requireSafe(intent.quote_sent === false, `${label} must not mark quote sent.`);
+  requireSafe(intent.production_package_triggered === false, `${label} must not trigger production package.`);
+  requireSafe(intent.send_version === "quote-send-intent-v1.0.0", `${label} send version must be deterministic.`);
+  requireSafe(Array.isArray(intent.deferred_actions), `${label} must include deferred actions.`);
+  requireSafe(intent.deferred_actions.includes("quote_send_external_delivery"), `${label} must keep external send deferred.`);
+  requireSafe(intent.deferred_actions.includes("production_package"), `${label} must keep production package deferred.`);
   assertNoForbiddenResponseFields(label, payload);
 }
 
@@ -761,6 +843,16 @@ async function main() {
         key: "approval-token",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/approval-token`,
         body: { ...forgedPayloadMarkers, document_id: fakeDocumentId, token_hash: "browser-supplied" }
+      },
+      {
+        key: "artifact",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/artifacts`,
+        body: { ...forgedPayloadMarkers, sha256: "0".repeat(64), status: "stored" }
+      },
+      {
+        key: "send-intent",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/send-intents`,
+        body: { ...forgedPayloadMarkers, status: "sent", quote_sent: true }
       }
     ];
 
@@ -817,6 +909,18 @@ async function main() {
       {
         label: "unauthenticated send gate status",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/send-gate`
+      },
+      {
+        label: "unauthenticated quote artifacts list",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/artifacts`
+      },
+      {
+        label: "unauthenticated quote artifact detail",
+        path: `/api/supabase/artifacts/${fakeArtifactId}`
+      },
+      {
+        label: "unauthenticated quote artifact download",
+        path: `/api/supabase/artifacts/${fakeArtifactId}/download`
       }
     ];
     for (const probe of readProbes) {
@@ -1899,6 +2003,13 @@ async function main() {
     const auditAfterQuoteDocument = countAuditActions(result.payload.audit_entries);
     requireAuditDelta(auditBeforeQuoteDocument, auditAfterQuoteDocument, "quote_document_generated", 1);
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `draft-artifact-${suffix}` },
+      body: JSON.stringify({})
+    }, "draft revision quote artifact generation");
+    requireSafe(result.response.status === 409, "Draft revision artifact generation must return 409.");
+
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/fork`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-fork-${suffix}` },
@@ -2131,8 +2242,277 @@ async function main() {
     assertSendGate(result.payload, {
       quoteRevisionId: quoteRevision.id,
       quoteStatus: "approved",
-      approved: true
+      approved: true,
+      eligibleToPrepare: false,
+      artifactBound: false,
+      artifactStatus: "html_storage_missing"
     }, "send gate after approval finalization");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `send-intent-before-artifact-${suffix}` },
+      body: JSON.stringify({})
+    }, "send intent before artifact");
+    requireSafe(result.response.status === 409, "Send intent before stored artifact must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: salesCookie,
+        "x-idempotency-key": `artifact-cross-site-${suffix}`,
+        Origin: "https://cross-site.invalid",
+        "Sec-Fetch-Site": "cross-site"
+      },
+      body: JSON.stringify({})
+    }, "cross-site artifact generation");
+    requireSafe(result.response.status === 403, "Cross-site artifact generation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-artifact-${suffix}` },
+      body: JSON.stringify({})
+    }, "viewer artifact generation");
+    requireSafe(result.response.status === 403, "Viewer artifact generation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `forged-artifact-${suffix}` },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        sha256: "0".repeat(64),
+        source_document_hash: "1".repeat(64),
+        size_bytes: 1,
+        content_type: "application/pdf",
+        status: "stored",
+        pdf_status: "generated"
+      })
+    }, "forged quote artifact generation body");
+    requireSafe(result.response.status === 422, "Forged artifact generation body must return 422.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before artifact storage");
+    requireSafe(result.response.ok, "Demo data must succeed before artifact storage.");
+    const auditBeforeArtifact = countAuditActions(result.payload.audit_entries);
+
+    const artifactKey = `quote-artifact-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": artifactKey },
+      body: JSON.stringify({})
+    }, "quote artifact storage");
+    requireSafe(result.response.status === 201, "Quote artifact storage must return 201.");
+    assertStoredQuoteArtifact(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteRevisionVersion: approvedQuoteRevision.version,
+      documentId: generatedDocument.id,
+      documentHash: generatedDocument.sha256,
+      documentSizeBytes: generatedDocument.size_bytes,
+      costSnapshotId: calculatedCostSnapshot.id,
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash
+    }, "quote artifact storage");
+    const storedArtifact = result.payload.artifact;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": artifactKey },
+      body: JSON.stringify({})
+    }, "quote artifact idempotency replay");
+    requireSafe(result.response.status === 201, "Quote artifact replay must return stored status.");
+    requireSafe(result.payload.artifact?.id === storedArtifact.id, "Quote artifact replay must return the original artifact id.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": artifactKey },
+      body: JSON.stringify({ idempotency_key: `conflicting-artifact-${suffix}` })
+    }, "quote artifact idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote artifact idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote artifact list");
+    requireSafe(result.response.ok, "Quote artifact list must succeed.");
+    requireSafe(
+      result.payload.artifacts?.some((artifact) => artifact.id === storedArtifact.id),
+      "Quote artifact list must include the stored artifact."
+    );
+    assertNoForbiddenResponseFields("quote artifact list", result.payload);
+
+    result = await requestJson(baseUrl, `/api/supabase/artifacts/${storedArtifact.id}`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote artifact metadata get");
+    requireSafe(result.response.ok, "Quote artifact metadata get must succeed.");
+    assertStoredQuoteArtifact(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteRevisionVersion: approvedQuoteRevision.version,
+      documentId: generatedDocument.id,
+      documentHash: generatedDocument.sha256,
+      documentSizeBytes: generatedDocument.size_bytes,
+      costSnapshotId: calculatedCostSnapshot.id,
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash
+    }, "quote artifact metadata get");
+
+    const downloadedArtifact = await requestText(baseUrl, `/api/supabase/artifacts/${storedArtifact.id}/download`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote artifact controlled download");
+    requireSafe(downloadedArtifact.response.ok, "Quote artifact controlled download must succeed.");
+    requireSafe(
+      (downloadedArtifact.response.headers.get("content-disposition") || "").includes("attachment"),
+      "Quote artifact download must be attachment-scoped."
+    );
+    requireSafe(
+      (downloadedArtifact.response.headers.get("cache-control") || "").includes("no-store"),
+      "Quote artifact download must be no-store."
+    );
+    requireSafe(
+      (downloadedArtifact.response.headers.get("x-content-type-options") || "").toLowerCase() === "nosniff",
+      "Quote artifact download must set nosniff."
+    );
+    requireSafe(
+      createHash("sha256").update(downloadedArtifact.text, "utf8").digest("hex") === storedArtifact.sha256,
+      "Downloaded artifact hash must match stored artifact hash."
+    );
+    assertFrozenQuoteDocumentArtifact(downloadedArtifact.text, {
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash,
+      grandTotalMinor: calculatedCostSnapshot.grand_total_minor,
+      currency: calculatedCostSnapshot.currency
+    }, "quote artifact controlled download");
+
+    result = await requestJson(baseUrl, `/api/supabase/artifacts/${storedArtifact.id}`, {
+      method: "GET",
+      headers: { Cookie: secondTenantCookie }
+    }, "second tenant reads stored artifact metadata");
+    requireSafe(result.response.status === 404, "Second tenant artifact metadata read must return tenant-scoped 404.");
+
+    const secondTenantDownload = await requestText(baseUrl, `/api/supabase/artifacts/${storedArtifact.id}/download`, {
+      method: "GET",
+      headers: { Cookie: secondTenantCookie }
+    }, "second tenant downloads stored artifact");
+    requireSafe(secondTenantDownload.response.status === 404, "Second tenant artifact download must return tenant-scoped 404.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after artifact storage");
+    requireSafe(result.response.ok, "Demo data must succeed after artifact storage.");
+    const auditAfterArtifact = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforeArtifact, auditAfterArtifact, "quote_artifact_stored", 1);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "send gate after artifact storage");
+    requireSafe(result.response.ok, "Send gate after artifact storage must be readable.");
+    assertSendGate(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved",
+      approved: true,
+      eligibleToPrepare: true,
+      artifactBound: true,
+      artifactStatus: "html_stored_pdf_deferred"
+    }, "send gate after artifact storage");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: salesCookie,
+        "x-idempotency-key": `send-intent-cross-site-${suffix}`,
+        Origin: "https://cross-site.invalid",
+        "Sec-Fetch-Site": "cross-site"
+      },
+      body: JSON.stringify({})
+    }, "cross-site send-intent preparation");
+    requireSafe(result.response.status === 403, "Cross-site send-intent preparation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-send-intent-${suffix}` },
+      body: JSON.stringify({})
+    }, "viewer send-intent preparation");
+    requireSafe(result.response.status === 403, "Viewer send-intent preparation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `forged-send-intent-${suffix}` },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        status: "sent",
+        quote_sent: true,
+        external_delivery_attempted: true,
+        email_provider_configured: true,
+        recipient_source: "browser",
+        quote_artifact_id: fakeArtifactId
+      })
+    }, "forged send-intent body");
+    requireSafe(result.response.status === 422, "Forged send-intent body must return 422.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before send-intent preparation");
+    requireSafe(result.response.ok, "Demo data must succeed before send-intent preparation.");
+    const auditBeforeSendIntent = countAuditActions(result.payload.audit_entries);
+
+    const sendIntentKey = `quote-send-intent-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": sendIntentKey },
+      body: JSON.stringify({})
+    }, "quote send-intent preparation");
+    requireSafe(result.response.status === 201, "Quote send-intent preparation must return 201.");
+    assertSendIntent(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      artifactId: storedArtifact.id,
+      documentId: generatedDocument.id
+    }, "quote send-intent preparation");
+    const sendIntent = result.payload.send_intent;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": sendIntentKey },
+      body: JSON.stringify({})
+    }, "quote send-intent idempotency replay");
+    requireSafe(result.response.status === 201, "Quote send-intent replay must return stored status.");
+    requireSafe(result.payload.send_intent?.id === sendIntent.id, "Quote send-intent replay must return the original intent id.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": sendIntentKey },
+      body: JSON.stringify({ idempotency_key: `conflicting-send-intent-${suffix}` })
+    }, "quote send-intent idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote send-intent idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after send-intent preparation");
+    requireSafe(result.response.ok, "Demo data must succeed after send-intent preparation.");
+    const auditAfterSendIntent = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforeSendIntent, auditAfterSendIntent, "quote_send_intent_prepared", 1);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "send gate after send-intent preparation");
+    requireSafe(result.response.ok, "Send gate after send-intent preparation must be readable.");
+    requireSafe(
+      result.payload.send_gate?.latest_send_intent_status === sendIntent.status,
+      "Send gate must report the latest send-intent status."
+    );
+    assertSendGate(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved",
+      approved: true,
+      eligibleToPrepare: true,
+      artifactBound: true,
+      artifactStatus: "html_stored_pdf_deferred"
+    }, "send gate after send-intent preparation");
 
     const sendGatePost = await requestText(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
       method: "POST",
@@ -2281,6 +2661,8 @@ async function main() {
     requireSafe(auditActions.has("quote_revision_forked"), "Audit entries must include quote_revision_forked.");
     requireSafe(auditActions.has("quote_approval_gate_prepared"), "Audit entries must include quote_approval_gate_prepared.");
     requireSafe(auditActions.has("quote_approved"), "Audit entries must include quote_approved.");
+    requireSafe(auditActions.has("quote_artifact_stored"), "Audit entries must include quote_artifact_stored.");
+    requireSafe(auditActions.has("quote_send_intent_prepared"), "Audit entries must include quote_send_intent_prepared.");
     requireSafe(auditActions.has("quote_approval_token_replayed"), "Audit entries must include quote_approval_token_replayed.");
     requireSafe(auditActions.has("quote_approval_token_expired"), "Audit entries must include quote_approval_token_expired.");
     const auditAfter = countAuditActions(result.payload.audit_entries);
@@ -2295,6 +2677,8 @@ async function main() {
     requireAuditIncrease(auditBefore, auditAfter, "quote_revision_forked");
     requireAuditIncrease(auditBefore, auditAfter, "quote_approval_gate_prepared");
     requireAuditIncrease(auditBefore, auditAfter, "quote_approved");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_artifact_stored");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_send_intent_prepared");
     requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_replayed");
     requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_expired");
 
