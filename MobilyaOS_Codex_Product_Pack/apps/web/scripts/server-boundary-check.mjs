@@ -213,6 +213,8 @@ const mutationRouteChecks = [
   ["app/api/supabase/projects/[projectId]/quote-revisions/route.ts", ["GET"], ["withReadSession", "listQuoteRevisions"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/route.ts", ["GET"], ["withReadSession", "getQuoteRevisionDetail"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft/route.ts", ["GET", "POST", "PATCH"], ["withReadSession", "withMutationSession", "create_quote_configuration_draft", "update_quote_configuration_draft", "appendAuditEntry", "quote_configuration_created", "quote_configuration_updated", "not_calculated"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/calculate/route.ts", ["POST"], ["requireSession", "requireBoundary", "calculate_quote_snapshot", "rejectBrowserAuthority", "expected_configuration_version", "reserveIdempotency", "quote_snapshot_calculated", "calculateWardrobeQuoteSnapshot", "persistQuoteCalculationResult"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/snapshot/route.ts", ["GET"], ["withReadSession", "getQuoteSnapshot"]],
   ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft"]]
 ];
 for (const [route, allowedMethods, markers] of mutationRouteChecks) {
@@ -231,7 +233,11 @@ for (const [route, allowedMethods, markers] of mutationRouteChecks) {
     requireNoMarker(text, "updateQuoteConfigurationDraft", "agent chat route must not call mutating repository functions");
     requireNoMarker(text, 'risk: "high"', "agent chat route proposed action risk must match the shared schema");
   }
-  const riskyMethods = route.includes("configuration-draft")
+  const riskyMethods = route.includes("calculate")
+    ? ["GET", "PUT", "PATCH", "DELETE"]
+    : route.includes("snapshot")
+      ? riskyQuoteRouteMethods
+      : route.includes("configuration-draft")
     ? ["PUT", "DELETE"]
     : route.includes("quote-revisions/[quoteRevisionId]")
       ? riskyQuoteRouteMethods
@@ -296,6 +302,20 @@ requireMarker(updateQuoteConfigurationDraftBlock, "company_id: `eq.${context.com
 requireMarker(updateQuoteConfigurationDraftBlock, 'calculation_status: "not_calculated"', "updateQuoteConfigurationDraft must not persist calculated state");
 requireMarker(updateQuoteConfigurationDraftBlock, "updated_by: context.appUserId", "updateQuoteConfigurationDraft must write trusted updater");
 requireMarker(updateQuoteConfigurationDraftBlock, "assertCompanyScope([row], context.companyId", "updateQuoteConfigurationDraft must assert returned row company scope");
+
+const getQuoteSnapshotBlock = sourceBlock(repositoryText, "getQuoteSnapshot");
+requireMarker(getQuoteSnapshotBlock, "const quoteRevision = await getQuoteRevision(context, quoteRevisionId)", "getQuoteSnapshot must resolve revision through session company");
+requireMarker(getQuoteSnapshotBlock, "company_id: `eq.${context.companyId}`", "getQuoteSnapshot must filter snapshots by session company_id");
+requireMarker(getQuoteSnapshotBlock, "revision_id: `eq.${quoteRevision.id}`", "getQuoteSnapshot must filter snapshots by trusted revision id");
+requireMarker(getQuoteSnapshotBlock, "assertCompanyScope(bomRows, context.companyId", "getQuoteSnapshot must assert BOM company scope");
+requireMarker(getQuoteSnapshotBlock, "assertCompanyScope(costRows, context.companyId", "getQuoteSnapshot must assert cost company scope");
+
+const persistQuoteCalculationResultBlock = sourceBlock(repositoryText, "persistQuoteCalculationResult");
+requireMarker(persistQuoteCalculationResultBlock, "rpc/persist_quote_calculation_result", "persistQuoteCalculationResult must use the atomic persistence RPC");
+requireMarker(persistQuoteCalculationResultBlock, "p_company_id: context.companyId", "persistQuoteCalculationResult must use trusted company scope");
+requireMarker(persistQuoteCalculationResultBlock, "p_actor_app_user_id: context.appUserId", "persistQuoteCalculationResult must use trusted actor scope");
+requireMarker(persistQuoteCalculationResultBlock, "p_idempotency_record_id: reservation.id", "persistQuoteCalculationResult must bind durable idempotency");
+requireMarker(persistQuoteCalculationResultBlock, "p_request_hash: reservation.requestHash", "persistQuoteCalculationResult must bind request hash");
 
 const quoteStatusPolicyBlock = sourceBlock(repositoryText, "quoteStatusPolicy");
 requireMarker(quoteStatusPolicyBlock, "direct_status_update_allowed: false", "quote status policy must forbid browser direct status writes");

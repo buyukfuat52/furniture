@@ -1,6 +1,6 @@
 # Runtime Agent Tool Gateway Preparation
 
-Status: Phase 8 checkpoint. The Phase 6 read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, Phase 7 added true second-tenant selector denial smokes, and the Phase 5 gateway policy skeleton remains in `services/compute/app/tool_gateway_policy.py`. Unsafe runtime tool execution is still not activated.
+Status: P6 persisted snapshot checkpoint. The read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, true second-tenant selector denial smokes pass, and the gateway policy skeleton in `services/compute/app/tool_gateway_policy.py` now includes validate/calculate/get/explain quote snapshot policy metadata. Unsafe runtime tool execution is still not activated.
 
 ## Runtime Context Boundary
 
@@ -29,6 +29,8 @@ Allowed:
 - Read tenant-scoped project lists/details.
 - Read tenant-scoped quote revision detail and status policy.
 - Read tenant-scoped configuration draft status.
+- Read the current tenant-scoped deterministic quote snapshot when persisted provenance matches the current configuration draft/version.
+- Explain persisted snapshot facts fetched server-side, including deterministic source/version and stored totals, without recalculating them.
 - Summarize audit counts/latest safe action labels.
 - Ask for missing measurements or selected revision context.
 
@@ -37,6 +39,7 @@ Denied:
 - Browser-supplied company, role, user, tenant, cost snapshot, diff entries, approval state, or quote status as authority.
 - Quote send, approval, official PDF, production package, create, update, delete, or other mutation-like requests.
 - Authoritative BOM, edge, labor, cost, tax, margin, quote total, nesting, or production quantity calculation.
+- Browser-supplied snapshots, totals, cost payloads, or approval status as tool input authority.
 - Secret, token, database URL, cookie, service key, or local path disclosure.
 
 ## Deterministic Domain Ownership
@@ -70,6 +73,10 @@ Runtime agent execution remains deferred. Some underlying application routes alr
 | `get_quote_configuration_draft` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, target revision validation, and output filtering. The model may summarize missing measurements/options but must not treat draft input as calculated BOM, cost, tax, margin, total, approval, PDF, or production readiness. |
 | `create_quote_configuration_draft` | Mutation draft | Requires authenticated session context, backend-resolved tenant scope, writer role authorization, integer-mm and explicit-quantity validation, draft parent revision, durable idempotency, optimistic policy checks, audit append, and DB integrity guards. The model may collect draft measurements but cannot calculate or persist authoritative commercial/manufacturing results. |
 | `update_quote_configuration_draft` | Mutation draft | Requires authenticated session context, backend-resolved tenant scope, writer role authorization, expected-version check, draft parent revision, durable idempotency, audit append, and DB integrity guards. Stale updates must conflict; approved/sent revisions must be immutable. |
+| `validate_configuration_draft` | Read/query | Requires authenticated session context and deterministic schema/domain validation. It may report missing/invalid draft fields, but must not calculate BOM/cost/totals or alter persisted state. |
+| `calculate_quote_snapshot` | Non-executable mutation metadata | Registered in gateway policy so authorization/idempotency/expected-version/draft-revision constraints are explicit, but it is not agent-executable in this checkpoint. The current user-facing execution is the server-owned route `POST /api/supabase/quote-revisions/[quoteRevisionId]/calculate`, which rejects browser authority and persists snapshots through an audited RPC. |
+| `get_quote_snapshot` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, target revision validation, and provenance matching against the current configuration draft id/version plus BOM snapshot hash before reporting `calculated`. |
+| `explain_quote_snapshot` | Read/conversation | May summarize trusted persisted snapshot facts fetched server-side. It must not recalculate totals, derive new prices, accept browser-supplied snapshots, or mark send/approval/PDF/production as ready. |
 | `list_quote_revisions` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, bounded query parameters, audit append, and output filtering before returning revision metadata. Returned data must be scoped to the authenticated tenant and actor policy; tool output cannot grant additional access or approval. |
 | `get_quote_revision` | Read/query | Requires authenticated session context, backend-resolved tenant scope, role authorization, target revision/version validation, audit append, and output filtering before returning revision details. Stored deterministic snapshots may be summarized by the model, but the model must not alter or recalculate authoritative quote values. |
 
@@ -86,9 +93,9 @@ Any route that sends, approves, exports official PDFs, releases production artif
 ## Current Implementation Status
 
 - This document is preparation guidance plus the Phase 6 read-only web chat boundary.
-- Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes and configuration-draft POST/PATCH routes. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
-- Phase 6 policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, mutation idempotency metadata, approval metadata, prompt-injection denial, non-executable mutation/workflow policies, sanitized prompt labels, and the static policy manifest endpoint.
-- Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, prompt-injection blocking before reads, mutation/PDF/send denial, forbidden field filtering, and no authoritative calculation claims.
+- Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes, configuration-draft POST/PATCH routes, and deterministic snapshot calculation route. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
+- Policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, mutation idempotency metadata, approval metadata, prompt-injection denial, non-executable mutation/workflow policies, quote snapshot policy metadata, sanitized prompt labels, and the static policy manifest endpoint.
+- Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, server-fetched snapshot availability/missing-state explanations, prompt-injection blocking before reads, mutation/PDF/send denial, forbidden field filtering, and no agent-side calculation.
 - Unsafe runtime agent execution is not activated beyond the existing deterministic rules-mode adapters and read-only Supabase web route.
 - Phase 7 session smoke verifies that primary and second tenant selector IDs cannot cross the agent route.
 - Future implementation must keep gateway policy server-side and must add tests for tenant isolation, role denial, approval denial/replay, idempotency replay, prompt injection, malicious tool output, and deterministic-domain calculation ownership.

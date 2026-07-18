@@ -48,6 +48,10 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "create_project_draft",
         "create_quote_draft",
         "get_quote_configuration_draft",
+        "validate_configuration_draft",
+        "calculate_quote_snapshot",
+        "get_quote_snapshot",
+        "explain_quote_snapshot",
         "create_quote_configuration_draft",
         "update_quote_configuration_draft",
         "send_quote",
@@ -73,6 +77,28 @@ def test_mutation_policy_requires_audit_and_idempotency() -> None:
     assert policy.fixed_calculation_status == "not_calculated"
     assert policy.executable is False
     assert policy.llm_authoritative_calculation is False
+
+
+def test_calculate_quote_snapshot_policy_is_registered_but_not_agent_executable() -> None:
+    policy = get_tool_policy("calculate_quote_snapshot")
+    result = decision(
+        "calculate_quote_snapshot",
+        agent_id="costing_pricing",
+        roles=["costing"],
+        idempotency_key="stable-key",
+    )
+
+    assert policy is not None
+    assert policy.mode == "mutation"
+    assert policy.requires_audit is True
+    assert policy.requires_idempotency is True
+    assert policy.requires_draft_revision is True
+    assert policy.requires_expected_version is True
+    assert policy.llm_authoritative_calculation is False
+    assert policy.executable is False
+    assert result.allowed is False
+    assert result.status == "denied"
+    assert "not executable" in result.reason
 
 
 def test_viewer_cannot_call_mutation_tools() -> None:

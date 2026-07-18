@@ -394,6 +394,19 @@ a {
   padding: 6px 10px;
 }
 
+.calculationBoundary,
+.snapshotPanel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.snapshotPanel {
+  background: #fbfcfb;
+}
+
 .auditList {
   display: grid;
   gap: 8px;

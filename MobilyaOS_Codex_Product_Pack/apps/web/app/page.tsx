@@ -14,6 +14,7 @@ import {
   SupabaseProjectDetail,
   SupabaseQuoteConfigurationDraftResponse,
   SupabaseQuoteRevisionDetail,
+  SupabaseQuoteSnapshotResponse,
   SupabaseSessionResponse
 } from "../lib/api";
 
@@ -49,6 +50,7 @@ export default function HomePage() {
   const [cloudProjectDetail, setCloudProjectDetail] = useState<SupabaseProjectDetail | null>(null);
   const [cloudRevisionDetail, setCloudRevisionDetail] = useState<SupabaseQuoteRevisionDetail | null>(null);
   const [cloudConfigurationDraft, setCloudConfigurationDraft] = useState<SupabaseQuoteConfigurationDraftResponse | null>(null);
+  const [cloudQuoteSnapshot, setCloudQuoteSnapshot] = useState<SupabaseQuoteSnapshotResponse | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [chatInput, setChatInput] = useState("Bu projenin maliyet snapshot sonucunu acikla");
   const [chatResult, setChatResult] = useState<AgentChatResponse | null>(null);
@@ -158,6 +160,7 @@ export default function HomePage() {
       setCloudData(null);
       setCloudProjectDetail(null);
       setCloudRevisionDetail(null);
+      setCloudQuoteSnapshot(null);
       setSeedSummary("");
       setStep("login");
     } finally {
@@ -263,6 +266,7 @@ export default function HomePage() {
       const detail = await supabaseGet<SupabaseQuoteRevisionDetail>(`/api/supabase/quote-revisions/${quoteRevisionId}`);
       setCloudRevisionDetail(detail);
       await loadSupabaseConfigurationDraft(quoteRevisionId, false);
+      await loadSupabaseQuoteSnapshot(quoteRevisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -282,6 +286,25 @@ export default function HomePage() {
         `/api/supabase/quote-revisions/${quoteRevisionId}/configuration-draft`
       );
       setCloudConfigurationDraft(result);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseQuoteSnapshot(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<SupabaseQuoteSnapshotResponse>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/snapshot`
+      );
+      setCloudQuoteSnapshot(result);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -326,6 +349,7 @@ export default function HomePage() {
         ? await supabasePatch<SupabaseQuoteConfigurationDraftResponse>(path, body)
         : await supabasePost<SupabaseQuoteConfigurationDraftResponse>(path, body);
       setCloudConfigurationDraft(result);
+      setCloudQuoteSnapshot(null);
       setSeedSummary(`Supabase konfigurasyon taslagi kaydedildi: v${result.configuration_draft?.version ?? 0}`);
       await refreshCloudOverview(false);
       await loadSupabaseQuoteRevisionDetail(revisionId, false);
@@ -397,6 +421,31 @@ export default function HomePage() {
       await refreshCloudOverview(false);
       await loadSupabaseProjectDetail(projectId);
       await loadSupabaseQuoteRevisionDetail(result.quote_revision.id);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function calculateSupabaseQuoteSnapshot() {
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    const configurationVersion = cloudConfigurationDraft?.configuration_draft?.version;
+    if (!revisionId || !configurationVersion) {
+      setError("Hesaplama icin kayitli Supabase konfigurasyon taslagi gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<SupabaseQuoteSnapshotResponse>(
+        `/api/supabase/quote-revisions/${revisionId}/calculate`,
+        { expected_configuration_version: configurationVersion }
+      );
+      setCloudQuoteSnapshot(result);
+      setSeedSummary(`Deterministik snapshot kaydedildi: ${result.cost_snapshot ? money(result.cost_snapshot.grand_total_minor, result.cost_snapshot.currency) : "hesaplanmadi"}`);
+      await refreshCloudOverview(false);
+      await loadSupabaseQuoteRevisionDetail(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -616,8 +665,10 @@ export default function HomePage() {
           <SupabaseTimelinePanel
             busy={cloudBusy}
             configurationDraft={cloudConfigurationDraft}
+            onCalculateQuoteSnapshot={calculateSupabaseQuoteSnapshot}
             onSaveConfigurationDraft={saveSupabaseConfigurationDraft}
             projectDetail={cloudProjectDetail}
+            quoteSnapshot={cloudQuoteSnapshot}
             revisionDetail={cloudRevisionDetail}
             onLoadRevisionDetail={loadSupabaseQuoteRevisionDetail}
           />
@@ -887,16 +938,20 @@ function SupabaseOverview({
 function SupabaseTimelinePanel({
   busy,
   configurationDraft,
+  onCalculateQuoteSnapshot,
   onLoadRevisionDetail,
   onSaveConfigurationDraft,
   projectDetail,
+  quoteSnapshot,
   revisionDetail
 }: {
   busy: boolean;
   configurationDraft: SupabaseQuoteConfigurationDraftResponse | null;
+  onCalculateQuoteSnapshot: () => void;
   onLoadRevisionDetail: (quoteRevisionId: string) => void;
   onSaveConfigurationDraft: (event: FormEvent<HTMLFormElement>) => void;
   projectDetail: SupabaseProjectDetail | null;
+  quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDetail: SupabaseQuoteRevisionDetail | null;
 }) {
   const auditEntries = projectDetail?.audit_entries ?? revisionDetail?.audit_entries ?? [];
@@ -965,6 +1020,28 @@ function SupabaseTimelinePanel({
           ) : (
             <div className="warningBox">Bu revizyon icin Supabase konfigurasyon taslagi henuz yok.</div>
           )}
+          <div className="calculationBoundary">
+            <div>
+              <h3>Deterministik snapshot</h3>
+              <p className="smallNote">
+                Hesaplama yalnizca kayitli taslak uzerinden server tarafinda yapilir. Tarayici BOM, maliyet, vergi veya toplam hesaplamaz.
+              </p>
+            </div>
+            <div className="buttonRow">
+              <button
+                disabled={busy || !draft || !revisionDetail.status_policy.mutable}
+                onClick={onCalculateQuoteSnapshot}
+                type="button"
+              >
+                Kayitli taslagi hesapla
+              </button>
+              <button disabled type="button">PDF kapali</button>
+              <button disabled type="button">Onay kapali</button>
+              <button disabled type="button">Gonderim kapali</button>
+              <button disabled type="button">Uretim paketi kapali</button>
+            </div>
+          </div>
+          {quoteSnapshot ? <SupabaseQuoteSnapshotPanel snapshot={quoteSnapshot} /> : null}
         </div>
       ) : null}
       <h3>Audit zaman cizelgesi</h3>
@@ -983,6 +1060,94 @@ function SupabaseTimelinePanel({
         <div className="warningBox">Bu secim icin audit kaydi yok.</div>
       )}
     </section>
+  );
+}
+
+function SupabaseQuoteSnapshotPanel({ snapshot }: { snapshot: SupabaseQuoteSnapshotResponse }) {
+  if (snapshot.calculation_status !== "calculated" || !snapshot.bom_snapshot || !snapshot.cost_snapshot) {
+    return <div className="warningBox">Bu revizyon icin deterministik snapshot henuz yok.</div>;
+  }
+  return (
+    <div className="snapshotPanel">
+      <div className="grid">
+        <SummaryCard title="BOM" value={`${snapshot.bom_snapshot.part_count} parca satiri`} />
+        <SummaryCard title="Kenar bandi" value={`${snapshot.bom_snapshot.edge_count} kenar satiri`} />
+        <SummaryCard title="Formul" value={snapshot.cost_snapshot.formula_version} />
+        <SummaryCard title="Ara toplam" value={money(snapshot.cost_snapshot.subtotal_minor, snapshot.cost_snapshot.currency)} />
+        <SummaryCard title="Markup" value={money(snapshot.cost_snapshot.markup_minor, snapshot.cost_snapshot.currency)} />
+        <SummaryCard title="Genel toplam" value={money(snapshot.cost_snapshot.grand_total_minor, snapshot.cost_snapshot.currency)} />
+      </div>
+      <div className="splitTables">
+        <div>
+          <h3>BOM snapshot</h3>
+          <table className="table">
+            <tbody>
+              {snapshot.bom_snapshot.parts.map((part) => (
+                <tr key={part.code}>
+                  <td>{part.code}</td>
+                  <td>{part.name}</td>
+                  <td>{part.width_mm} x {part.height_mm} mm</td>
+                  <td>{part.quantity} adet</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3>Kenar bandi snapshot</h3>
+          <table className="table">
+            <tbody>
+              {snapshot.bom_snapshot.edges.map((edge) => (
+                <tr key={`${edge.part_code}-${edge.edge}`}>
+                  <td>{edge.part_code}</td>
+                  <td>{edge.edge}</td>
+                  <td>{edge.billable_mm} mm</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="splitTables">
+        <div>
+          <h3>Maliyet snapshot</h3>
+          <table className="table">
+            <tbody>
+              {snapshot.cost_snapshot.categories.map((category) => (
+                <tr key={category.category}>
+                  <td>{category.category}</td>
+                  <td>{money(category.amount_minor, category.currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3>Iscilik snapshot</h3>
+          <table className="table">
+            <tbody>
+              {snapshot.cost_snapshot.labor.map((labor) => (
+                <tr key={labor.code}>
+                  <td>{labor.name}</td>
+                  <td>{labor.labor_type}</td>
+                  <td>{labor.quantity}</td>
+                  <td>{money(labor.total_minor, labor.currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="configurationReadback">
+        <span>{snapshot.cost_snapshot.provenance.source}</span>
+        <span>{snapshot.cost_snapshot.provenance.calculation_version}</span>
+        <span>BOM hash {snapshot.bom_snapshot.snapshot_hash.slice(0, 12)}</span>
+        <span>Cost hash {snapshot.cost_snapshot.snapshot_hash.slice(0, 12)}</span>
+      </div>
+      <div className="warningBox">
+        {snapshot.cost_snapshot.provenance.limitations.join(" ")}
+      </div>
+    </div>
   );
 }
 
@@ -1068,8 +1233,8 @@ function ResultTables({ revision }: { revision: QuoteRevision }) {
   );
 }
 
-function money(amountMinor: number) {
-  return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" }).format(amountMinor / 100);
+function money(amountMinor: number, currency = "TRY") {
+  return new Intl.NumberFormat("tr-TR", { style: "currency", currency }).format(amountMinor / 100);
 }
 
 function renderFactValue(value: unknown) {

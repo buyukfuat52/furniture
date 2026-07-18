@@ -75,6 +75,8 @@ const forgedPayloadMarkers = {
   }
 };
 const deferredQuoteActions = ["quote_send", "quote_approve", "quote_pdf", "production_package"];
+const deterministicCalculationVersion = "wardrobe-deterministic-v1.0.0";
+const canonicalSnapshotEdges = new Set(["north", "east", "south", "west"]);
 const unavailableQuotePayloadFields = [
   "approval_id",
   "approved_at",
@@ -350,6 +352,110 @@ function assertConfigurationDraftDeferred(payload, expected, label) {
   }
 }
 
+function requireInteger(value, label) {
+  requireSafe(Number.isSafeInteger(value), `${label} must be a safe integer.`);
+}
+
+function requireNonnegativeInteger(value, label) {
+  requireInteger(value, label);
+  requireSafe(value >= 0, `${label} must be non-negative.`);
+}
+
+function requirePositiveInteger(value, label) {
+  requireInteger(value, label);
+  requireSafe(value > 0, `${label} must be positive.`);
+}
+
+function assertQuoteSnapshotNotCalculated(payload, label) {
+  requireSafe(payload.calculation_status === "not_calculated", `${label} must remain not_calculated.`);
+  requireSafe(payload.bom_snapshot === null, `${label} must not expose a BOM snapshot.`);
+  requireSafe(payload.cost_snapshot === null, `${label} must not expose a cost snapshot.`);
+  requireSafe(Array.isArray(payload.deferred_actions), `${label} response must list deferred actions.`);
+  for (const action of deferredQuoteActions) {
+    requireSafe(payload.deferred_actions.includes(action), `${label} must keep ${action} deferred.`);
+  }
+}
+
+function assertQuoteSnapshotCalculated(payload, expected, label) {
+  const bom = payload.bom_snapshot;
+  const cost = payload.cost_snapshot;
+  requireSafe(payload.calculation_status === "calculated", `${label} must report calculated state.`);
+  requireSafe(payload.quote_revision?.id === expected.quoteRevisionId, `${label} must reference the requested quote revision.`);
+  requireSafe(payload.quote_revision?.status === "draft", `${label} must keep the quote revision in draft.`);
+  requireSafe(payload.configuration_draft?.id === expected.configurationDraftId, `${label} must reference the calculated configuration draft.`);
+  requireSafe(payload.configuration_draft?.version === expected.configurationVersion, `${label} must reference the calculated configuration version.`);
+  requireSafe(Boolean(bom?.id), `${label} must include a persisted BOM snapshot id.`);
+  requireSafe(Boolean(cost?.id), `${label} must include a persisted cost snapshot id.`);
+  requireSafe(bom.revision_id === expected.quoteRevisionId, `${label} BOM snapshot must belong to the quote revision.`);
+  requireSafe(cost.revision_id === expected.quoteRevisionId, `${label} cost snapshot must belong to the quote revision.`);
+  requireSafe(bom.formula_version === deterministicCalculationVersion, `${label} BOM formula version must be deterministic P6.`);
+  requireSafe(cost.formula_version === deterministicCalculationVersion, `${label} cost formula version must be deterministic P6.`);
+  requireSafe(/^[0-9a-f]{64}$/i.test(bom.snapshot_hash), `${label} BOM snapshot hash must be sha256.`);
+  requireSafe(/^[0-9a-f]{64}$/i.test(cost.snapshot_hash), `${label} cost snapshot hash must be sha256.`);
+  requireSafe(Array.isArray(bom.parts) && bom.parts.length === bom.part_count, `${label} BOM part count must match parts.`);
+  requireSafe(Array.isArray(bom.edges) && bom.edges.length === bom.edge_count, `${label} BOM edge count must match edges.`);
+  requireSafe(bom.part_count === 6, `${label} wardrobe slice must group the expected six BOM part rows.`);
+  requireSafe(bom.edge_count === 11, `${label} wardrobe slice must produce the expected eleven edge rows.`);
+
+  for (const part of bom.parts) {
+    requireSafe(typeof part.code === "string" && part.code.length > 0, `${label} part code must be present.`);
+    requirePositiveInteger(part.width_mm, `${label} ${part.code} width`);
+    requirePositiveInteger(part.height_mm, `${label} ${part.code} height`);
+    requirePositiveInteger(part.quantity, `${label} ${part.code} quantity`);
+    requirePositiveInteger(part.area_mm2, `${label} ${part.code} area`);
+    requireSafe(part.area_mm2 === part.width_mm * part.height_mm * part.quantity, `${label} ${part.code} area must be deterministic.`);
+  }
+
+  for (const edge of bom.edges) {
+    requireSafe(canonicalSnapshotEdges.has(edge.edge), `${label} edge ${edge.edge} must be canonical.`);
+    requirePositiveInteger(edge.length_mm, `${label} ${edge.part_code} edge length`);
+    requirePositiveInteger(edge.part_quantity, `${label} ${edge.part_code} edge part quantity`);
+    requirePositiveInteger(edge.base_length_mm, `${label} ${edge.part_code} edge base length`);
+    requireSafe(edge.base_length_mm === edge.length_mm * edge.part_quantity, `${label} ${edge.part_code} edge base length must be deterministic.`);
+    requireNonnegativeInteger(edge.waste_bps, `${label} ${edge.part_code} edge waste`);
+    requireNonnegativeInteger(edge.setup_mm, `${label} ${edge.part_code} edge setup`);
+    requirePositiveInteger(edge.billable_mm, `${label} ${edge.part_code} edge billable length`);
+    const expectedBillable = Math.ceil((edge.base_length_mm * (10_000 + edge.waste_bps)) / 10_000) + edge.setup_mm;
+    requireSafe(edge.billable_mm === expectedBillable, `${label} ${edge.part_code} edge billable length must include waste.`);
+  }
+
+  requireSafe(cost.currency === "TRY", `${label} cost currency must remain TRY.`);
+  for (const field of ["subtotal_minor", "markup_minor", "vat_minor", "grand_total_minor"]) {
+    requireNonnegativeInteger(cost[field], `${label} ${field}`);
+    requireSafe(cost.quote_total[field] === cost[field], `${label} quote_total ${field} must match persisted cost snapshot.`);
+  }
+  requireSafe(Array.isArray(cost.categories) && cost.categories.length >= 5, `${label} must include cost categories.`);
+  const categorySubtotal = cost.categories.reduce((sum, item) => {
+    requireNonnegativeInteger(item.amount_minor, `${label} ${item.category} amount`);
+    requireSafe(item.currency === "TRY", `${label} ${item.category} currency must be TRY.`);
+    return sum + item.amount_minor;
+  }, 0);
+  requireSafe(categorySubtotal === cost.subtotal_minor, `${label} category subtotal must equal persisted subtotal.`);
+
+  requireSafe(Array.isArray(cost.labor), `${label} must include labor rows.`);
+  const unitLabor = cost.labor.find((row) => row.labor_type === "unit");
+  const setupLabor = cost.labor.find((row) => row.labor_type === "setup");
+  requireSafe(Boolean(unitLabor), `${label} must include unit labor.`);
+  requireSafe(Boolean(setupLabor), `${label} must include setup labor.`);
+  requirePositiveInteger(unitLabor.unit_labor_minor, `${label} unit labor rate`);
+  requireSafe(unitLabor.quantity === expected.quantity, `${label} unit labor quantity must match configured quantity.`);
+  requireSafe(unitLabor.total_minor === unitLabor.unit_labor_minor * expected.quantity, `${label} unit labor total must be rate times quantity.`);
+  requireSafe(setupLabor.quantity === 1, `${label} setup labor quantity must stay one.`);
+  requireSafe(setupLabor.total_minor === setupLabor.unit_labor_minor, `${label} setup labor total must equal setup rate.`);
+
+  requireSafe(cost.provenance?.source === "deterministic_service", `${label} provenance source must be deterministic.`);
+  requireSafe(cost.provenance?.calculation_version === deterministicCalculationVersion, `${label} provenance version must match.`);
+  requireSafe(cost.provenance?.configuration_draft_id === expected.configurationDraftId, `${label} provenance must bind to the configuration draft.`);
+  requireSafe(cost.provenance?.configuration_version === expected.configurationVersion, `${label} provenance must bind to the configuration version.`);
+  requireSafe(cost.provenance?.quote_revision_id === expected.quoteRevisionId, `${label} provenance must bind to the quote revision.`);
+  requireSafe(cost.provenance?.bom_snapshot_hash === bom.snapshot_hash, `${label} provenance must bind to the BOM snapshot.`);
+  requireSafe(Array.isArray(cost.provenance?.price_sources) && cost.provenance.price_sources.length >= 5, `${label} must list price sources.`);
+  requireSafe(!JSON.stringify(payload).toLowerCase().includes("llm"), `${label} must not mention an LLM as calculation source.`);
+  for (const action of deferredQuoteActions) {
+    requireSafe(payload.deferred_actions.includes(action), `${label} must keep ${action} deferred.`);
+  }
+}
+
 function configurationDraftBody(overrides = {}) {
   return {
     ...forgedPayloadMarkers,
@@ -407,6 +513,11 @@ async function main() {
         key: "configuration-draft",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`,
         body: configurationDraftBody()
+      },
+      {
+        key: "quote-calculate",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/calculate`,
+        body: { expected_configuration_version: 1 }
       }
     ];
 
@@ -435,6 +546,10 @@ async function main() {
       {
         label: "unauthenticated configuration draft get",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`
+      },
+      {
+        label: "unauthenticated quote snapshot get",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/snapshot`
       }
     ];
     for (const probe of readProbes) {
@@ -466,6 +581,12 @@ async function main() {
       body: JSON.stringify(configurationDraftBody({ expected_version: 1, width_mm: 1900 }))
     }, "viewer configuration draft update");
     requireSafe(result.response.status === 403, "Viewer configuration draft update must return 403.");
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": "viewer-denied-calculate-mutation-smoke" },
+      body: JSON.stringify({ expected_configuration_version: 1 })
+    }, "viewer quote calculate");
+    requireSafe(result.response.status === 403, "Viewer quote calculate must return 403.");
 
     const salesCookie = await login(baseUrl, "satis@demo.local", password);
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -525,6 +646,10 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/configuration-draft`
       },
       {
+        label: "second tenant reads primary quote snapshot",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/snapshot`
+      },
+      {
         label: "primary tenant reads second project detail",
         path: `/api/supabase/projects/${secondTenantProjectId}`,
         cookie: salesCookie
@@ -542,6 +667,11 @@ async function main() {
       {
         label: "primary tenant reads second configuration draft",
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/configuration-draft`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second quote snapshot",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/snapshot`,
         cookie: salesCookie
       }
     ];
@@ -571,6 +701,12 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/configuration-draft`,
         method: "POST",
         body: configurationDraftBody()
+      },
+      {
+        label: "second tenant calculate primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/calculate`,
+        method: "POST",
+        body: { expected_configuration_version: 1 }
       }
     ];
     for (const probe of secondTenantWriteProbes) {
@@ -603,6 +739,12 @@ async function main() {
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/configuration-draft`,
         method: "POST",
         body: configurationDraftBody()
+      },
+      {
+        label: "primary tenant calculate second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/calculate`,
+        method: "POST",
+        body: { expected_configuration_version: 1 }
       }
     ];
     for (const probe of primaryToSecondTenantWriteProbes) {
@@ -626,6 +768,7 @@ async function main() {
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "project_created");
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_draft_created");
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_configuration_created");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_snapshot_calculated");
 
     const idorProbes = [
       {
@@ -671,6 +814,17 @@ async function main() {
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/configuration-draft`,
         method: "PATCH",
         body: configurationDraftBody({ expected_version: 1, width_mm: 1900 })
+      },
+      {
+        label: "missing quote snapshot read",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/snapshot`,
+        method: "GET"
+      },
+      {
+        label: "missing quote calculate",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/calculate`,
+        method: "POST",
+        body: { expected_configuration_version: 1 }
       }
     ];
     for (const probe of idorProbes) {
@@ -925,6 +1079,20 @@ async function main() {
     requireSafe(result.payload.configuration_draft === null, "Configuration draft read before create must return null draft.");
     requireSafe(result.payload.calculation_status === "not_calculated", "Configuration draft read must not report calculated state.");
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/snapshot`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote snapshot read before configuration");
+    requireSafe(result.response.ok, "Quote snapshot read before configuration must succeed.");
+    assertQuoteSnapshotNotCalculated(result.payload, "quote snapshot read before configuration");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `missing-config-calculate-${suffix}` },
+      body: JSON.stringify({ expected_configuration_version: 1 })
+    }, "quote calculate before configuration");
+    requireSafe(result.response.status === 422, "Quote calculate before configuration must require a saved configuration draft.");
+
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: salesCookie },
@@ -1010,9 +1178,10 @@ async function main() {
     const updateBody = configurationDraftBody({
       expected_version: configurationDraft.version,
       width_mm: 1900,
+      quantity: 2,
       notes: "Updated smoke test wardrobe draft"
     });
-    const expectedUpdatedConfig = { ...expectedConfig, width_mm: 1900 };
+    const expectedUpdatedConfig = { ...expectedConfig, width_mm: 1900, quantity: 2 };
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": configUpdateKey },
@@ -1077,6 +1246,145 @@ async function main() {
     requireSafe(result.payload.configuration_draft?.version === updatedConfigurationDraft.version, "Configuration draft read after update must return current version.");
     assertConfigurationDraftDeferred(result.payload, expectedUpdatedConfig, "configuration draft read after update");
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/snapshot`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote snapshot read before calculate");
+    requireSafe(result.response.ok, "Quote snapshot read before calculate must succeed.");
+    assertQuoteSnapshotNotCalculated(result.payload, "quote snapshot read before calculate");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie },
+      body: JSON.stringify({ expected_configuration_version: updatedConfigurationDraft.version })
+    }, "quote calculate without idempotency");
+    requireSafe(result.response.status === 422, "Quote calculate without idempotency must return 422.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `forged-calculate-${suffix}` },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        expected_configuration_version: updatedConfigurationDraft.version,
+        status: "sent",
+        quote_total: { grand_total_minor: 1 },
+        cost_snapshot: { grand_total_minor: 1 },
+        bom_snapshot: { part_count: 1 }
+      })
+    }, "quote calculate with browser forged authority");
+    requireSafe(result.response.status === 422, "Quote calculate with browser forged authority must return 422.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `slice-invalid-config-${suffix}` },
+      body: JSON.stringify(configurationDraftBody({
+        expected_version: updatedConfigurationDraft.version,
+        width_mm: 500,
+        quantity: 2,
+        notes: "Slice-invalid wardrobe dimensions"
+      }))
+    }, "configuration draft slice-invalid update");
+    requireSafe(result.response.status === 200, "Configuration draft slice-invalid update must pass generic draft validation.");
+    const sliceInvalidConfigurationDraft = result.payload.configuration_draft;
+    assertConfigurationDraftDeferred(result.payload, { ...expectedUpdatedConfig, width_mm: 500 }, "configuration draft slice-invalid update");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `slice-invalid-calculate-${suffix}` },
+      body: JSON.stringify({ expected_configuration_version: sliceInvalidConfigurationDraft.version })
+    }, "quote calculate slice-invalid configuration");
+    requireSafe(result.response.status === 422, "Quote calculate must reject dimensions outside the deterministic wardrobe slice.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `restore-valid-config-${suffix}` },
+      body: JSON.stringify(configurationDraftBody({
+        expected_version: sliceInvalidConfigurationDraft.version,
+        width_mm: 1900,
+        quantity: 2,
+        notes: "Restored calculable smoke test wardrobe draft"
+      }))
+    }, "configuration draft restore calculable update");
+    requireSafe(result.response.status === 200, "Configuration draft restore calculable update must return 200.");
+    const calculableConfigurationDraft = result.payload.configuration_draft;
+    assertConfigurationDraftDeferred(result.payload, expectedUpdatedConfig, "configuration draft restore calculable update");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before quote calculation");
+    requireSafe(result.response.ok, "Demo data must succeed before quote calculation.");
+    const auditBeforeQuoteCalculation = countAuditActions(result.payload.audit_entries);
+
+    const calculateKey = `quote-calculate-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": calculateKey },
+      body: JSON.stringify({ expected_configuration_version: calculableConfigurationDraft.version })
+    }, "quote calculate persisted snapshot");
+    requireSafe(result.response.status === 201, "Quote calculate must persist a deterministic snapshot.");
+    assertQuoteSnapshotCalculated(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      configurationDraftId: calculableConfigurationDraft.id,
+      configurationVersion: calculableConfigurationDraft.version,
+      quantity: expectedUpdatedConfig.quantity
+    }, "quote calculate persisted snapshot");
+    const calculatedBomSnapshot = result.payload.bom_snapshot;
+    const calculatedCostSnapshot = result.payload.cost_snapshot;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": calculateKey },
+      body: JSON.stringify({ expected_configuration_version: calculableConfigurationDraft.version })
+    }, "quote calculate idempotency replay");
+    requireSafe(result.response.status === 201, "Quote calculate idempotency replay must return the stored status.");
+    assertQuoteSnapshotCalculated(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      configurationDraftId: calculableConfigurationDraft.id,
+      configurationVersion: calculableConfigurationDraft.version,
+      quantity: expectedUpdatedConfig.quantity
+    }, "quote calculate idempotency replay");
+    requireSafe(result.payload.bom_snapshot.id === calculatedBomSnapshot.id, "Quote calculate replay must return the original BOM snapshot id.");
+    requireSafe(result.payload.cost_snapshot.id === calculatedCostSnapshot.id, "Quote calculate replay must return the original cost snapshot id.");
+    requireSafe(result.payload.bom_snapshot.snapshot_hash === calculatedBomSnapshot.snapshot_hash, "Quote calculate replay must preserve the BOM snapshot hash.");
+    requireSafe(result.payload.cost_snapshot.snapshot_hash === calculatedCostSnapshot.snapshot_hash, "Quote calculate replay must preserve the cost snapshot hash.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": calculateKey },
+      body: JSON.stringify({ expected_configuration_version: calculableConfigurationDraft.version, idempotency_key: `conflicting-body-${suffix}` })
+    }, "quote calculate idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote calculate idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/snapshot`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote snapshot read after calculate");
+    requireSafe(result.response.ok, "Quote snapshot read after calculate must succeed.");
+    assertQuoteSnapshotCalculated(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      configurationDraftId: calculableConfigurationDraft.id,
+      configurationVersion: calculableConfigurationDraft.version,
+      quantity: expectedUpdatedConfig.quantity
+    }, "quote snapshot read after calculate");
+    requireSafe(result.payload.bom_snapshot.snapshot_hash === calculatedBomSnapshot.snapshot_hash, "Snapshot read must return the calculated BOM hash.");
+    requireSafe(result.payload.cost_snapshot.snapshot_hash === calculatedCostSnapshot.snapshot_hash, "Snapshot read must return the calculated cost hash.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${demoApprovedQuoteRevisionId}/calculate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `approved-calculate-${suffix}` },
+      body: JSON.stringify({ expected_configuration_version: 1 })
+    }, "approved revision quote calculate");
+    requireSafe(result.response.status === 409, "Approved revision quote calculate must not succeed.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after quote calculation");
+    requireSafe(result.response.ok, "Demo data must succeed after quote calculation.");
+    const auditAfterQuoteCalculation = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforeQuoteCalculation, auditAfterQuoteCalculation, "quote_snapshot_calculated", 1);
+
     result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}`, {
       method: "GET",
       headers: { Cookie: salesCookie }
@@ -1122,12 +1430,14 @@ async function main() {
     requireSafe(auditActions.has("quote_draft_created"), "Audit entries must include quote_draft_created.");
     requireSafe(auditActions.has("quote_configuration_created"), "Audit entries must include quote_configuration_created.");
     requireSafe(auditActions.has("quote_configuration_updated"), "Audit entries must include quote_configuration_updated.");
+    requireSafe(auditActions.has("quote_snapshot_calculated"), "Audit entries must include quote_snapshot_calculated.");
     const auditAfter = countAuditActions(result.payload.audit_entries);
     requireAuditIncrease(auditBefore, auditAfter, "customer_created");
     requireAuditIncrease(auditBefore, auditAfter, "project_created");
     requireAuditIncrease(auditBefore, auditAfter, "quote_draft_created");
     requireAuditIncrease(auditBefore, auditAfter, "quote_configuration_created");
     requireAuditIncrease(auditBefore, auditAfter, "quote_configuration_updated");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_snapshot_calculated");
 
     console.log("web mutation route smoke passed");
   } finally {

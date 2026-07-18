@@ -4,12 +4,14 @@ import {
   getProjectDetail,
   getQuoteConfigurationDraft,
   getQuoteRevisionDetail,
+  getQuoteSnapshot,
   listProjects,
   type AuditEntryRecord,
   type ProjectDetailRecord,
   type QuoteConfigurationDraftRecord,
   type QuoteRevisionDetailRecord,
-  type QuoteRevisionRecord
+  type QuoteRevisionRecord,
+  type QuoteSnapshotResponse
 } from "../../../../lib/server/supabaseRepository";
 
 export const dynamic = "force-dynamic";
@@ -211,6 +213,25 @@ function configurationFacts(draft: QuoteConfigurationDraftRecord | null): Array<
   ];
 }
 
+function snapshotFacts(snapshot: QuoteSnapshotResponse | null): Array<{ label: string; value: unknown }> {
+  if (!snapshot || snapshot.calculation_status !== "calculated" || !snapshot.cost_snapshot || !snapshot.bom_snapshot) {
+    return [
+      { label: "Deterministik snapshot", value: "yok" },
+      { label: "Hesaplama durumu", value: "not_calculated" }
+    ];
+  }
+  return [
+    { label: "Deterministik snapshot", value: "var" },
+    { label: "Snapshot kaynagi", value: snapshot.cost_snapshot.provenance.source },
+    { label: "Formul versiyonu", value: snapshot.cost_snapshot.formula_version },
+    { label: "BOM satiri", value: snapshot.bom_snapshot.part_count },
+    { label: "Kenar satiri", value: snapshot.bom_snapshot.edge_count },
+    { label: "Ara toplam minor", value: snapshot.cost_snapshot.subtotal_minor },
+    { label: "Genel toplam minor", value: snapshot.cost_snapshot.grand_total_minor },
+    { label: "Para birimi", value: snapshot.cost_snapshot.currency }
+  ];
+}
+
 export async function POST(request: Request) {
   return withReadSession(request, async ({ session }) => {
     let body: ChatPayload;
@@ -266,6 +287,7 @@ export async function POST(request: Request) {
     let projectDetail: ProjectDetailRecord | null = null;
     let revisionDetail: QuoteRevisionDetailRecord | null = null;
     let configurationDraft: QuoteConfigurationDraftRecord | null = null;
+    let quoteSnapshot: QuoteSnapshotResponse | null = null;
 
     if (projectId) {
       projectDetail = await getProjectDetail(session.mutationScope, projectId);
@@ -287,9 +309,11 @@ export async function POST(request: Request) {
         throw new Error("Selected revision was not found under the selected project.");
       }
       configurationDraft = await getQuoteConfigurationDraft(session.mutationScope, revisionId);
+      quoteSnapshot = await getQuoteSnapshot(session.mutationScope, revisionId);
       toolCalls.push(completedTool("agent-tool-2", "get_quote_revision_detail", "Oturum sirketine ait revizyon okundu."));
       toolCalls.push(completedTool("agent-tool-3", "get_quote_configuration_draft", "Konfigurasyon taslagi salt okunur okundu."));
-      facts.push(...revisionFacts(revisionDetail), ...configurationFacts(configurationDraft));
+      toolCalls.push(completedTool("agent-tool-4", "get_quote_snapshot", "Deterministik snapshot salt okunur okundu."));
+      facts.push(...revisionFacts(revisionDetail), ...configurationFacts(configurationDraft), ...snapshotFacts(quoteSnapshot));
     } else {
       missingInformation.push("Supabase proje veya revizyon secimi");
     }
@@ -300,7 +324,7 @@ export async function POST(request: Request) {
       } else {
         const left = await getQuoteRevisionDetail(session.mutationScope, leftRevisionId);
         const right = await getQuoteRevisionDetail(session.mutationScope, rightRevisionId);
-        toolCalls.push(completedTool("agent-tool-4", "compare_revision_metadata", "Iki revizyon tenant kapsaminda okundu."));
+        toolCalls.push(completedTool("agent-tool-5", "compare_revision_metadata", "Iki revizyon tenant kapsaminda okundu."));
         facts.push(
           { label: "Sol revizyon", value: revisionLabel(left.quote_revision) },
           { label: "Sag revizyon", value: revisionLabel(right.quote_revision) },
@@ -310,8 +334,8 @@ export async function POST(request: Request) {
       }
     }
 
-    if (agentId === "costing_pricing" && configurationDraft?.calculation_status !== "not_calculated") {
-      warnings.push("Maliyet aciklamasi icin deterministik cost snapshot adaptoru gerekir.");
+    if (agentId === "costing_pricing" && quoteSnapshot?.calculation_status !== "calculated") {
+      missingInformation.push("deterministik cost snapshot");
     }
 
     if (!configurationDraft && agentId !== "enterprise_search") {

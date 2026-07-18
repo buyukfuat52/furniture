@@ -8,6 +8,7 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = dirname(scriptDir);
 const repoRoot = findRepoRoot(appRoot);
 const cookieName = "mobilyaos_demo_session";
+const forgedBrowserTotalMinor = 99999999;
 const forbiddenPayloadKeys = [
   "SUPABASE_SECRET_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
@@ -91,7 +92,18 @@ function assertSafeAgentPayload(label, value) {
   ]) {
     requireSafe(!text.includes(key), `${label} includes browser/internal context key ${key}.`);
   }
-  requireSafe(!/grand_total|subtotal|vat|tax|bom_total|labor_total/i.test(text), `${label} claims authoritative totals.`);
+  requireSafe(!text.includes(String(forgedBrowserTotalMinor)), `${label} echoes a browser-supplied total.`);
+}
+
+function requireToolAction(payload, action, label) {
+  requireSafe(
+    payload.tool_calls?.some((call) => call.action === action && call.status === "completed"),
+    `${label} must include completed ${action}.`
+  );
+}
+
+function factValue(payload, label) {
+  return payload.response?.facts?.find((fact) => fact.label === label)?.value;
 }
 
 async function freePort() {
@@ -252,7 +264,7 @@ async function main() {
         quote_revision_id: selectedRevision.id,
         company_id: "browser-supplied",
         roles: ["admin"],
-        cost_snapshot: { grand_total_minor: 99999999 },
+        cost_snapshot: { grand_total_minor: forgedBrowserTotalMinor },
         diff_entries: [{ field: "grand_total", after: "999999" }]
       })
     });
@@ -262,10 +274,41 @@ async function main() {
     requireSafe(agentPayload.mode === "rules", "Agent chat must use deterministic rules mode.");
     requireSafe(agentPayload.classification === "read_only_agent_gateway", "Agent chat must use the read-only server gateway.");
     requireSafe(agentPayload.response?.status === "completed", "Agent chat must complete read-only explanation.");
+    requireToolAction(agentPayload, "get_quote_snapshot", "Agent chat read-only explanation");
+    requireSafe(
+      ["var", "yok"].includes(factValue(agentPayload, "Deterministik snapshot")),
+      "Agent chat must report persisted snapshot availability."
+    );
     requireSafe(
       agentPayload.tool_calls?.every((call) => call.status === "completed"),
       "Read-only agent chat must only complete read tools."
     );
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Bu revizyonun maliyet snapshotini acikla",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id,
+        cost_snapshot: { grand_total_minor: forgedBrowserTotalMinor }
+      })
+    });
+    requireSafe(response.ok, "Costing agent request must be handled safely.");
+    const costingPayload = await readJson(response, "costing agent payload");
+    assertSafeAgentPayload("costing agent payload", costingPayload);
+    requireSafe(costingPayload.agent_id === "costing_pricing", "Costing request must route to costing_pricing.");
+    requireToolAction(costingPayload, "get_quote_snapshot", "Costing agent snapshot explanation");
+    requireSafe(
+      costingPayload.response?.status === "completed" || costingPayload.response?.status === "needs_input",
+      "Costing agent must either explain a trusted snapshot or request one."
+    );
+    if (costingPayload.response?.status === "needs_input") {
+      requireSafe(
+        costingPayload.response?.missing_information?.includes("deterministik cost snapshot"),
+        "Costing agent must name the missing deterministic snapshot."
+      );
+    }
 
     response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
       method: "POST",
@@ -373,6 +416,26 @@ async function main() {
     requireSafe(
       secondTenantAgentPayload.classification === "read_only_agent_gateway",
       "Second tenant agent chat must use the read-only gateway."
+    );
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: secondTenantCookie },
+      body: JSON.stringify({
+        message: "Maliyet snapshotini acikla",
+        project_id: secondProject.id,
+        quote_revision_id: secondRevision.id,
+        cost_snapshot: { grand_total_minor: forgedBrowserTotalMinor }
+      })
+    });
+    requireSafe(response.ok, "Second tenant costing agent request must be handled safely.");
+    const secondTenantCostingPayload = await readJson(response, "second tenant costing agent chat payload");
+    assertSafeAgentPayload("second tenant costing agent chat payload", secondTenantCostingPayload);
+    requireSafe(secondTenantCostingPayload.agent_id === "costing_pricing", "Second tenant costing request must route to costing_pricing.");
+    requireToolAction(secondTenantCostingPayload, "get_quote_snapshot", "Second tenant costing agent snapshot explanation");
+    requireSafe(
+      secondTenantCostingPayload.response?.missing_information?.includes("deterministik cost snapshot"),
+      "Second tenant costing agent must request a deterministic cost snapshot when none exists."
     );
 
     response = await fetch(`${baseUrl}/api/supabase/logout`, {

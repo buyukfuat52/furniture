@@ -1357,3 +1357,121 @@ Phase 8 validation:
 | `go version` | Blocked | Go is not on PATH. |
 | `make --version` | Blocked | GNU Make is not on PATH. |
 | `docker version --format ...` | Blocked | Docker Desktop engine pipe is unavailable; Docker runtime validation is not accepted coverage. |
+
+## P6 Deterministic Persisted Quote Flow Plan
+
+Current result: complete. This implemented the first persisted deterministic quote snapshot flow on the verified Supabase Cloud path.
+
+Agent assignments:
+
+- `domain_architect`: read-only contract/invariant review for the first wardrobe/vestiyer calculation slice.
+- `backend_engineer`: read-only route/repository/schema reconnaissance before parent-owned implementation.
+- `frontend_engineer`: read-only UI insertion and DTO reconnaissance before parent-owned implementation.
+- `ai_prompt_engineer`: read-only runtime-tool metadata and chat-boundary reconnaissance before parent-owned implementation.
+- `security_reviewer`: read-only adversarial review of tenant/RBAC/status/totals/idempotency/audit/secrets boundaries.
+- `qa_reviewer`: read-only test matrix and validation-command reconnaissance.
+
+Frozen P6 contract decisions:
+
+- The first supported deterministic persisted slice is `wardrobe` / vestiyer from `quote_configuration_draft_v1`.
+- Authoritative input comes from the persisted Supabase configuration draft, not from calculate-route browser totals, browser status, or browser tenant/actor fields.
+- Dimensions remain integer millimetres; money remains integer minor units with explicit currency.
+- Calculation is implemented in the existing Next.js server/Supabase boundary because Go, Docker, and Make remain unavailable locally. Future Go-core integration remains roadmap work.
+- `quote_revisions.status` is not widened in P6. Calculation readiness is represented by persisted snapshot presence and response `calculation_status`, while the revision remains `draft` unless a future approval workflow changes it.
+- Existing `bom_snapshots` and `cost_snapshots` tables are used for frozen calculation persistence; the cost snapshot stores quote total fields and provenance JSON for this first slice.
+- No send, approval execution, customer-facing PDF generation, or production package route is enabled in P6.
+- Read-only chat may explain a trusted persisted snapshot fetched server-side, but must not calculate missing BOM/cost/tax/margin/totals or accept browser-supplied snapshots.
+
+Implementation plan:
+
+1. Add deterministic TypeScript calculation domain types and a narrow wardrobe calculator under `apps/web/lib/server`.
+2. Extend Supabase repository methods to read latest sanitized BOM/cost snapshots and persist deterministic snapshot pairs idempotently by snapshot hash.
+3. Add `POST /api/supabase/quote-revisions/[quoteRevisionId]/calculate` with trusted session, writer-role boundary, durable idempotency, persisted config lookup, deterministic calculation, audit append, and sanitized response.
+4. Add `GET /api/supabase/quote-revisions/[quoteRevisionId]/snapshot` with trusted session, tenant scope, empty-state handling, and sanitized response.
+5. Update the web UI to trigger server-side calculation from the saved configuration draft and display returned snapshot values without browser arithmetic.
+6. Extend read-only agent chat and runtime gateway docs/policies so future tools can validate/calculate/get/explain snapshots while mutation execution remains deferred.
+7. Extend static, live mutation, session, compute policy, and documentation coverage; run all available non-Docker validation.
+
+P6 residual risks:
+
+- The web route still reserves idempotency before calling the persistence RPC; the RPC then inserts/reuses snapshots, appends audit, and completes idempotency in one database command.
+- Seeded production pricing remains demo/default for edge/labor until richer price-observation tables exist.
+- HTML/PDF/customer document generation remains gated and not activated by this calculation route.
+
+## P6 Deterministic Persisted Quote Flow Result
+
+Current result: complete. P6 added a server-owned wardrobe/vestiyer calculation slice that persists frozen BOM and cost snapshots from the saved Supabase configuration draft, then exposes those snapshots to the web UI and read-only chat without enabling quote send, approval, official PDF, or production actions.
+
+Files added or materially changed:
+
+- `apps/web/lib/server/quoteCalculation.ts`
+- `apps/web/lib/server/supabaseRepository.ts`
+- `apps/web/lib/server/productMutationBoundary.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/calculate/route.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/snapshot/route.ts`
+- `apps/web/app/api/supabase/agent-chat/route.ts`
+- `apps/web/app/page.tsx`
+- `apps/web/app/globals.css`
+- `apps/web/lib/api.ts`
+- `apps/web/scripts/server-boundary-check.mjs`
+- `apps/web/scripts/session-route-smoke.mjs`
+- `apps/web/scripts/mutation-route-smoke.mjs`
+- `services/compute/app/tool_gateway_policy.py`
+- `services/compute/tests/test_tool_gateway_policy.py`
+- `supabase/migrations/0007_persist_quote_calculation_snapshots.sql`
+- `README.md`
+- `STATUS.md`
+- `ROADMAP.md`
+- `docs/implementation/DEVELOPMENT_PLAN.md`
+- `docs/implementation/CALCULATION_BOUNDARY.md`
+- `docs/implementation/DOMAIN_INVARIANTS.md`
+- `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
+- `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
+- `docs/implementation/SUPABASE_CLOUD_SETUP.md`
+- `docs/implementation/STATUS.md`
+
+P6 behavior:
+
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/calculate` requires a trusted session, writer role, durable idempotency, draft revision, and matching saved configuration draft version.
+- The calculate route rejects browser-supplied company/user/role/status/BOM/cost/total/snapshot/PDF/approval/production authority.
+- The deterministic calculator uses integer millimetres, integer minor-unit money, basis points, canonical edge names, unit labor times configured quantity, setup labor, and deterministic hashes.
+- `0007_persist_quote_calculation_snapshots.sql` inserts/reuses BOM and cost snapshots, appends `quote_snapshot_calculated`, and completes idempotency through a service-role-only RPC.
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/snapshot` reports `calculated` only when snapshot provenance matches the current configuration draft id/version and BOM snapshot hash.
+- The web UI can save a draft wardrobe configuration, request server calculation, and display returned persisted BOM, edge, labor, cost, quote total, formula, hash, and provenance fields.
+- The read-only chat route can fetch and explain trusted persisted snapshot availability/facts server-side; it requests a deterministic cost snapshot when missing and never calculates totals.
+
+P6 security/QA findings and remediation:
+
+| Severity | Finding | Remediation | Retest |
+| --- | --- | --- | --- |
+| High | Browser-forged totals/status/snapshots could become authority if the calculate route reused mutable payloads. | Calculate route now allowlists only expected configuration version/idempotency and rejects unsupported authoritative fields. | `npm run test:mutations -w apps/web` passed forged-authority 422 checks. |
+| High | Snapshot/audit/idempotency completion needed a durable database boundary. | Added `persist_quote_calculation_result` RPC to insert/reuse snapshots, append audit, and complete idempotency in one database command after reservation. | Migration applied and mutation smoke passed idempotency replay/conflict plus single audit append checks. |
+| High | Stale snapshots could be displayed after a configuration update. | Snapshot reads now require provenance match to current configuration draft id/version and BOM snapshot hash. | Static typecheck and live snapshot before/after calculate smoke passed; broader stale-after-calc regression remains a future golden case. |
+| Medium | Legacy seeded snapshots use older provenance shape. | Mapper treats old array provenance defensively and only current P6 provenance can report `calculated`. | Session/chat smoke passed missing/current snapshot behavior. |
+| Medium | Agent chat could overstep by calculating from browser context. | Chat fetches snapshots server-side only, denies mutation-like requests, and requests a deterministic snapshot when missing. | Session smoke passed prompt-injection, mutation-denial, no browser total echo, and snapshot explanation checks. |
+
+P6 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript passed after P6 route/repository/UI changes. |
+| `node --check apps/web/scripts/mutation-route-smoke.mjs` | Passed | Mutation smoke script syntax passed. |
+| `node --check apps/web/scripts/session-route-smoke.mjs` | Passed | Session smoke script syntax passed. |
+| `node --check apps/web/scripts/server-boundary-check.mjs` | Passed | Static check script syntax passed. |
+| `py -3.12 -m pytest services/compute/tests/test_tool_gateway_policy.py` | Passed | 9 passed; one known FastAPI/Starlette TestClient deprecation warning. |
+| `npm run test -w apps/web` | Passed | Server boundary/static checks passed. |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required keys configured; URL structures valid; no values printed. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Migrations applied through `0007_persist_quote_calculation_snapshots.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo Auth users and tenant fixtures seeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live DB, RLS, fixtures, storage, cross-tenant denial, direct write denial, and DB guards passed. |
+| `npm run build -w apps/web` | Passed | Production build includes calculate and snapshot routes. |
+| `npm run test:session -w apps/web` | Passed | Session/chat smoke passed, including snapshot missing/explain behavior and prompt-injection denial. |
+| `npm run test:mutations -w apps/web` | Passed | Live mutation smoke passed, including P6 deterministic snapshot persistence, idempotency, audit, RBAC, tenant isolation, money/mm/edge/labor checks, and risky route denial. |
+
+Remaining P6 risks:
+
+- Pricing uses deterministic demo defaults until price-observation/adapters exist.
+- The supported product slice is wardrobe only.
+- Official HTML/PDF quote documents, approval/send, persisted fork/diff, production package, nesting, and broader templates remain future work.
+- Go, Docker, and GNU Make remain unavailable locally, so Go/Docker/make gates are still blocked.
+- CSRF/fetch-metadata, rate limiting, production auth hardening, and broader prompt/tool-output injection evals remain roadmap items.

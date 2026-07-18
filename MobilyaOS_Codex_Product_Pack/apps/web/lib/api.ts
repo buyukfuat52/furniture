@@ -218,6 +218,101 @@ export type SupabaseQuoteConfigurationDraftResponse = {
   deferred_actions: string[];
 };
 
+export type SupabaseQuoteSnapshotResponse = {
+  calculation_status: "not_calculated" | "calculated";
+  quote_revision: SupabaseQuoteRevision;
+  configuration_draft: SupabaseQuoteConfigurationDraft | null;
+  bom_snapshot: null | {
+    id: string;
+    revision_id: string;
+    formula_version: string;
+    parts: Array<{
+      code: string;
+      name: string;
+      material_sku: string;
+      width_mm: number;
+      height_mm: number;
+      quantity: number;
+      area_mm2: number;
+    }>;
+    edges: Array<{
+      part_code: string;
+      edge: "north" | "east" | "south" | "west";
+      visibility: string;
+      band_sku: string;
+      process: string;
+      length_mm: number;
+      part_quantity: number;
+      base_length_mm: number;
+      waste_bps: number;
+      setup_mm: number;
+      billable_mm: number;
+    }>;
+    part_count: number;
+    edge_count: number;
+    snapshot_hash: string;
+  };
+  cost_snapshot: null | {
+    id: string;
+    revision_id: string;
+    formula_version: string;
+    currency: string;
+    subtotal_minor: number;
+    markup_minor: number;
+    vat_minor: number;
+    grand_total_minor: number;
+    categories: Array<{ category: string; amount_minor: number; currency: string }>;
+    labor: Array<{
+      code: string;
+      name: string;
+      labor_type: "unit" | "setup";
+      unit_labor_minor: number;
+      quantity: number;
+      total_minor: number;
+      currency: string;
+    }>;
+    quote_total: {
+      pricing_method: "markup";
+      markup_bps: number;
+      vat_bps: number;
+      subtotal_minor: number;
+      markup_minor: number;
+      vat_minor: number;
+      grand_total_minor: number;
+      currency: string;
+    };
+    provenance: {
+      calculation_version: string;
+      source: "deterministic_service";
+      input_schema_version: "quote_configuration_draft_v1";
+      configuration_draft_id: string;
+      configuration_version: number;
+      quote_revision_id: string;
+      bom_snapshot_hash: string;
+      price_sources: Array<{
+        sku: string;
+        unit: string;
+        price_minor: number;
+        currency: string;
+        source: string;
+        source_ref: string;
+      }>;
+      limitations: string[];
+      labor?: Array<{
+        code: string;
+        name: string;
+        labor_type: "unit" | "setup";
+        unit_labor_minor: number;
+        quantity: number;
+        total_minor: number;
+        currency: string;
+      }>;
+    };
+    snapshot_hash: string;
+  };
+  deferred_actions: string[];
+};
+
 export type SupabaseDemoLoginResponse = {
   authenticated: boolean;
   session_persisted: boolean;

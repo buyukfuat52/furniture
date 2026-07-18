@@ -34,8 +34,9 @@ Allowed during the current Supabase-backed build-train checkpoint:
 - Establish authenticated tenant context through a durable local-demo session.
 - Read seeded Supabase demo company, customer, project, quote, BOM, cost, document, approval, revision, and audit data through server-side tenant scope.
 - Accept the first Supabase-backed mutation commands only for creating customers, creating projects, creating quote drafts, creating/updating quote configuration drafts, and appending audit entries.
+- Accept the first deterministic persisted calculation command only for the saved wardrobe configuration draft on a tenant-scoped draft quote revision.
 - Read and list quote revisions through tenant-scoped backend routes.
-- Read current project/revision/configuration context through the read-only web agent chat route.
+- Read current project/revision/configuration/snapshot context through the read-only web agent chat route.
 - Verify tenant isolation with a second seeded tenant fixture and true cross-tenant IDOR probes.
 - Keep authenticated Supabase public-key access read-only for app data; mutations must use server routes or future audited RPCs.
 - Keep browser-collected project or quote intent as non-authoritative until accepted by backend/domain validation.
@@ -48,7 +49,7 @@ Deferred beyond this sprint:
 - Creating production packages from quotes.
 - Quote approval workflows, approver assignment, rejection workflows, and approval audit ledgers.
 - Quote status transitions beyond draft.
-- Marking quote drafts as calculated, approved, sent, PDF-ready, production-ready, or commercially final.
+- Marking quote drafts as approved, sent, PDF-ready, production-ready, or commercially final.
 - Payment, tax filing, accounting, procurement, inventory reservation, manufacturing release, and delivery commitments.
 - Bulk import/export and cross-tenant administrative mutation flows.
 
@@ -64,14 +65,16 @@ Route-specific invariants:
 - Create project: creates a tenant-owned project only for a customer visible within the same resolved company. Cross-company customer/project links are invalid even if the identifiers exist.
 - Create quote draft: creates only a draft quote record for a same-company project and customer. The persisted status must be `draft`; the command must not imply that totals are calculated, approval has started, approval has completed, the quote has been sent, a final PDF exists, or production may begin.
 - Create/update quote configuration draft: persists only validated draft input for a draft quote revision. Dimensions are integer millimetres, quantity is explicit pieces, option counts are bounded integers, and persisted calculation status is fixed to `not_calculated`. The command must not create or imply authoritative BOM, edge banding, labor, cost, tax, margin, quote total, PDF, approval, send, or production package state.
+- Calculate quote snapshot: reads only the persisted configuration draft for a tenant-scoped draft quote revision, validates the deterministic wardrobe slice, and persists frozen BOM/cost snapshots with formula version, integer money, integer millimetre quantities, edge-band rows, labor rows, quote total fields, and provenance. The command must reject browser-supplied tenant, actor, role, status, BOM, cost, total, snapshot, approval, PDF, send, or production fields.
+- Read quote snapshot: returns `calculated` only when the persisted cost provenance matches the current configuration draft id/version, quote revision id, and BOM snapshot hash. If the configuration draft changes after calculation, prior snapshots are frozen history but not current calculation state.
 - Read/list quote revisions: returns only revisions visible to the resolved company and user role. Revision reads are non-mutating and must not recalculate, approve, send, finalize, or promote a quote.
 - Append audit: records audit entries using trusted server-derived company, app user, session, timestamp, route/action, and request provenance. Browser-provided actor, company, tenant, user, role, timestamp, and session identifiers are never authoritative.
 
 Role invariants for these routes:
 
 - `viewer` is read-only. A viewer may read tenant-authorized data and quote revisions, but must not create customers, projects, quote drafts, audit entries through user commands, sends, approvals, PDFs, or production packages.
-- `sales` may create customers, projects, quote drafts, and create/update quote configuration drafts for the resolved company when the route-specific validation passes.
-- `admin` may create customers, projects, quote drafts, and create/update quote configuration drafts for the resolved company when the route-specific validation passes.
+- `sales` may create customers, projects, quote drafts, create/update quote configuration drafts, and run the deterministic snapshot calculation for the resolved company when route-specific validation passes.
+- `admin` may create customers, projects, quote drafts, create/update quote configuration drafts, and run the deterministic snapshot calculation for the resolved company when route-specific validation passes.
 - Risky quote actions remain deferred for all roles until explicit domain gates exist: send, approval, final PDF generation, production package creation, and downstream operational release.
 
 Idempotency expectations:
@@ -86,7 +89,7 @@ Idempotency expectations:
 
 ## Deterministic Domain Responsibilities
 
-BOM, cost, tax, margin, edge banding, labor, and quote totals remain deterministic backend/domain responsibilities.
+BOM, cost, tax, margin, edge banding, labor, and quote totals remain deterministic backend/domain responsibilities. P6 implements one narrow wardrobe persisted snapshot route; everything outside that slice remains deferred to future deterministic backend/domain services.
 
 LLM output and frontend calculations may be used only as suggestions, previews, or input collection aids. They must not become the source of truth for:
 
@@ -101,7 +104,7 @@ LLM output and frontend calculations may be used only as suggestions, previews, 
 - Quote total computation.
 - Approval or send readiness.
 
-Any accepted quote mutation that changes commercial meaning must be followed by backend/domain recalculation before persisted totals or status-dependent actions are considered valid.
+Any accepted quote mutation that changes commercial meaning must be followed by backend/domain recalculation before persisted totals or status-dependent actions are considered valid. Snapshot reads must verify provenance against the current draft/version instead of trusting the latest row by revision id alone.
 
 ## Approval Gates and Status Transitions
 
@@ -131,6 +134,7 @@ Current Supabase-backed scope:
 - Tenant-scoped seeded demo reads for customers, projects, quotes, snapshots, documents, approvals, quote revisions, and audit entries.
 - First tenant-scoped create routes for customers, projects, and quote drafts.
 - Tenant-scoped create/update routes for quote configuration draft input with `not_calculated` status.
+- Tenant-scoped deterministic wardrobe BOM/cost snapshot calculation and current snapshot reads.
 - Backend-owned audit append for accepted route actions.
 - Backend/database policy enforcement for tenant-scoped reads, authenticated direct-write denial, and first scoped mutations wired into the current demo flow.
 - A local-demo browser session intended to survive reloads until expiry or logout.
@@ -139,7 +143,7 @@ Current Supabase-backed scope:
 Remaining in-memory or mock scope:
 
 - Any flow not yet wired to Supabase persistence.
-- Product, quote fork, quote diff, quote send, quote approval, PDF, production package, and downstream operational mutations in the current web flow.
+- Quote fork, quote diff, quote send, quote approval, official PDF, production package, and downstream operational mutations in the current web flow.
 - Any customer, project, quote, revision, or audit behavior outside the first scoped routes defined above.
 - Placeholder catalogs, pricing tables, approval records, PDF outputs, production package records, and downstream operational integrations.
 - Client previews that help users understand pending changes before backend/domain acceptance.

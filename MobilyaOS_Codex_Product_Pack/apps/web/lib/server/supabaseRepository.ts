@@ -1,4 +1,6 @@
 import { loadSupabaseServerEnv } from "./supabaseEnv";
+import type { IdempotencyReservation } from "./idempotency";
+import type { BOMSnapshot, CostSnapshot, QuoteCalculationResult } from "./quoteCalculation";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -122,6 +124,27 @@ export type CostSnapshotRecord = {
   category_count: number;
 };
 
+export type PersistedBomSnapshotRecord = Omit<BOMSnapshot, "snapshot_hash"> & {
+  id: string;
+  revision_id: string;
+  snapshot_hash: string;
+};
+
+export type PersistedCostSnapshotRecord = Omit<CostSnapshot, "snapshot_hash"> & {
+  id: string;
+  revision_id: string;
+  snapshot_hash: string;
+};
+
+export type QuoteSnapshotResponse = {
+  calculation_status: "not_calculated" | "calculated";
+  quote_revision: QuoteRevisionRecord;
+  configuration_draft: QuoteConfigurationDraftRecord | null;
+  bom_snapshot: PersistedBomSnapshotRecord | null;
+  cost_snapshot: PersistedCostSnapshotRecord | null;
+  deferred_actions: string[];
+};
+
 export type GeneratedDocumentRecord = {
   id: string;
   revision_id: string;
@@ -193,7 +216,14 @@ function asNullableString(value: unknown): string | null {
 }
 
 function asNumber(value: unknown): number {
-  return typeof value === "number" ? value : 0;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^-?\d+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function asArray(value: unknown): unknown[] {
@@ -375,6 +405,28 @@ async function supabaseRestObject<T extends JsonRecord>(
     throw new Error("Supabase repository expected exactly one row.");
   }
   return rows[0] as T;
+}
+
+async function supabaseRestJson<T>(
+  path: string,
+  init?: RequestInit
+): Promise<T> {
+  const env = loadSupabaseServerEnv();
+  const response = await fetch(`${env.supabaseUrl}/rest/v1/${path}`, {
+    ...init,
+    headers: {
+      apikey: env.supabaseSecretKey,
+      Authorization: `Bearer ${env.supabaseSecretKey}`,
+      "Content-Type": "application/json",
+      ...(init?.headers ?? {})
+    },
+    cache: "no-store"
+  });
+  if (!response.ok) {
+    throw new Error(`Supabase repository request failed with status ${response.status}.`);
+  }
+  const text = await response.text();
+  return (text ? JSON.parse(text) : null) as T;
 }
 
 async function supabaseAuth<T extends JsonRecord>(
@@ -738,6 +790,97 @@ export async function getQuoteConfigurationDraft(
   return rows[0] ? quoteConfigurationDraftFromRow(rows[0]) : null;
 }
 
+export async function getQuoteSnapshot(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteSnapshotResponse> {
+  const quoteRevision = await getQuoteRevision(context, quoteRevisionId);
+  const configurationDraft = await getQuoteConfigurationDraft(context, quoteRevision.id);
+  const [bomRows, costRows] = await Promise.all([
+    supabaseRest<JsonRecord[]>(
+      `bom_snapshots?${new URLSearchParams({
+        company_id: `eq.${context.companyId}`,
+        revision_id: `eq.${quoteRevision.id}`,
+        select: "id,company_id,revision_id,formula_version,bom_json,edge_json,snapshot_hash",
+        order: "created_at.desc",
+        limit: "1"
+      }).toString()}`
+    ),
+    supabaseRest<JsonRecord[]>(
+      `cost_snapshots?${new URLSearchParams({
+        company_id: `eq.${context.companyId}`,
+        revision_id: `eq.${quoteRevision.id}`,
+        select: "id,company_id,revision_id,formula_version,currency,subtotal_minor,markup_minor,vat_minor,grand_total_minor,categories_json,provenance_json,snapshot_hash",
+        order: "created_at.desc",
+        limit: "1"
+      }).toString()}`
+    )
+  ]);
+  assertCompanyScope(bomRows, context.companyId, "bom_snapshots");
+  assertCompanyScope(costRows, context.companyId, "cost_snapshots");
+  const bomSnapshot = bomRows[0] ? persistedBomSnapshotFromRow(bomRows[0]) : null;
+  const costSnapshot = costRows[0] ? persistedCostSnapshotFromRow(costRows[0]) : null;
+  const matchesCurrentDraft = Boolean(
+    configurationDraft &&
+    bomSnapshot &&
+    costSnapshot &&
+    costSnapshot.provenance.configuration_draft_id === configurationDraft.id &&
+    costSnapshot.provenance.configuration_version === configurationDraft.version &&
+    costSnapshot.provenance.quote_revision_id === quoteRevision.id &&
+    costSnapshot.provenance.bom_snapshot_hash === bomSnapshot.snapshot_hash
+  );
+  return {
+    calculation_status: matchesCurrentDraft ? "calculated" : "not_calculated",
+    quote_revision: quoteRevision,
+    configuration_draft: configurationDraft,
+    bom_snapshot: matchesCurrentDraft ? bomSnapshot : null,
+    cost_snapshot: matchesCurrentDraft ? costSnapshot : null,
+    deferred_actions: ["quote_send", "quote_approve", "quote_pdf", "production_package"]
+  };
+}
+
+export async function persistQuoteCalculationResult(
+  context: TrustedRepositoryContext,
+  calculation: QuoteCalculationResult,
+  reservation: IdempotencyReservation
+): Promise<QuoteSnapshotResponse> {
+  const responseWithoutIds = quoteSnapshotResponseFromCalculation(calculation);
+  const provenanceJson = {
+    ...calculation.cost_snapshot.provenance,
+    labor: calculation.cost_snapshot.labor
+  };
+  const response = await supabaseRestJson<QuoteSnapshotResponse>(
+    "rpc/persist_quote_calculation_result",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_company_id: context.companyId,
+        p_actor_app_user_id: context.appUserId,
+        p_revision_id: calculation.quote_revision.id,
+        p_configuration_draft_id: calculation.configuration_draft.id,
+        p_configuration_version: calculation.configuration_draft.version,
+        p_idempotency_record_id: reservation.id,
+        p_request_hash: reservation.requestHash,
+        p_bom_formula_version: calculation.bom_snapshot.formula_version,
+        p_bom_json: calculation.bom_snapshot.parts,
+        p_edge_json: calculation.bom_snapshot.edges,
+        p_bom_snapshot_hash: calculation.bom_snapshot.snapshot_hash,
+        p_cost_formula_version: calculation.cost_snapshot.formula_version,
+        p_currency: calculation.cost_snapshot.currency,
+        p_subtotal_minor: calculation.cost_snapshot.subtotal_minor,
+        p_markup_minor: calculation.cost_snapshot.markup_minor,
+        p_vat_minor: calculation.cost_snapshot.vat_minor,
+        p_grand_total_minor: calculation.cost_snapshot.grand_total_minor,
+        p_categories_json: calculation.cost_snapshot.categories,
+        p_provenance_json: provenanceJson,
+        p_cost_snapshot_hash: calculation.cost_snapshot.snapshot_hash,
+        p_response_json: responseWithoutIds
+      })
+    }
+  );
+  return response;
+}
+
 export async function createQuoteConfigurationDraft(
   context: TrustedRepositoryContext,
   quoteRevisionId: string,
@@ -850,7 +993,7 @@ export async function createQuoteDraft(
 export async function appendAuditEntry(
   context: TrustedRepositoryContext,
   input: {
-    action: "customer_created" | "project_created" | "quote_draft_created" | "quote_configuration_created" | "quote_configuration_updated";
+    action: "customer_created" | "project_created" | "quote_draft_created" | "quote_configuration_created" | "quote_configuration_updated" | "quote_snapshot_calculated";
     target_type: "customer" | "project" | "quote_revision" | "quote_configuration_draft";
     target_id: string;
     metadata?: Record<string, unknown>;
@@ -973,6 +1116,102 @@ function quoteConfigurationDraftFromRow(row: JsonRecord): QuoteConfigurationDraf
     calculation_status: "not_calculated",
     version: asNumber(row.version),
     updated_at: asString(row.updated_at)
+  };
+}
+
+function persistedBomSnapshotFromRow(row: JsonRecord): PersistedBomSnapshotRecord {
+  const parts = asArray(row.bom_json) as PersistedBomSnapshotRecord["parts"];
+  const edges = asArray(row.edge_json) as PersistedBomSnapshotRecord["edges"];
+  return {
+    id: asString(row.id),
+    revision_id: asString(row.revision_id),
+    formula_version: asString(row.formula_version),
+    parts,
+    edges,
+    part_count: parts.length,
+    edge_count: edges.length,
+    snapshot_hash: asString(row.snapshot_hash)
+  };
+}
+
+function persistedCostSnapshotFromRow(row: JsonRecord): PersistedCostSnapshotRecord {
+  const categories = asArray(row.categories_json) as PersistedCostSnapshotRecord["categories"];
+  const fallbackProvenance: PersistedCostSnapshotRecord["provenance"] = {
+    calculation_version: asString(row.formula_version),
+    source: "deterministic_service",
+    input_schema_version: "quote_configuration_draft_v1",
+    configuration_draft_id: "",
+    configuration_version: 0,
+    quote_revision_id: asString(row.revision_id),
+    bom_snapshot_hash: "",
+    price_sources: [],
+    limitations: []
+  };
+  const provenance = typeof row.provenance_json === "object" && row.provenance_json !== null && !Array.isArray(row.provenance_json)
+    ? row.provenance_json as PersistedCostSnapshotRecord["provenance"]
+    : fallbackProvenance;
+  const laborSource = provenance as { labor?: PersistedCostSnapshotRecord["labor"] };
+  return {
+    id: asString(row.id),
+    revision_id: asString(row.revision_id),
+    formula_version: asString(row.formula_version),
+    currency: asString(row.currency),
+    subtotal_minor: asNumber(row.subtotal_minor),
+    markup_minor: asNumber(row.markup_minor),
+    vat_minor: asNumber(row.vat_minor),
+    grand_total_minor: asNumber(row.grand_total_minor),
+    categories,
+    labor: Array.isArray(laborSource.labor) ? laborSource.labor : [],
+    quote_total: {
+      pricing_method: "markup",
+      markup_bps: 2500,
+      vat_bps: 2000,
+      subtotal_minor: asNumber(row.subtotal_minor),
+      markup_minor: asNumber(row.markup_minor),
+      vat_minor: asNumber(row.vat_minor),
+      grand_total_minor: asNumber(row.grand_total_minor),
+      currency: asString(row.currency)
+    },
+    provenance,
+    snapshot_hash: asString(row.snapshot_hash)
+  };
+}
+
+function quoteSnapshotResponseFromCalculation(calculation: QuoteCalculationResult): QuoteSnapshotResponse {
+  const provenance = {
+    ...calculation.cost_snapshot.provenance,
+    labor: calculation.cost_snapshot.labor
+  };
+  return {
+    calculation_status: "calculated",
+    quote_revision: calculation.quote_revision,
+    configuration_draft: calculation.configuration_draft,
+    bom_snapshot: {
+      id: "",
+      revision_id: calculation.quote_revision.id,
+      formula_version: calculation.bom_snapshot.formula_version,
+      parts: calculation.bom_snapshot.parts,
+      edges: calculation.bom_snapshot.edges,
+      part_count: calculation.bom_snapshot.part_count,
+      edge_count: calculation.bom_snapshot.edge_count,
+      snapshot_hash: calculation.bom_snapshot.snapshot_hash
+    },
+    cost_snapshot: {
+      id: "",
+      revision_id: calculation.quote_revision.id,
+      formula_version: calculation.cost_snapshot.formula_version,
+      currency: calculation.cost_snapshot.currency,
+      subtotal_minor: calculation.cost_snapshot.subtotal_minor,
+      markup_minor: calculation.cost_snapshot.markup_minor,
+      vat_minor: calculation.cost_snapshot.vat_minor,
+      grand_total_minor: calculation.cost_snapshot.grand_total_minor,
+      categories: calculation.cost_snapshot.categories,
+      labor: calculation.cost_snapshot.labor,
+      quote_total: calculation.cost_snapshot.quote_total,
+      provenance,
+      snapshot_hash: calculation.cost_snapshot.snapshot_hash
+    },
+    deferred_actions: calculation.deferred_actions
   };
 }
 

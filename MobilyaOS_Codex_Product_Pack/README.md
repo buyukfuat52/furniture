@@ -128,18 +128,20 @@ The web app now has a server-side Supabase session and read boundary:
 - `POST /api/supabase/projects/[projectId]/quote-drafts` creates a draft-only quote revision shell.
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]` reads a tenant-scoped quote revision shell.
 - `GET/POST/PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft` reads, creates, and updates a tenant-scoped wardrobe configuration draft attached to a draft quote revision.
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/calculate` runs the first deterministic persisted wardrobe snapshot flow from the saved configuration draft only.
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/snapshot` reads the current persisted BOM/cost snapshot only when its provenance matches the current configuration draft/version.
 - `POST /api/supabase/agent-chat` provides the read-only web chat prototype through the HTTP-only session boundary.
 - Browser-supplied `company_id` values are not trusted as authority.
 - The browser receives only sanitized demo rows and safe status fields. It does not receive Supabase access tokens, service keys, database URLs, storage paths, or `auth_user_id`.
 - The session cookie contains only minimal encrypted local-demo claims and expires automatically.
 - The server loads root `.env` and `.env.local` automatically even when Next.js is started from `apps/web`.
 - The UI's "Load demo data" action now reads from Supabase-backed API routes only after login.
-- The UI can create customer, project, quote draft, and create/update quote configuration draft records after login.
-- The UI chat panel reads project/revision/configuration status through `/api/supabase/agent-chat`; it does not call compute directly or send browser-owned company, role, user, cost snapshot, or diff authority.
+- The UI can create customer, project, quote draft, create/update quote configuration draft records, run the saved draft through the deterministic snapshot route, and display persisted BOM/edge/labor/cost results without browser arithmetic.
+- The UI chat panel reads project/revision/configuration/snapshot status through `/api/supabase/agent-chat`; it does not call compute directly or send browser-owned company, role, user, cost snapshot, or diff authority.
 - `viewer` is read-only; `sales` and `admin` can create customer, project, quote draft, and create/update quote configuration draft records.
 - Successful mutations append server-side audit entries.
 - Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key.
-- Quote configuration drafts store only validated draft input: integer millimetre dimensions, explicit piece quantity, bounded option counts, SKUs, notes, validation status, and `not_calculated` calculation status. They do not create BOM, edge banding, labor, cost, tax, totals, PDFs, approval, send, or production package rows.
+- Quote configuration drafts store only validated draft input: integer millimetre dimensions, explicit piece quantity, bounded option counts, SKUs, notes, validation status, and `not_calculated` draft status. The P6 calculate route creates frozen BOM and cost snapshots for the narrow wardrobe slice only; it does not approve, send, generate an official PDF, or create a production package.
 - Direct authenticated table writes to quote revisions/configuration drafts are blocked or no-effect, and database guards reject quote revision status changes, approved/sent revision mutations, approved-revision config drafts, and invalid config draft shapes.
 
 Run the app without Docker:
@@ -148,7 +150,7 @@ Run the app without Docker:
 npm run dev -w apps/web
 ```
 
-The original P3 product configure/calculate/quote document/fork/diff buttons still call the Go core demo API through `NEXT_PUBLIC_API_BASE_URL` / `API_BASE_URL`. On this machine that path is not fully live because Go is not on `PATH` and the core service is still in-memory. Treat those calculation/document/fork actions as the next wiring target, not as Supabase-persisted actions.
+The original P3 quote document/fork/diff buttons still call the Go core demo API through `NEXT_PUBLIC_API_BASE_URL` / `API_BASE_URL`. On this machine that path is not fully live because Go is not on `PATH` and the core service is still in-memory. Treat official document, fork, and diff actions as the next wiring target, not as production-ready Supabase actions.
 
 Sprint boundary docs:
 
@@ -232,7 +234,7 @@ Implemented/guarded:
 - Supabase web API routes use the service key only on the server and return sanitized demo payloads.
 - Demo-data requires a valid HTTP-only session cookie and uses the session company scope instead of browser-supplied tenant identifiers.
 - Route smoke tests check login cookie flags, invalid login, session, logout, session-required demo-data, and forbidden response keys.
-- Mutation smoke tests check unauthenticated 401, viewer 403, sales/admin writes, true second-tenant read/write IDOR denial, idempotency replay/conflict across server restarts/users/tenants, quote draft status, configuration draft create/read/update, invalid config rejection, approved-revision config denial, audit append/no-extra-on-denial, and forbidden response keys.
+- Mutation smoke tests check unauthenticated 401, viewer 403, sales/admin writes, true second-tenant read/write IDOR denial, idempotency replay/conflict across server restarts/users/tenants, quote draft status, configuration draft create/read/update, invalid config rejection, approved-revision config denial, deterministic snapshot calculation/persistence, integer money and millimetre checks, edge-band and labor quantity assertions, audit append/no-extra-on-denial, and forbidden response keys.
 - `scripts/secret_scan.py` scans tracked files only and fails on committed `.env.local` or value-shaped secrets without printing matched values.
 - Mutation-boundary and runtime-agent docs keep authoritative calculations and approval decisions in backend/domain services.
 
@@ -240,7 +242,8 @@ Known gaps:
 
 - Supabase live migration/seed/verify requires saved local `.env.local` values; the scripts stop safely if required values are missing.
 - Static demo passwords and the local-demo session model are only suitable for demo/local development.
-- Durable approval-token workflow is still required before real quote sending.
+- Durable approval-token workflow is still required before real quote approval or sending.
+- Official PDF/document persistence, quote fork, revision diff persistence, and production package creation remain deferred beyond the P6 persisted snapshot slice.
 - Tool whitelist drift and malicious tool-output prompt injection need additional validation.
 
 See `ROADMAP.md` for next-phase work.

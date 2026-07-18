@@ -74,11 +74,15 @@ The current web wiring reads seeded Supabase data, validates the local-demo sess
 - `POST /api/supabase/projects/[projectId]/quote-drafts`
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]`
 - `GET/POST/PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft`
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/calculate`
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/snapshot`
 - `POST /api/supabase/agent-chat`
 
-`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, and create/update draft quote configuration inputs. Quote drafts/configuration drafts always remain draft/non-calculated and do not create authoritative BOM/cost totals, PDFs, approval, send events, or production packages.
+`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, create/update draft quote configuration inputs, and run the narrow deterministic wardrobe snapshot calculation. Quote revisions remain draft; the calculate route creates frozen BOM/cost snapshots only and does not create official PDFs, approval, send events, or production packages.
 
 Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, cost, or calculation values are not authority. Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key. Raw idempotency keys are not stored.
+
+P6 snapshot persistence uses `supabase/migrations/0007_persist_quote_calculation_snapshots.sql`. The route reserves idempotency first, then the database RPC inserts/reuses matching BOM and cost snapshots, appends `quote_snapshot_calculated`, and completes the idempotency response in one audited database command. Snapshot reads report `calculated` only when persisted provenance matches the current configuration draft id/version and BOM snapshot hash.
 
 The seed includes a second tenant (`tenantb-sales@demo.local`) for live isolation checks. Authenticated Supabase public-key access is read-only for app data after `0006_authenticated_read_only_rls.sql`; direct sales/viewer writes are denied so browser clients cannot bypass server-side idempotency, validation, or audit.
 
@@ -91,7 +95,7 @@ Quote configuration drafts are protected by route validation and database guards
 - draft writes are rejected for approved/sent revisions
 - direct authenticated writes to quote revisions/configuration drafts are blocked or no-effect
 
-Product configure/calculate/document/fork/diff mutations still use the Go core demo API path or remain deferred until deterministic persistence is implemented.
+Official quote document/fork/diff, approval/send, PDF, production package, nesting, and broader product-template mutations still use the Go core demo API path or remain deferred until fuller deterministic persistence is implemented.
 
 Additional sprint artifacts:
 
@@ -100,7 +104,7 @@ Additional sprint artifacts:
 - `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
 - `apps/web/lib/server/productMutationBoundary.ts`
 
-Run `npm run test:session -w apps/web` and `npm run test:mutations -w apps/web` after a production web build to verify login, session, logout, tenant-scoped demo-data access, read-only agent chat, true second-tenant IDOR denial, draft mutations, role checks, idempotency replay, audit append, and forbidden browser payload markers.
+Run `npm run test:session -w apps/web` and `npm run test:mutations -w apps/web` after a production web build to verify login, session, logout, tenant-scoped demo-data access, read-only agent chat, true second-tenant IDOR denial, draft mutations, deterministic snapshot persistence, role checks, idempotency replay, audit append, and forbidden browser payload markers.
 
 ## What Verification Checks
 

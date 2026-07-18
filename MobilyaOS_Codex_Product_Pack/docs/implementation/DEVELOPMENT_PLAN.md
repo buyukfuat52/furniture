@@ -204,3 +204,14 @@ Large-scale backend/frontend application coding must not start until:
 - Phase 5 adds the runtime tool gateway policy skeleton. Tool metadata records tenant, role, audit, idempotency, approval, draft-revision, expected-version, and deterministic-calculation constraints; risky and mutation/workflow tools remain non-executable until a trusted backend gateway dispatch exists.
 - Phase 6 adds the first user-facing read-only chat prototype through `POST /api/supabase/agent-chat`. The browser no longer calls compute chat directly and does not send company, role, user, cost snapshot, or diff payload authority. The route derives scope from the HTTP-only Supabase demo session and can summarize tenant-scoped projects, revisions, audit entries, and configuration draft status only.
 - Phase 7 adds a deterministic second tenant fixture and true existing-row IDOR tests. Authenticated Supabase public-key access is now read-only for app data; customer/project/quote/configuration writes must go through server routes or future audited RPCs, not direct browser REST.
+
+## P6 Deterministic Persisted Quote Flow Decisions
+
+- The first persisted deterministic quote calculation slice is wardrobe/vestiyer only and runs from the saved Supabase `quote_configuration_draft_v1` record.
+- The calculate route accepts only `expected_configuration_version` plus a durable idempotency key. Browser-supplied tenant, actor, role, status, BOM, cost, tax, total, snapshot, approval, PDF, or production fields are rejected.
+- The quote revision remains `draft`; calculation state is represented by current snapshot provenance matching the current configuration draft id/version.
+- BOM snapshots store grouped panel parts and per-edge banding rows using integer millimetres and canonical `north/east/south/west` edges.
+- Cost snapshots store integer minor-unit money, category totals, unit labor times quantity, setup labor, quote total fields, deterministic formula version, source, price-source provenance, and the linked BOM snapshot hash.
+- Snapshot/audit/idempotency completion is performed by the audited Supabase RPC `persist_quote_calculation_result` after the web route reserves the scoped idempotency record.
+- Read-only chat may fetch and explain a trusted persisted snapshot server-side. It must request a deterministic snapshot when one is missing and must not calculate BOM, cost, tax, margin, totals, labor, or edge-band values.
+- Quote send, approval, official PDF, revision fork/diff persistence, production package creation, nesting, broader product templates, and production pricing adapters remain future phases.
