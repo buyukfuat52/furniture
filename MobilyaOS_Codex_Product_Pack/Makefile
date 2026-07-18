@@ -24,6 +24,7 @@ typecheck:
 
 verify: lint typecheck test
 	py -3.12 scripts/validate_pack.py .
+	py -3.12 scripts/secret_scan.py
 	npm run build --workspaces --if-present
 
 seed:

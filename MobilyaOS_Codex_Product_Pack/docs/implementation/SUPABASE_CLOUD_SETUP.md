@@ -74,10 +74,13 @@ The current web wiring reads seeded Supabase data, validates the local-demo sess
 - `POST /api/supabase/projects/[projectId]/quote-drafts`
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]`
 - `GET/POST/PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft`
+- `POST /api/supabase/agent-chat`
 
 `viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, and draft quote configuration inputs. Quote drafts/configuration drafts always remain draft/non-calculated and do not create authoritative BOM/cost totals, PDFs, approval, send events, or production packages.
 
 Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, cost, or calculation values are not authority. Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key. Raw idempotency keys are not stored.
+
+The seed includes a second tenant (`tenantb-sales@demo.local`) for live isolation checks. Authenticated Supabase public-key access is read-only for app data after `0006_authenticated_read_only_rls.sql`; direct sales/viewer writes are denied so browser clients cannot bypass server-side idempotency, validation, or audit.
 
 Quote configuration drafts are protected by route validation and database guards:
 
@@ -97,7 +100,7 @@ Additional sprint artifacts:
 - `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
 - `apps/web/lib/server/productMutationBoundary.ts`
 
-Run `npm run test:session -w apps/web` and `npm run test:mutations -w apps/web` after a production web build to verify login, session, logout, tenant-scoped demo-data access, draft mutations, role checks, idempotency replay, audit append, and forbidden browser payload markers.
+Run `npm run test:session -w apps/web` and `npm run test:mutations -w apps/web` after a production web build to verify login, session, logout, tenant-scoped demo-data access, read-only agent chat, true second-tenant IDOR denial, draft mutations, role checks, idempotency replay, audit append, and forbidden browser payload markers.
 
 ## What Verification Checks
 

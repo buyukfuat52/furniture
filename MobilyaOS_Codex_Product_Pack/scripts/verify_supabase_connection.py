@@ -64,10 +64,17 @@ TENANT_TABLES = [
 ]
 
 DEMO_COMPANY_ID = "11111111-1111-4111-8111-111111111111"
+DEMO_CUSTOMER_ID = "77777777-7777-4777-8777-777777777777"
 DEMO_PROJECT_ID = "44444444-4444-4444-8444-444444444444"
 DEMO_REVISION_ID = "14141414-1414-4141-8141-141414141414"
 DEMO_APPROVED_REVISION_ID = "24242424-2424-4242-8242-242424242424"
 DEMO_EMAILS = ["admin@demo.local", "satis@demo.local", "viewer@demo.local"]
+SECOND_TENANT_COMPANY_ID = "99999999-9999-4999-8999-999999999999"
+SECOND_TENANT_PROJECT_ID = "99999999-9999-4999-8999-999999999997"
+SECOND_TENANT_REVISION_ID = "99999999-9999-4999-8999-999999999994"
+SECOND_TENANT_EMAILS = ["tenantb-sales@demo.local"]
+DIRECT_REST_PROBE_CUSTOMER_ID = "88888888-8888-4888-8888-888888888881"
+DIRECT_REST_PROBE_PROJECT_ID = "88888888-8888-4888-8888-888888888882"
 REQUIRED_BUCKETS = ["quote-documents", "production-packages"]
 
 
@@ -138,12 +145,12 @@ def authenticated_revision_status(env: dict[str, str], token: str) -> str:
     query = urlencode({"select": "status", "id": f"eq.{DEMO_REVISION_ID}"})
     rows = rest_request(env, "GET", f"/rest/v1/quote_revisions?{query}", token=token)
     if isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0].get("status"), str):
-      return str(rows[0]["status"])
+        return str(rows[0]["status"])
     return ""
 
 
-def expect_authenticated_quote_revision_write_blocked(env: dict[str, str], token: str) -> bool:
-    label = "Authenticated direct quote revision write"
+def expect_authenticated_quote_revision_write_blocked(env: dict[str, str], token: str, role_label: str = "") -> bool:
+    label = f"Authenticated {role_label} direct quote revision write" if role_label else "Authenticated direct quote revision write"
     before_status = authenticated_revision_status(env, token)
     quote_patch_query = urlencode({"id": f"eq.{DEMO_REVISION_ID}"})
     try:
@@ -171,41 +178,125 @@ def expect_authenticated_quote_revision_write_blocked(env: dict[str, str], token
     return False
 
 
+def authenticated_token(env: dict[str, str], email: str) -> str | None:
+    payload = rest_request(
+        env,
+        "POST",
+        "/auth/v1/token?grant_type=password",
+        payload={"email": email, "password": demo_password(env)},
+    )
+    access_token = payload.get("access_token")
+    return str(access_token) if access_token else None
+
+
+def tenant_project_rows(env: dict[str, str], token: str, project_id: str) -> Any:
+    query = urlencode({"select": "id,company_id", "id": f"eq.{project_id}"})
+    return rest_request(env, "GET", f"/rest/v1/projects?{query}", token=token)
+
+
+def tenant_revision_rows(env: dict[str, str], token: str, revision_id: str) -> Any:
+    query = urlencode({"select": "id,company_id", "id": f"eq.{revision_id}"})
+    return rest_request(env, "GET", f"/rest/v1/quote_revisions?{query}", token=token)
+
+
+def expect_direct_app_write_blocked(env: dict[str, str], token: str, role_label: str) -> bool:
+    customer_write_blocked = expect_authenticated_rest_denied(
+        env,
+        token,
+        "POST",
+        "/rest/v1/customers",
+        {
+            "id": DIRECT_REST_PROBE_CUSTOMER_ID,
+            "company_id": DEMO_COMPANY_ID,
+            "name": "Direct REST Probe Customer",
+        },
+        f"Authenticated {role_label} direct customer write",
+    )
+    project_write_blocked = expect_authenticated_rest_denied(
+        env,
+        token,
+        "POST",
+        "/rest/v1/projects",
+        {
+            "id": DIRECT_REST_PROBE_PROJECT_ID,
+            "company_id": DEMO_COMPANY_ID,
+            "customer_id": DEMO_CUSTOMER_ID,
+            "name": "Direct REST Probe Project",
+            "status": "draft",
+        },
+        f"Authenticated {role_label} direct project write",
+    )
+    quote_write_blocked = expect_authenticated_quote_revision_write_blocked(env, token, role_label)
+    config_write_blocked = expect_authenticated_rest_denied(
+        env,
+        token,
+        "POST",
+        "/rest/v1/quote_configuration_drafts",
+        {
+            "company_id": DEMO_COMPANY_ID,
+            "quote_revision_id": DEMO_REVISION_ID,
+            "configuration_json": safe_configuration_payload(),
+            "validation_status": "draft_validated",
+            "calculation_status": "not_calculated",
+        },
+        f"Authenticated {role_label} direct configuration draft write",
+    )
+    return customer_write_blocked and project_write_blocked and quote_write_blocked and config_write_blocked
+
+
 def verify_authenticated_rls(env: dict[str, str]) -> bool:
     try:
-        payload = rest_request(
-            env,
-            "POST",
-            "/auth/v1/token?grant_type=password",
-            payload={"email": "satis@demo.local", "password": demo_password(env)},
-        )
-        access_token = payload.get("access_token")
-        if not access_token:
+        access_token = authenticated_token(env, "satis@demo.local")
+        viewer_access_token = authenticated_token(env, "viewer@demo.local")
+        second_access_token = authenticated_token(env, SECOND_TENANT_EMAILS[0])
+        if not access_token or not viewer_access_token or not second_access_token:
             print("Authenticated RLS smoke: failed (no token returned)")
             return False
-        query = urlencode({"select": "id,company_id", "id": f"eq.{DEMO_PROJECT_ID}"})
-        rows = rest_request(env, "GET", f"/rest/v1/projects?{query}", token=str(access_token))
+        rows = tenant_project_rows(env, access_token, DEMO_PROJECT_ID)
+        second_rows = tenant_project_rows(env, second_access_token, SECOND_TENANT_PROJECT_ID)
+        second_reads_primary = tenant_project_rows(env, second_access_token, DEMO_PROJECT_ID)
+        primary_reads_second = tenant_project_rows(env, access_token, SECOND_TENANT_PROJECT_ID)
+        second_reads_primary_revision = tenant_revision_rows(env, second_access_token, DEMO_REVISION_ID)
+        primary_reads_second_revision = tenant_revision_rows(env, access_token, SECOND_TENANT_REVISION_ID)
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Authenticated RLS smoke: failed ({exc.__class__.__name__})")
         return False
-    if isinstance(rows, list) and len(rows) == 1 and rows[0].get("company_id") == DEMO_COMPANY_ID:
+    if (
+        isinstance(rows, list)
+        and len(rows) == 1
+        and rows[0].get("company_id") == DEMO_COMPANY_ID
+        and isinstance(second_rows, list)
+        and len(second_rows) == 1
+        and second_rows[0].get("company_id") == SECOND_TENANT_COMPANY_ID
+    ):
         print("Authenticated RLS smoke: ok")
-        quote_write_blocked = expect_authenticated_quote_revision_write_blocked(env, str(access_token))
-        config_write_blocked = expect_authenticated_rest_denied(
+        cross_read_ok = (
+            isinstance(second_reads_primary, list)
+            and len(second_reads_primary) == 0
+            and isinstance(primary_reads_second, list)
+            and len(primary_reads_second) == 0
+            and isinstance(second_reads_primary_revision, list)
+            and len(second_reads_primary_revision) == 0
+            and isinstance(primary_reads_second_revision, list)
+            and len(primary_reads_second_revision) == 0
+        )
+        print(f"Cross-tenant authenticated read: {'ok' if cross_read_ok else 'failed'}")
+        cross_write_blocked = expect_authenticated_rest_denied(
             env,
-            str(access_token),
+            second_access_token,
             "POST",
-            "/rest/v1/quote_configuration_drafts",
+            "/rest/v1/projects",
             {
                 "company_id": DEMO_COMPANY_ID,
-                "quote_revision_id": DEMO_REVISION_ID,
-                "configuration_json": safe_configuration_payload(),
-                "validation_status": "draft_validated",
-                "calculation_status": "not_calculated",
+                "customer_id": "77777777-7777-4777-8777-777777777777",
+                "name": "Cross Tenant Probe",
+                "status": "draft",
             },
-            "Authenticated direct configuration draft write",
+            "Cross-tenant authenticated project write",
         )
-        return quote_write_blocked and config_write_blocked
+        sales_direct_write_blocked = expect_direct_app_write_blocked(env, access_token, "sales")
+        viewer_direct_write_blocked = expect_direct_app_write_blocked(env, viewer_access_token, "viewer")
+        return cross_read_ok and cross_write_blocked and sales_direct_write_blocked and viewer_direct_write_blocked
     print("Authenticated RLS smoke: failed (unexpected row count)")
     return False
 
@@ -369,11 +460,23 @@ def main() -> int:
                     (DEMO_COMPANY_ID, DEMO_EMAILS),
                 )
                 demo_user_count = cur.fetchone()[0]
+                cur.execute("select count(*) from public.companies where id = %s", (SECOND_TENANT_COMPANY_ID,))
+                second_company_count = cur.fetchone()[0]
+                cur.execute(
+                    "select count(*) from public.app_users where company_id = %s and email = any(%s)",
+                    (SECOND_TENANT_COMPANY_ID, SECOND_TENANT_EMAILS),
+                )
+                second_user_count = cur.fetchone()[0]
                 cur.execute(
                     "select count(*) from public.projects where company_id = %s and id = %s",
                     (DEMO_COMPANY_ID, DEMO_PROJECT_ID),
                 )
                 project_count = cur.fetchone()[0]
+                cur.execute(
+                    "select count(*) from public.projects where company_id = %s and id = %s",
+                    (SECOND_TENANT_COMPANY_ID, SECOND_TENANT_PROJECT_ID),
+                )
+                second_project_count = cur.fetchone()[0]
                 cur.execute(
                     """
                     select count(*)
@@ -392,6 +495,15 @@ def main() -> int:
                     (DEMO_COMPANY_ID, DEMO_APPROVED_REVISION_ID, DEMO_PROJECT_ID),
                 )
                 approved_revision_count = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    select count(*)
+                    from public.quote_revisions
+                    where company_id = %s and id = %s and project_id = %s
+                    """,
+                    (SECOND_TENANT_COMPANY_ID, SECOND_TENANT_REVISION_ID, SECOND_TENANT_PROJECT_ID),
+                )
+                second_revision_count = cur.fetchone()[0]
                 cur.execute("select id from storage.buckets where id = any(%s)", (REQUIRED_BUCKETS,))
                 found_buckets = {row[0] for row in cur.fetchall()}
                 guard_ok = verify_configuration_database_guards(cur)
@@ -402,9 +514,13 @@ def main() -> int:
     missing_buckets = sorted(set(REQUIRED_BUCKETS) - found_buckets)
     print(f"Demo company: {'ok' if company_count == 1 else 'missing'}")
     print(f"Demo app users: {demo_user_count}/{len(DEMO_EMAILS)}")
+    print(f"Second tenant company: {'ok' if second_company_count == 1 else 'missing'}")
+    print(f"Second tenant app users: {second_user_count}/{len(SECOND_TENANT_EMAILS)}")
     print(f"Demo project: {'ok' if project_count == 1 else 'missing'}")
+    print(f"Second tenant project: {'ok' if second_project_count == 1 else 'missing'}")
     print(f"Demo quote revision: {'ok' if revision_count == 1 else 'missing'}")
     print(f"Demo approved quote revision: {'ok' if approved_revision_count == 1 else 'missing'}")
+    print(f"Second tenant quote revision: {'ok' if second_revision_count == 1 else 'missing'}")
     if missing_buckets:
         print(f"Storage buckets: missing ({len(missing_buckets)})")
         failed = True
@@ -413,9 +529,13 @@ def main() -> int:
     if (
         company_count != 1
         or demo_user_count != len(DEMO_EMAILS)
+        or second_company_count != 1
+        or second_user_count != len(SECOND_TENANT_EMAILS)
         or project_count != 1
+        or second_project_count != 1
         or revision_count != 1
         or approved_revision_count != 1
+        or second_revision_count != 1
     ):
         failed = True
     if not guard_ok:

@@ -10,7 +10,14 @@ const repoRoot = findRepoRoot(appRoot);
 const fakeCustomerId = "00000000-0000-4000-8000-000000000001";
 const fakeProjectId = "00000000-0000-4000-8000-000000000002";
 const fakeQuoteRevisionId = "00000000-0000-4000-8000-000000000003";
+const demoCustomerId = "77777777-7777-4777-8777-777777777777";
+const demoProjectId = "44444444-4444-4444-8444-444444444444";
+const demoQuoteRevisionId = "14141414-1414-4141-8141-141414141414";
 const demoApprovedQuoteRevisionId = "24242424-2424-4242-8242-242424242424";
+const secondTenantCustomerId = "99999999-9999-4999-8999-999999999998";
+const secondTenantProjectId = "99999999-9999-4999-8999-999999999997";
+const secondTenantQuoteRevisionId = "99999999-9999-4999-8999-999999999994";
+const secondTenantSalesEmail = "tenantb-sales@demo.local";
 const forbiddenPayloadKeys = [
   "SUPABASE_SERVICE_KEY",
   "SUPABASE_SECRET_KEY",
@@ -474,7 +481,151 @@ async function main() {
       headers: { Cookie: salesCookie }
     }, "audit baseline");
     requireSafe(result.response.ok, "Demo data must succeed before mutation audit baseline.");
+    const primaryDemoData = result.payload;
     const auditBefore = countAuditActions(result.payload.audit_entries);
+
+    const secondTenantCookie = await login(baseUrl, secondTenantSalesEmail, password);
+    result = await requestJson(baseUrl, "/api/supabase/demo-data?company_id=browser-supplied-primary", {
+      method: "GET",
+      headers: { Cookie: secondTenantCookie }
+    }, "second tenant demo-data");
+    requireSafe(result.response.ok, "Second tenant demo data must succeed.");
+    requireSafe(
+      result.payload.company?.name !== primaryDemoData.company?.name,
+      "Second tenant demo data must use its own session company."
+    );
+    requireSafe(
+      result.payload.projects?.some((item) => item.id === secondTenantProjectId),
+      "Second tenant demo data must include its own project."
+    );
+    requireSafe(
+      !result.payload.projects?.some((item) => item.id === demoProjectId),
+      "Second tenant demo data must not include the primary tenant project."
+    );
+    requireSafe(
+      !primaryDemoData.projects?.some((item) => item.id === secondTenantProjectId),
+      "Primary tenant demo data must not include the second tenant project."
+    );
+
+    const secondTenantReadProbes = [
+      {
+        label: "second tenant reads primary project detail",
+        path: `/api/supabase/projects/${demoProjectId}`
+      },
+      {
+        label: "second tenant reads primary project quote list",
+        path: `/api/supabase/projects/${demoProjectId}/quote-revisions`
+      },
+      {
+        label: "second tenant reads primary quote revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}`
+      },
+      {
+        label: "second tenant reads primary configuration draft",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/configuration-draft`
+      },
+      {
+        label: "primary tenant reads second project detail",
+        path: `/api/supabase/projects/${secondTenantProjectId}`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second project quote list",
+        path: `/api/supabase/projects/${secondTenantProjectId}/quote-revisions`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second quote revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second configuration draft",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/configuration-draft`,
+        cookie: salesCookie
+      }
+    ];
+    for (const probe of secondTenantReadProbes) {
+      result = await requestJson(baseUrl, probe.path, {
+        method: "GET",
+        headers: { Cookie: probe.cookie || secondTenantCookie }
+      }, probe.label);
+      requireSafe(result.response.status === 404, `${probe.label} must return tenant-scoped 404.`);
+    }
+
+    const secondTenantWriteProbes = [
+      {
+        label: "second tenant project create with primary customer",
+        path: "/api/supabase/projects",
+        method: "POST",
+        body: { ...forgedPayloadMarkers, customer_id: demoCustomerId, name: `Cross Tenant Project ${suffix}` }
+      },
+      {
+        label: "second tenant quote draft on primary project",
+        path: `/api/supabase/projects/${demoProjectId}/quote-drafts`,
+        method: "POST",
+        body: { ...forgedPayloadMarkers, status: "sent" }
+      },
+      {
+        label: "second tenant configuration create on primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/configuration-draft`,
+        method: "POST",
+        body: configurationDraftBody()
+      }
+    ];
+    for (const probe of secondTenantWriteProbes) {
+      result = await requestJson(baseUrl, probe.path, {
+        method: probe.method,
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: secondTenantCookie,
+          "x-idempotency-key": `second-tenant-${probe.label.replaceAll(" ", "-")}-${suffix}`
+        },
+        body: JSON.stringify(probe.body)
+      }, probe.label);
+      requireSafe(result.response.status === 404, `${probe.label} must return tenant-scoped 404.`);
+    }
+    const primaryToSecondTenantWriteProbes = [
+      {
+        label: "primary tenant project create with second tenant customer",
+        path: "/api/supabase/projects",
+        method: "POST",
+        body: { ...forgedPayloadMarkers, customer_id: secondTenantCustomerId, name: `Cross Tenant B Project ${suffix}` }
+      },
+      {
+        label: "primary tenant quote draft on second tenant project",
+        path: `/api/supabase/projects/${secondTenantProjectId}/quote-drafts`,
+        method: "POST",
+        body: { ...forgedPayloadMarkers, status: "sent" }
+      },
+      {
+        label: "primary tenant configuration create on second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/configuration-draft`,
+        method: "POST",
+        body: configurationDraftBody()
+      }
+    ];
+    for (const probe of primaryToSecondTenantWriteProbes) {
+      result = await requestJson(baseUrl, probe.path, {
+        method: probe.method,
+        headers: {
+          "Content-Type": "application/json",
+          Cookie: salesCookie,
+          "x-idempotency-key": `primary-to-second-tenant-${probe.label.replaceAll(" ", "-")}-${suffix}`
+        },
+        body: JSON.stringify(probe.body)
+      }, probe.label);
+      requireSafe(result.response.status === 404, `${probe.label} must return tenant-scoped 404.`);
+    }
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after second tenant IDOR probes");
+    requireSafe(result.response.ok, "Demo data must succeed after second tenant IDOR probes.");
+    const auditAfterSecondTenantIdor = countAuditActions(result.payload.audit_entries);
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "project_created");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_draft_created");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_configuration_created");
 
     const idorProbes = [
       {
@@ -564,6 +715,20 @@ async function main() {
     }, "customer durable idempotency replay after restart");
     requireSafe(result.response.status === 201, "Customer durable replay after restart must return the stored status.");
     requireSafe(result.payload.customer?.id === customer.id, "Customer durable replay after restart must return the original safe result.");
+
+    result = await requestJson(baseUrl, "/api/supabase/customers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: secondTenantCookie, "x-idempotency-key": customerKey },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        name: `Tenant B Smoke Customer ${suffix}`,
+        email: `tenantb-smoke-${suffix}@example.local`,
+        phone: "+90 555 030 30 30"
+      })
+    }, "second tenant customer create with primary tenant key");
+    requireSafe(result.response.status === 201, "Second tenant customer create must return 201.");
+    requireSafe(Boolean(result.payload.customer?.id), "Second tenant customer create payload must include a safe id.");
+    requireSafe(result.payload.customer.id !== customer.id, "Idempotency key reuse across tenants must not replay another tenant's result.");
 
     const adminCookie = await login(baseUrl, "admin@demo.local", password);
     const adminCustomerBody = {

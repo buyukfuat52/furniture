@@ -1026,7 +1026,7 @@ export async function loadAppUserContext(appUserId: string, companyId: string): 
 }
 
 export async function signInAndMapDemoUser(email: string, password: string): Promise<MappedAppUser> {
-  const allowedDemoEmails = new Set(["admin@demo.local", "satis@demo.local", "viewer@demo.local"]);
+  const allowedDemoEmails = new Set(["admin@demo.local", "satis@demo.local", "viewer@demo.local", "tenantb-sales@demo.local"]);
   if (!allowedDemoEmails.has(email.toLowerCase())) {
     throw new Error("Only seeded demo users can be mapped in this development route.");
   }

@@ -300,6 +300,81 @@ async function main() {
       "Mutation-like agent request must be denied by the gateway."
     );
 
+    response = await fetch(`${baseUrl}/api/supabase/demo-login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "tenantb-sales@demo.local", password })
+    });
+    requireSafe(response.ok, "Second tenant demo login must succeed.");
+    const secondTenantCookie = firstCookie(response.headers.get("set-cookie") || "");
+    const secondTenantLoginPayload = await readJson(response, "second tenant login");
+    requireSafe(
+      secondTenantLoginPayload.company?.name !== sessionPayload.company?.name,
+      "Second tenant login must resolve a different session company."
+    );
+
+    response = await fetch(`${baseUrl}/api/supabase/demo-data?company_id=browser-supplied-primary`, {
+      cache: "no-store",
+      headers: { Cookie: secondTenantCookie }
+    });
+    requireSafe(response.ok, "Second tenant demo data must succeed.");
+    const secondTenantData = await readJson(response, "second tenant demo data");
+    requireSafe(
+      secondTenantData.company?.name === secondTenantLoginPayload.company?.name,
+      "Second tenant demo data must use the second tenant session company."
+    );
+    requireSafe(
+      !secondTenantData.projects?.some((project) => project.id === selectedProject.id),
+      "Second tenant demo data must not include the primary tenant project."
+    );
+    const secondProject = secondTenantData.projects?.[0];
+    const secondRevision = secondTenantData.quote_revisions?.find(
+      (revision) => revision.project_id === secondProject?.id
+    );
+    requireSafe(Boolean(secondProject?.id), "Second tenant demo data must include its own project.");
+    requireSafe(Boolean(secondRevision?.id), "Second tenant demo data must include its own quote revision.");
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Projeyi acikla",
+        project_id: secondProject.id,
+        quote_revision_id: secondRevision.id
+      })
+    });
+    requireSafe(response.status === 404, "Primary tenant agent chat must not read second tenant selectors.");
+    assertSafePayload("primary tenant agent second selector denial", await response.text());
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: secondTenantCookie },
+      body: JSON.stringify({
+        message: "Projeleri listele",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id
+      })
+    });
+    requireSafe(response.status === 404, "Second tenant agent chat must not read primary tenant selectors.");
+    assertSafePayload("second tenant agent primary selector denial", await response.text());
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: secondTenantCookie },
+      body: JSON.stringify({
+        message: "Projeleri listele",
+        project_id: secondProject.id,
+        quote_revision_id: secondRevision.id
+      })
+    });
+    requireSafe(response.ok, "Second tenant agent chat must read its own tenant data.");
+    const secondTenantAgentPayload = await readJson(response, "second tenant agent chat payload");
+    assertSafeAgentPayload("second tenant agent chat payload", secondTenantAgentPayload);
+    requireSafe(
+      secondTenantAgentPayload.classification === "read_only_agent_gateway",
+      "Second tenant agent chat must use the read-only gateway."
+    );
+
     response = await fetch(`${baseUrl}/api/supabase/logout`, {
       method: "POST",
       headers: { Cookie: cookieHeader }

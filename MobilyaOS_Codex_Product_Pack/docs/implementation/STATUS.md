@@ -1217,3 +1217,87 @@ Remaining Phase 6 risks:
 - Agent read tooling is limited to project/revision/configuration summaries and does not persist tool invocations or audit read events.
 - Prompt-injection detection remains keyword/rules based; malicious retrieved content and supplier/customer document injection still need broader eval coverage.
 - Real second-tenant live negative tests remain Phase 7 work.
+
+## Post-P5.5 Build Train - Phase 7 Checkpoint
+
+Current result: complete. Phase 7 added a real second-tenant fixture, live cross-tenant negative tests, read-only authenticated Supabase RLS for app data, direct sales/viewer public-key write denial checks, and a reusable tracked-file secret scan.
+
+Agent implementation reports:
+
+- `domain_architect`: kept tenant isolation, immutable revision, no-authoritative-calculation, and server-owned mutation boundaries as blocking invariants.
+- `backend_engineer`: added `0006_authenticated_read_only_rls.sql`, seeded a deterministic second tenant, expanded live Supabase verification, and preserved service-role server routes as the only write path.
+- `frontend_engineer`: expanded session and mutation smoke scripts to log into primary and second tenant demo users and probe true existing-row IDOR cases.
+- `ai_prompt_engineer`: no prompt files changed; Phase 6 read-only agent route now has cross-tenant selector smoke coverage.
+- `security_reviewer`: high findings for broad authenticated RLS writes and missing second-tenant proof were fixed. Medium findings for browser company-id realism and tracked secret scan were fixed. CSRF/fetch-metadata and rate limiting remain documented hardening work.
+- `qa_reviewer`: recommended exact second-tenant fixture IDs and IDOR assertions; integrated into seed, verifier, session smoke, and mutation smoke.
+
+Severity findings and remediation:
+
+| Severity | Finding | Remediation | Retest |
+| --- | --- | --- | --- |
+| High | Authenticated Supabase RLS allowed broad direct writes on app tables, bypassing web route role/idempotency/audit boundaries. | Added `0006_authenticated_read_only_rls.sql` to drop broad `for all to authenticated` policies for app data and leave authenticated public-key clients read-only. | `py -3.12 scripts/verify_supabase_connection.py` passed direct sales/viewer customer, project, quote revision, and configuration draft write denial checks. |
+| High | Tenant isolation was previously tested mostly with fake UUIDs, not existing rows from another tenant. | Added second tenant company, user, customer, project, template, variant, revision, and audit fixture; added true primary/second-tenant read/write IDOR probes. | `npm run test:session -w apps/web`, `npm run test:mutations -w apps/web`, and live verifier passed. |
+| Medium | Browser `company_id` ignore was not proven with a real other-tenant ID. | Mutation/session smokes now use real second-tenant IDs and forged browser authority markers. | Live web smokes passed with sanitized payload checks. |
+| Medium | Secret scanning was an ad hoc command, not a reusable tracked-file gate. | Added `scripts/secret_scan.py`, wired `npm run secret-scan`, and added it to `make verify`. | `py -3.12 scripts/secret_scan.py` and `npm run secret-scan` passed. |
+| Medium | CSRF/fetch-metadata and rate limiting are not implemented. | Documented as remaining hardening work; no runtime control added in Phase 7. | Not retested; remains open risk. |
+
+Files added or materially changed:
+
+- `supabase/migrations/0006_authenticated_read_only_rls.sql`
+- `scripts/seed_supabase.py`
+- `scripts/verify_supabase_connection.py`
+- `scripts/secret_scan.py`
+- `apps/web/lib/server/supabaseRepository.ts`
+- `apps/web/scripts/session-route-smoke.mjs`
+- `apps/web/scripts/mutation-route-smoke.mjs`
+- `Makefile`
+- `package.json`
+- `README.md`
+- `STATUS.md`
+- `docs/implementation/SUPABASE_CLOUD_SETUP.md`
+- `docs/implementation/STATUS.md`
+
+Phase 7 behavior:
+
+- Primary and second tenant demo users can log in through the same HTTP-only local-demo session boundary.
+- Each tenant sees its own demo data and not the other tenant's project/revision rows.
+- Primary tenant requests for second tenant project/revision/configuration selectors return safe 404s.
+- Second tenant requests for primary tenant project/revision/configuration selectors return safe 404s.
+- Cross-tenant create attempts for project, quote draft, and configuration draft return safe 404s and do not add primary-tenant audit records.
+- Authenticated Supabase REST reads remain tenant-scoped.
+- Authenticated Supabase REST writes to customer, project, quote revision, and quote configuration draft are denied for both sales and viewer tokens.
+- Server-side Next routes remain the only current write path and continue to enforce session, role, validation, idempotency, audit, and payload sanitization.
+
+Phase 7 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 -m py_compile scripts\seed_supabase.py scripts\verify_supabase_connection.py scripts\apply_supabase_migrations.py scripts\supabase_common.py scripts\check_supabase_env.py` | Passed | Supabase helper scripts compile. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0006_authenticated_read_only_rls.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Primary and second tenant demo Auth/DB rows are present; no values printed. |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required keys configured; URL structures valid; no values printed. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Primary/second tenant fixtures, RLS, direct write denial, cross-tenant denial, storage, and DB guards passed. |
+| `npm run test -w apps/web` | Passed | Static server boundary passed. |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript passed. |
+| `npm run build -w apps/web` | Passed | Production build passed. |
+| `npm run test:session -w apps/web` | Passed | Includes primary/second tenant session and agent-chat IDOR coverage. |
+| `npm run test:mutations -w apps/web` | Passed | Includes true primary/second tenant IDOR, idempotency, audit, and draft mutation coverage. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Compute lint passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Compute typecheck passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 39 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| `py -3.12 scripts/secret_scan.py` | Passed | No tracked secret-like values or tracked `.env.local` found. |
+| `npm run secret-scan` | Passed | Same tracked-file secret scan through npm. |
+| `npm run test --workspaces --if-present` | Passed | Web boundary passed; contracts test remains placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed | Web typecheck passed; contracts typecheck remains placeholder. |
+| `npm run build --workspaces --if-present` | Passed | Web production build passed; contracts build remains placeholder. |
+| `go version` | Blocked | Go is not on PATH. |
+| `make --version` | Blocked | GNU Make is not on PATH. |
+| `docker version --format ...` | Blocked | Docker Desktop engine pipe is unavailable. |
+
+Remaining Phase 7 risks:
+
+- CSRF/fetch-metadata checks and rate limiting are still not implemented.
+- Production auth still needs session revocation, rotation, device tracking, and operational monitoring.
+- RLS now intentionally blocks direct public-key writes; future direct Supabase client mutations must go through server commands or role-aware audited RPCs.
+- Contracts package tests remain placeholders.

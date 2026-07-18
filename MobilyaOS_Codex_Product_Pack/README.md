@@ -73,6 +73,7 @@ These demo users are created by `scripts/seed_supabase.py` when Supabase Auth ad
 | `admin@demo.local` | `Demo1234!ChangeMe` | admin |
 | `satis@demo.local` | `Demo1234!ChangeMe` | sales |
 | `viewer@demo.local` | `Demo1234!ChangeMe` | viewer |
+| `tenantb-sales@demo.local` | `Demo1234!ChangeMe` | sales, second tenant fixture |
 
 This password is only for demo/local development.
 
@@ -108,10 +109,10 @@ Behavior:
 
 - `check_supabase_env.py` reports file discovery, key status, and URL format/structure status without printing values.
 - `apply_supabase_migrations.py` runs `supabase/migrations/*.sql` in filename order.
-- `seed_supabase.py` creates demo Auth users and idempotent demo tenant data as much as possible.
+- `seed_supabase.py` creates demo Auth users and idempotent primary plus second-tenant demo data as much as possible.
 - `verify_supabase_connection.py` checks DB connectivity, table existence, and demo tenant query counts.
 
-`verify_supabase_connection.py` also checks demo app users, demo project/revision rows, tenant `company_id` columns, RLS enablement, absence of public/anon policies, the two Storage buckets, and an authenticated RLS smoke query using the demo sales user.
+`verify_supabase_connection.py` also checks demo app users, demo project/revision rows, second-tenant fixture rows, tenant `company_id` columns, RLS enablement, absence of public/anon policies, the two Storage buckets, authenticated cross-tenant read/write denial, and direct authenticated public-key write denial for sales/viewer users.
 
 ## Supabase-backed Web Session And Draft Mutations
 
@@ -182,6 +183,7 @@ npm run typecheck --workspaces --if-present
 npm run build --workspaces --if-present
 npm run test:session -w apps/web
 npm run test:mutations -w apps/web
+npm run secret-scan
 py -3.12 scripts/validate_pack.py .
 ```
 
@@ -202,6 +204,7 @@ Blocked on this machine:
 - Compute/agent service passes tests and enforces bearer auth, role derivation, prompt-injection blocking, tool allowlists, and quote-send denial/approval gating.
 - Supabase migrations define tenant-scoped tables, composite foreign keys, RLS policies, and private storage buckets.
 - Supabase scripts support env validation, migration, seeding, and verification without printing secrets.
+- The seed includes a second tenant fixture used by live IDOR and RLS negative tests.
 
 ## Deferred Features
 
@@ -222,13 +225,15 @@ Implemented/guarded:
 - `.env.local`, `.env.*.local`, `*.pem`, `*.key`, `.secrets/`, and `supabase/.temp/` are ignored.
 - Supabase migrations enable RLS for tenant-owned tables.
 - Tenant isolation is prepared through `company_id` and composite foreign keys.
+- Authenticated Supabase public-key access is read-only for app data; writes go through server routes that enforce role, validation, idempotency, and audit.
 - Secret values are never printed by the env check script.
 - Service role key is expected only in `.env.local` and server/script environments.
 - Web boundary tests check that browser/client files do not reference server-only Supabase/database/JWT env names.
 - Supabase web API routes use the service key only on the server and return sanitized demo payloads.
 - Demo-data requires a valid HTTP-only session cookie and uses the session company scope instead of browser-supplied tenant identifiers.
 - Route smoke tests check login cookie flags, invalid login, session, logout, session-required demo-data, and forbidden response keys.
-- Mutation smoke tests check unauthenticated 401, viewer 403, sales/admin writes, idempotency replay/conflict, quote draft status, configuration draft create/read/update, invalid config rejection, approved-revision config denial, audit append, and forbidden response keys.
+- Mutation smoke tests check unauthenticated 401, viewer 403, sales/admin writes, true second-tenant read/write IDOR denial, idempotency replay/conflict across server restarts/users/tenants, quote draft status, configuration draft create/read/update, invalid config rejection, approved-revision config denial, audit append/no-extra-on-denial, and forbidden response keys.
+- `scripts/secret_scan.py` scans tracked files only and fails on committed `.env.local` or value-shaped secrets without printing matched values.
 - Mutation-boundary and runtime-agent docs keep authoritative calculations and approval decisions in backend/domain services.
 
 Known gaps:

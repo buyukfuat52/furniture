@@ -1,6 +1,6 @@
 # MobilyaOS Status
 
-Current status: Post-P5.5 build train Phase 6 has passed targeted implementation checks. Supabase Cloud validation, local-demo session routing, Supabase-backed customer/project/quote draft/configuration draft routes, delegated P5.5 security completion, durable Supabase-backed idempotency, read-only project/revision timeline/status policy surfaces, non-authoritative calculation-boundary scaffolding, quote configuration draft persistence guards, runtime agent tool-gateway policy skeleton, and a read-only Supabase-backed web agent chat route are verified.
+Current status: Post-P5.5 build train Phase 7 has passed targeted security hardening checks. Supabase Cloud validation, local-demo session routing, Supabase-backed customer/project/quote draft/configuration draft routes, delegated P5.5 security completion, durable Supabase-backed idempotency, read-only project/revision timeline/status policy surfaces, non-authoritative calculation-boundary scaffolding, quote configuration draft persistence guards, runtime agent tool-gateway policy skeleton, read-only Supabase-backed web agent chat, second-tenant negative tests, and read-only authenticated RLS are verified.
 
 Docker Desktop is not available on this machine, so the local Docker Compose path is not active. Supabase Cloud migrations, RLS policies, Storage bucket setup SQL, env validation, migration, seed, and verify scripts are prepared and verified live.
 
@@ -47,16 +47,16 @@ Latest local verification:
 
 - Compute: ruff, mypy, and pytest passed; current pytest count is 39 passed with one known FastAPI/Starlette TestClient deprecation warning.
 - Web/workspaces: server-boundary test, typecheck, and production build passed; contracts tests are placeholders.
-- Supabase-backed web route smoke tests passed for invalid login, login cookie flags, session, logout, session-required demo data, read-only agent chat, prompt-injection blocking, mutation-like chat denial, and sanitized payload checks.
-- Supabase-backed mutation route smoke passed for unauthenticated reads and writes, viewer 403, sales/admin customer/project/quote draft/configuration draft creation, configuration draft read/update, invalid dimension rejection, approved-revision config denial, durable idempotency replay after a Next server restart, replay/conflict behavior, quote draft status, quote revision list/get, risky route absence, audit no-extra-on-replay/conflict checks, and sanitized payload checks.
+- Supabase-backed web route smoke tests passed for invalid login, primary/second-tenant login cookie flags, session, logout, session-required demo data, tenant-scoped read-only agent chat, prompt-injection blocking, mutation-like chat denial, primary/second-tenant selector IDOR denial, and sanitized payload checks.
+- Supabase-backed mutation route smoke passed for unauthenticated reads and writes, viewer 403, true primary/second-tenant read/write IDOR 404s, sales/admin customer/project/quote draft/configuration draft creation, configuration draft read/update, invalid dimension rejection, approved-revision config denial, durable idempotency replay after a Next server restart, replay/conflict behavior, idempotency actor/tenant isolation, quote draft status, quote revision list/get, risky route absence, audit no-extra-on-replay/conflict/IDOR checks, and sanitized payload checks.
 - Supabase project/revision timeline smoke passed for project detail read, quote revision status policy, audit timeline shape, and blocked direct quote status escalation.
 - Public generated document overview is sanitized and does not expose storage bucket/path metadata.
 - Compute calculation-boundary tests passed for strict mm/money/quantity contracts, source-specific provenance, bounded preview shapes, margin validation, deterministic non-production preview hash, sanitized validation errors, non-authoritative API mode, and chat rejection of browser-supplied commercial snapshots.
 - Compute runtime-agent/tool-gateway tests passed for policy metadata, no direct DB/service-key/LLM calculation authority, non-executable mutation/workflow/forbidden tools, viewer mutation denial, tenant/session/idempotency requirements, chat/policy integration, prompt-injection denial, untrusted diff denial, quote revision IDOR denial, and sanitized prompt labels.
 - Web read-only agent chat smoke passed for unauthenticated 401, session-scoped project/revision explanation, prompt-injection blocking before tool use, mutation/PDF/send denial, no browser-supplied authority reflection, and no authoritative calculation claims.
 - Supabase scripts: compile passed; env validation, migration, seed, and live verification passed.
-- Live Supabase checks: required tables including `idempotency_records` and `quote_configuration_drafts`, tenant columns, RLS, public/anon policy count, demo company/users/project/draft revision/approved revision, storage buckets, authenticated RLS smoke, direct authenticated write denial/no-effect, and DB guards for quote revision status, approved-revision config drafts, and invalid config shapes passed.
-- Secret scan passed after example env files were changed to placeholder-only values.
+- Live Supabase checks: required tables including `idempotency_records` and `quote_configuration_drafts`, tenant columns, RLS, public/anon policy count, primary and second tenant fixtures, storage buckets, authenticated RLS smoke, cross-tenant read/write denial, direct authenticated sales/viewer write denial/no-effect, and DB guards for quote revision status, approved-revision config drafts, and invalid config shapes passed.
+- Tracked-file secret scan passed through `scripts/secret_scan.py` / `npm run secret-scan`; `.env.local` is not tracked.
 - Optional Docker Compose secret-like defaults were replaced with local env placeholders.
 
 Remaining application gaps:
@@ -67,6 +67,7 @@ Remaining application gaps:
 - Calculation contracts are scaffolding only; no authoritative BOM/cost/tax/quote totals are produced by the new preview endpoint, and chat no longer treats browser-supplied cost snapshots as trusted tool facts.
 - Go core remains in-memory and could not be test-run locally because Go is not on `PATH`.
 - Demo web session is local-development only and does not yet include production revocation, rotation, device management, or rate limiting.
+- CSRF/fetch-metadata and rate limiting remain documented hardening work; Phase 7 did not implement these runtime controls.
 - The web chat UI now uses a same-origin server route backed by Supabase session scope for read-only project/revision/configuration explanations. Compute agent adapters still use deterministic demo data for direct compute tests, and unsafe runtime tool execution is not activated.
 
 Detailed phase history lives in `docs/implementation/STATUS.md`.

@@ -8,6 +8,7 @@ High priority:
 - Extend the Supabase-backed draft route set from persisted quote configuration drafts into deterministic BOM, edge banding, labor, cost snapshot, quote document, fork, and diff persistence.
 - Replace the remaining web P3 product calculate/document/fork/diff actions with persisted routes instead of the in-memory Go demo path.
 - Harden the local-demo session boundary into production auth with hashed/rotating sessions, revocation, device tracking, rate limiting, and audit trails.
+- Add CSRF/fetch-metadata enforcement for cookie-authenticated mutations and rate limiting for demo-login, mutation routes, and agent chat.
 - Replace static compute demo tokens with hashed, expiring sessions and revocation.
 - Extend the Phase 6 read-only web agent route into real Supabase-backed server tool execution with persisted tool invocations, read-audit policy, correlation IDs, and policy/catalog sync validation.
 - Move durable idempotency, domain write, and audit append into one SQL transaction for all mutating endpoints.
@@ -24,7 +25,7 @@ Medium priority:
 
 - Add registry/runtime validation so prompt `allowed_tools`, `tools/tool_catalog.json`, and the gateway policy manifest cannot drift.
 - Add prompt-injection evals for malicious tool results, supplier files, uploaded document text, filenames, and stale retrieved content.
-- Add Supabase/PostgreSQL migration integration tests that attempt cross-company FK inserts and expect failure.
+- Add Supabase/PostgreSQL migration integration tests that attempt cross-company FK inserts and expect failure beyond the current live RLS/route smoke probes.
 - Add broader edge-band golden cases:
   - non-divisible door widths
   - quantity greater than one

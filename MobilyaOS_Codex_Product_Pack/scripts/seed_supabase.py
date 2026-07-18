@@ -33,6 +33,14 @@ DEMO_COST_SNAPSHOT_ID = "16161616-1616-4161-8161-161616161616"
 DEMO_AUDIT_ID = "17171717-1717-4171-8171-171717171717"
 DEMO_DOC_ID = "18181818-1818-4181-8181-181818181818"
 DEMO_PRICE_OBSERVATION_ID = "19191919-1919-4191-8191-191919191919"
+SECOND_TENANT_COMPANY_ID = "99999999-9999-4999-8999-999999999999"
+SECOND_TENANT_USER_ID = "99999999-9999-4999-8999-999999999993"
+SECOND_TENANT_CUSTOMER_ID = "99999999-9999-4999-8999-999999999998"
+SECOND_TENANT_PROJECT_ID = "99999999-9999-4999-8999-999999999997"
+SECOND_TENANT_TEMPLATE_ID = "99999999-9999-4999-8999-999999999996"
+SECOND_TENANT_VARIANT_ID = "99999999-9999-4999-8999-999999999995"
+SECOND_TENANT_REVISION_ID = "99999999-9999-4999-8999-999999999994"
+SECOND_TENANT_AUDIT_ID = "99999999-9999-4999-8999-999999999992"
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,12 @@ DEMO_USERS = [
     DemoUser("33333333-3333-4333-8333-333333333333", "satis@demo.local", "sales"),
     DemoUser("66666666-6666-4666-8666-666666666666", "viewer@demo.local", "viewer"),
 ]
+
+SECOND_TENANT_USERS = [
+    DemoUser(SECOND_TENANT_USER_ID, "tenantb-sales@demo.local", "sales"),
+]
+
+ALL_AUTH_USERS = [*DEMO_USERS, *SECOND_TENANT_USERS]
 
 
 def demo_password(env: dict[str, str]) -> str:
@@ -143,6 +157,24 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                 )
             cur.execute(
                 """
+                insert into public.companies (id, name, currency)
+                values (%s, %s, %s)
+                on conflict (id) do update set name = excluded.name, currency = excluded.currency, updated_at = now()
+                """,
+                (SECOND_TENANT_COMPANY_ID, "Demo Tenant B Mobilya", "TRY"),
+            )
+            for user in SECOND_TENANT_USERS:
+                cur.execute(
+                    """
+                    insert into public.app_users (id, company_id, auth_user_id, email, role)
+                    values (%s, %s, %s, %s, %s)
+                    on conflict (company_id, email) do update
+                    set auth_user_id = excluded.auth_user_id, role = excluded.role, updated_at = now()
+                    """,
+                    (user.id, SECOND_TENANT_COMPANY_ID, auth_ids[user.email], user.email, user.role),
+                )
+            cur.execute(
+                """
                 insert into public.customers (id, company_id, name, email, phone)
                 values (%s, %s, %s, %s, %s)
                 on conflict (id) do update set name = excluded.name, email = excluded.email, phone = excluded.phone, updated_at = now()
@@ -151,11 +183,39 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
             )
             cur.execute(
                 """
+                insert into public.customers (id, company_id, name, email, phone)
+                values (%s, %s, %s, %s, %s)
+                on conflict (id) do update set name = excluded.name, email = excluded.email, phone = excluded.phone, updated_at = now()
+                """,
+                (
+                    SECOND_TENANT_CUSTOMER_ID,
+                    SECOND_TENANT_COMPANY_ID,
+                    "Tenant B Musteri",
+                    "tenantb@example.local",
+                    "+90 555 000 00 01",
+                ),
+            )
+            cur.execute(
+                """
                 insert into public.projects (id, company_id, customer_id, name, status)
                 values (%s, %s, %s, %s, %s)
                 on conflict (id) do update set name = excluded.name, status = excluded.status, updated_at = now()
                 """,
                 (DEMO_PROJECT_ID, DEMO_COMPANY_ID, DEMO_CUSTOMER_ID, "Demo Vestiyer Projesi", "active"),
+            )
+            cur.execute(
+                """
+                insert into public.projects (id, company_id, customer_id, name, status)
+                values (%s, %s, %s, %s, %s)
+                on conflict (id) do update set name = excluded.name, status = excluded.status, updated_at = now()
+                """,
+                (
+                    SECOND_TENANT_PROJECT_ID,
+                    SECOND_TENANT_COMPANY_ID,
+                    SECOND_TENANT_CUSTOMER_ID,
+                    "Tenant B Vestiyer Projesi",
+                    "active",
+                ),
             )
             cur.execute(
                 """
@@ -176,6 +236,23 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
             )
             cur.execute(
                 """
+                insert into public.product_templates (id, company_id, code, name, version, status, parameter_schema)
+                values (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                on conflict (company_id, code, version) do update
+                set status = excluded.status, parameter_schema = excluded.parameter_schema, updated_at = now()
+                """,
+                (
+                    SECOND_TENANT_TEMPLATE_ID,
+                    SECOND_TENANT_COMPANY_ID,
+                    "wardrobe",
+                    "Tenant B Gardrop",
+                    "1.0.0",
+                    "published",
+                    json.dumps({"units": "mm", "required": ["width_mm", "height_mm", "depth_mm", "quantity"]}),
+                ),
+            )
+            cur.execute(
+                """
                 insert into public.product_variants (id, company_id, template_id, template_version, parameters, validation_hash)
                 values (%s, %s, %s, %s, %s::jsonb, %s)
                 on conflict (id) do update set parameters = excluded.parameters, validation_hash = excluded.validation_hash, updated_at = now()
@@ -187,6 +264,21 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                     "1.0.0",
                     json.dumps({"width_mm": 1800, "height_mm": 2200, "depth_mm": 600, "quantity": 2}),
                     "demo-variant-hash-v1",
+                ),
+            )
+            cur.execute(
+                """
+                insert into public.product_variants (id, company_id, template_id, template_version, parameters, validation_hash)
+                values (%s, %s, %s, %s, %s::jsonb, %s)
+                on conflict (id) do update set parameters = excluded.parameters, validation_hash = excluded.validation_hash, updated_at = now()
+                """,
+                (
+                    SECOND_TENANT_VARIANT_ID,
+                    SECOND_TENANT_COMPANY_ID,
+                    SECOND_TENANT_TEMPLATE_ID,
+                    "1.0.0",
+                    json.dumps({"width_mm": 1200, "height_mm": 2100, "depth_mm": 550, "quantity": 1}),
+                    "tenant-b-variant-hash-v1",
                 ),
             )
             cur.execute("set local app.mobilyaos_allow_quote_status_update = 'on'")
@@ -205,6 +297,21 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                 on conflict (id) do update set status = excluded.status, updated_at = now()
                 """,
                 (DEMO_APPROVED_REVISION_ID, DEMO_COMPANY_ID, DEMO_PROJECT_ID, DEMO_VARIANT_ID, 2, "approved"),
+            )
+            cur.execute(
+                """
+                insert into public.quote_revisions (id, company_id, project_id, product_variant_id, revision_number, status)
+                values (%s, %s, %s, %s, %s, %s)
+                on conflict (id) do update set status = excluded.status, updated_at = now()
+                """,
+                (
+                    SECOND_TENANT_REVISION_ID,
+                    SECOND_TENANT_COMPANY_ID,
+                    SECOND_TENANT_PROJECT_ID,
+                    SECOND_TENANT_VARIANT_ID,
+                    1,
+                    "draft",
+                ),
             )
             cur.execute(
                 """
@@ -323,6 +430,23 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                     json.dumps({"source": "scripts/seed_supabase.py"}),
                 ),
             )
+            cur.execute(
+                """
+                insert into public.audit_entries (id, company_id, actor_app_user_id, action, target_type, target_id, decision, metadata)
+                values (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                on conflict (id) do update set decision = excluded.decision, metadata = excluded.metadata, updated_at = now()
+                """,
+                (
+                    SECOND_TENANT_AUDIT_ID,
+                    SECOND_TENANT_COMPANY_ID,
+                    SECOND_TENANT_USERS[0].id,
+                    "demo_seed",
+                    "quote_revision",
+                    SECOND_TENANT_REVISION_ID,
+                    "seeded",
+                    json.dumps({"source": "scripts/seed_supabase.py", "tenant_fixture": "second"}),
+                ),
+            )
         conn.commit()
 
 
@@ -338,7 +462,7 @@ def main() -> int:
         return 1
 
     try:
-        auth_ids = {user.email: ensure_auth_user(env, user) for user in DEMO_USERS}
+        auth_ids = {user.email: ensure_auth_user(env, user) for user in ALL_AUTH_USERS}
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Cannot seed Supabase Auth users: {exc.__class__.__name__}")
         return 1
