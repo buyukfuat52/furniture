@@ -4,6 +4,8 @@ Status: accepted
 
 Date: 2026-07-18
 
+Supersession note: ADR-0009 later implements sanitized approval-token consumption as a non-send, non-status-changing token-state transition. Binary PDF generation, customer delivery, quote send, and production package creation remain future work.
+
 ## Context
 
 P7 needed the first Supabase-backed quote lifecycle after deterministic cost snapshot calculation: frozen quote document generation, revision fork, revision diff, and approval-gate preparation.
@@ -37,5 +39,5 @@ Read-only runtime agent/chat tools may summarize trusted server-fetched document
 - P7 lifecycle state is auditable and idempotent for the current Supabase-backed path.
 - Quote document totals are generated from the persisted cost snapshot, not from browser or LLM values.
 - Forked revisions cannot inherit frozen snapshots, documents, approvals, send state, or production state.
-- The first quote artifact is deterministic HTML. Binary PDF generation, object-storage uploads, approval-token consumption, quote send, and production package creation remain future work.
+- The first quote artifact is deterministic HTML. Binary PDF generation, object-storage uploads, customer delivery, quote send, and production package creation remain future work. Approval-token consumption is handled by ADR-0009 without activating quote send or quote status transitions.
 - The long-term Go core repository path should either adopt the same invariants or replace these Next.js server-boundary adapters with equivalent backend commands.

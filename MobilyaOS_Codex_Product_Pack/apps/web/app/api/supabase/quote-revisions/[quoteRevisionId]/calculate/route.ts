@@ -6,6 +6,7 @@ import {
 } from "../../../../../../lib/server/supabaseRepository";
 import { calculateWardrobeQuoteSnapshot } from "../../../../../../lib/server/quoteCalculation";
 import { requireBoundary, requireSession, safeError } from "../../../../../../lib/server/routeGuards";
+import { requireMutationRequestSafety } from "../../../../../../lib/server/requestSecurity";
 import {
   idempotencyKeyFromRequest,
   reserveIdempotency,
@@ -67,6 +68,10 @@ export async function POST(request: Request, context: RouteContext) {
   const boundary = requireBoundary(session, "calculate_quote_snapshot");
   if (boundary) {
     return boundary;
+  }
+  const requestSafety = requireMutationRequestSafety(request, session, "quote_snapshot_calculated", 30);
+  if (requestSafety) {
+    return requestSafety;
   }
 
   let body: Record<string, unknown>;

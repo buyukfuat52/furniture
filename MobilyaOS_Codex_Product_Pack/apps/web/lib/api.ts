@@ -208,11 +208,16 @@ export type SupabaseQuoteDocument = {
     storage: "server_route_mediated";
     pdf_status: "deferred";
   };
+  artifact: {
+    kind: "html";
+    access_model: "controlled_server_preview_route";
+    storage_status: "metadata_recorded";
+    storage_provider: "supabase_storage_metadata";
+    binary_pdf_status: "deferred";
+  };
 };
 
-export type SupabaseQuoteDocumentPreview = SupabaseQuoteDocument & {
-  html: string;
-};
+export type SupabaseQuoteDocumentPreview = SupabaseQuoteDocument;
 
 export type SupabaseQuoteForkResponse = {
   quote_revision: SupabaseQuoteRevision;
@@ -247,6 +252,20 @@ export type SupabaseApprovalGate = {
   document_hash: string | null;
   snapshot_hash: string | null;
   expires_at: string | null;
+  consumed_at?: string | null;
+  approval_consumption_version?: string | null;
+  quote_status_changed?: false;
+  deferred_actions: string[];
+};
+
+export type SupabaseApprovalConsumption = {
+  status: "consumed" | "expired" | "replayed" | "invalid";
+  consumed: boolean;
+  token_secret_returned: false;
+  quote_status_changed: false;
+  quote_send_triggered: false;
+  production_package_triggered: false;
+  approval_consumption_version?: string;
   deferred_actions: string[];
 };
 

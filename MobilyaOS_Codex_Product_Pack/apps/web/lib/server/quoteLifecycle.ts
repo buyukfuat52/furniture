@@ -26,6 +26,10 @@ function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
+export function hashApprovalTokenSecret(rawToken: string): string {
+  return sha256(rawToken);
+}
+
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")

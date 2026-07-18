@@ -1317,6 +1317,7 @@ function SupabaseQuoteLifecyclePanel({
   const hasCalculatedSnapshot = quoteSnapshot?.calculation_status === "calculated" && Boolean(quoteSnapshot.cost_snapshot);
   const latestDocument = documents[0] ?? null;
   const canPreview = Boolean(latestDocument);
+  const documentPreviewUrl = documentPreview ? `/api/supabase/documents/${documentPreview.id}/preview` : "";
   return (
     <div className="lifecyclePanel">
       <div className="lifecycleHeader">
@@ -1377,10 +1378,11 @@ function SupabaseQuoteLifecyclePanel({
           <div className="configurationReadback">
             <span>{documentPreview.document_version}</span>
             <span>{documentPreview.provenance.storage}</span>
+            <span>{documentPreview.artifact.access_model}</span>
             <span>PDF {documentPreview.provenance.pdf_status}</span>
             <span>{documentPreview.sha256.slice(0, 12)}</span>
           </div>
-          <iframe className="quoteFrame" sandbox="" srcDoc={documentPreview.html} title="Supabase frozen teklif belgesi" />
+          <iframe className="quoteFrame" sandbox="" src={documentPreviewUrl} title="Supabase frozen teklif belgesi" />
         </div>
       ) : null}
 
@@ -1414,6 +1416,10 @@ function SupabaseQuoteLifecyclePanel({
             Belge {approvalGate.generated_document_id ? approvalGate.generated_document_id.slice(0, 8) : "-"} /
             snapshot {approvalGate.snapshot_hash ? approvalGate.snapshot_hash.slice(0, 12) : "-"} /
             token secret returned: {String(approvalGate.token_secret_returned)}
+          </p>
+          <p className="smallNote">
+            Tuketim: {approvalGate.status === "consumed" ? "consumed" : "not_consumed"} /
+            status change: {String(approvalGate.quote_status_changed ?? false)}
           </p>
           <p className="smallNote">{approvalGate.expires_at ? new Date(approvalGate.expires_at).toLocaleString("tr-TR") : "Hazir degil"}</p>
         </div>

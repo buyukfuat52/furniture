@@ -178,6 +178,15 @@ Large-scale backend/frontend application coding must not start until:
 - The tool gateway enforces agent allowlists and delegated roles. `quote_send` cannot execute from chat; quote document requests can preview demo data only until the backend approval workflow is implemented.
 - Prompt-injection cases are tracked in `evals/agent_prompt_injection_cases.yaml` and covered by compute tests.
 
+## P8 Decisions
+
+- Frozen quote document JSON is metadata-only. Raw artifact HTML is served only through an authenticated tenant-scoped preview route with `no-store`, `nosniff`, and sandboxed CSP headers.
+- P8 records artifact access/storage status as metadata and keeps binary PDF generation deferred.
+- Approval-token consumption is implemented as a strict POST-body endpoint backed by a service-role-only RPC. It hashes the submitted token, validates the approval/document/snapshot/revision binding, consumes pending tokens once, returns replay/expired states safely, and appends audit rows.
+- Consuming an approval token does not approve the quote, change quote status, send a quote, or create a production package. Those transitions remain future consequential actions.
+- Active cookie-authenticated mutations and token consumption use same-origin/fetch-metadata checks where applicable and process-local development rate limits. Production still needs a durable distributed limiter and full auth/session policy.
+- Runtime agents remain read-only in the web route. The compute policy registry now explicitly includes read-only artifact/approval explanation tools and forbidden chat-side approval-consumption/mutation aliases.
+
 ## P5 Supabase Cloud Decisions
 
 - Docker Desktop is not the active local runtime on this machine.
@@ -232,6 +241,6 @@ Large-scale backend/frontend application coding must not start until:
 
 1. Add deterministic binary PDF generation from the exact frozen HTML/cost snapshot inputs and compare PDF totals to the cost snapshot in tests.
 2. Add object-storage upload metadata for generated artifacts without exposing bucket/path locators to browser DTOs.
-3. Implement approval-token consumption, denial/replay handling, and quote-send gates with one-time token semantics.
+3. Extend the P8 approval-token consumption and denial/replay handling into final quote approval/send gates with explicit customer/actor intent.
 4. Move the P6/P7 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
 5. Add CSRF/fetch-metadata controls, rate limiting, production session revocation/rotation, and persisted tool invocation audit records.

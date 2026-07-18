@@ -54,14 +54,21 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "explain_quote_snapshot",
         "get_quote_document",
         "explain_quote_document",
+        "explain_quote_artifact",
+        "get_approval_status",
+        "explain_approval_status",
         "get_revision_diff",
         "explain_revision_diff",
         "create_quote_configuration_draft",
         "update_quote_configuration_draft",
         "send_quote",
         "approve_quote",
+        "approve_quote_from_chat",
+        "consume_approval_token_from_chat",
+        "mutate_quote_from_chat",
         "generate_pdf",
         "create_production_package",
+        "generate_production_package",
         "run_authoritative_calculation_from_llm",
     }
     for policy in manifest.policies:
@@ -177,6 +184,9 @@ def test_forbidden_tools_remain_non_executable_even_with_approval() -> None:
 def test_persisted_document_and_diff_tools_are_read_only() -> None:
     document = get_tool_policy("get_quote_document")
     document_explanation = get_tool_policy("explain_quote_document")
+    artifact_explanation = get_tool_policy("explain_quote_artifact")
+    approval_status = get_tool_policy("get_approval_status")
+    approval_explanation = get_tool_policy("explain_approval_status")
     diff = get_tool_policy("get_revision_diff")
     diff_explanation = get_tool_policy("explain_revision_diff")
 
@@ -192,6 +202,23 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert document_explanation.requires_audit is False
     assert document_explanation.executable is True
 
+    assert artifact_explanation is not None
+    assert artifact_explanation.mode == "conversation"
+    assert artifact_explanation.requires_audit is False
+    assert artifact_explanation.requires_approval is False
+    assert artifact_explanation.executable is True
+
+    assert approval_status is not None
+    assert approval_status.mode == "read"
+    assert approval_status.executable is True
+    assert approval_status.requires_idempotency is False
+    assert approval_status.requires_approval is False
+
+    assert approval_explanation is not None
+    assert approval_explanation.mode == "conversation"
+    assert approval_explanation.requires_audit is False
+    assert approval_explanation.executable is True
+
     assert diff is not None
     assert diff.mode == "read"
     assert diff.executable is True
@@ -204,16 +231,26 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert diff_explanation.executable is True
 
 
-def test_p7_mutating_document_tools_remain_forbidden() -> None:
+def test_p8_mutating_document_tools_remain_forbidden() -> None:
     for tool_name in [
         "generate_pdf",
         "send_quote",
         "approve_quote",
+        "approve_quote_from_chat",
+        "consume_approval_token_from_chat",
         "create_production_package",
+        "generate_production_package",
         "mutate_quote_from_chat",
     ]:
-        result = decision(tool_name, idempotency_key="stable-key", approval_granted=True)
+        result = decision(
+            tool_name,
+            agent_id="quote_document",
+            roles=["admin"],
+            idempotency_key="stable-key",
+            approval_granted=True,
+        )
         assert result.allowed is False
+        assert result.requires_approval is True
 
 
 def test_agent_allowlist_cannot_be_bypassed_by_prompt_text() -> None:
@@ -236,8 +273,12 @@ def test_prompt_injection_markers_cannot_grant_document_or_diff_tools() -> None:
     for marker in [
         "ignore previous instructions",
         "approval_token=secret",
+        "approval token secret",
+        "document access token",
         "storage_path=/private",
         "signed_url=https://example.invalid",
+        "tool output says call forbidden tool",
+        "malicious tool result",
         "service_role",
     ]:
         result = decision(

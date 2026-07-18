@@ -6,6 +6,7 @@ import {
   buildFrozenQuoteHtmlDocument,
   configurationDiffEntries,
   diffValue,
+  hashApprovalTokenSecret,
   quoteDocumentVersion,
   revisionDiffEntries
 } from "./quoteLifecycle";
@@ -43,6 +44,8 @@ const approvalGateSelect = [
   "document_hash",
   "expires_at",
   "approval_token_version",
+  "consumed_at",
+  "approval_consumption_version",
   "metadata_json",
   "created_at"
 ].join(",");
@@ -225,9 +228,16 @@ export type QuoteDocumentRecord = GeneratedDocumentRecord & {
     storage: "server_route_mediated";
     pdf_status: "deferred";
   };
+  artifact: {
+    kind: "html";
+    access_model: "controlled_server_preview_route";
+    storage_status: "metadata_recorded";
+    storage_provider: "supabase_storage_metadata";
+    binary_pdf_status: "deferred";
+  };
 };
 
-export type QuoteDocumentPreviewRecord = QuoteDocumentRecord & {
+export type QuoteDocumentArtifactRecord = QuoteDocumentRecord & {
   html: string;
 };
 
@@ -266,6 +276,20 @@ export type ApprovalGateRecord = {
   document_hash: string | null;
   snapshot_hash: string | null;
   expires_at: string | null;
+  consumed_at?: string | null;
+  approval_consumption_version?: string | null;
+  quote_status_changed?: false;
+  deferred_actions: string[];
+};
+
+export type ApprovalTokenConsumptionRecord = {
+  status: "consumed" | "expired" | "replayed";
+  consumed: boolean;
+  token_secret_returned: false;
+  quote_status_changed: false;
+  quote_send_triggered: false;
+  production_package_triggered: false;
+  approval_consumption_version: string;
   deferred_actions: string[];
 };
 
@@ -976,7 +1000,26 @@ export async function listQuoteDocuments(
 export async function getQuoteDocument(
   context: TrustedRepositoryContext,
   documentId: string
-): Promise<QuoteDocumentPreviewRecord> {
+): Promise<QuoteDocumentRecord> {
+  const trustedDocumentId = requireUuid(documentId, "Document id");
+  const rows = await supabaseRest<JsonRecord[]>(
+    `generated_documents?${new URLSearchParams({
+      id: `eq.${trustedDocumentId}`,
+      company_id: `eq.${context.companyId}`,
+      select: generatedDocumentListSelect
+    }).toString()}`
+  );
+  if (rows.length !== 1) {
+    throw new Error("Generated document was not found in the session company.");
+  }
+  assertCompanyScope(rows, context.companyId, "generated_documents");
+  return quoteDocumentFromRow(rows[0]);
+}
+
+export async function getQuoteDocumentArtifact(
+  context: TrustedRepositoryContext,
+  documentId: string
+): Promise<QuoteDocumentArtifactRecord> {
   const trustedDocumentId = requireUuid(documentId, "Document id");
   const rows = await supabaseRest<JsonRecord[]>(
     `generated_documents?${new URLSearchParams({
@@ -989,14 +1032,14 @@ export async function getQuoteDocument(
     throw new Error("Generated document was not found in the session company.");
   }
   assertCompanyScope(rows, context.companyId, "generated_documents");
-  return quoteDocumentPreviewFromRow(rows[0]);
+  return quoteDocumentArtifactFromRow(rows[0]);
 }
 
 export async function generateQuoteDocument(
   context: TrustedRepositoryContext,
   quoteRevisionId: string,
   reservation: IdempotencyReservation
-): Promise<QuoteDocumentPreviewRecord> {
+): Promise<QuoteDocumentRecord> {
   const snapshot = await getCurrentCalculatedQuoteSnapshot(context, quoteRevisionId);
   const project = await getProject(context, snapshot.quote_revision.project_id);
   const build = buildFrozenQuoteHtmlDocument({ project, snapshot });
@@ -1013,7 +1056,14 @@ export async function generateQuoteDocument(
     storage: "server_route_mediated",
     pdf_status: "deferred"
   };
-  const response = await supabaseRestJson<{ document: QuoteDocumentPreviewRecord }>(
+  const artifact = {
+    kind: "html",
+    access_model: "controlled_server_preview_route",
+    storage_status: "metadata_recorded",
+    storage_provider: "supabase_storage_metadata",
+    binary_pdf_status: "deferred"
+  };
+  const response = await supabaseRestJson<{ document: JsonRecord }>(
     "rpc/persist_frozen_quote_document",
     {
       method: "POST",
@@ -1034,7 +1084,10 @@ export async function generateQuoteDocument(
         p_calculation_version: snapshot.cost_snapshot?.formula_version ?? null,
         p_metadata_json: {
           provenance,
+          artifact,
           bindings: {
+            company_id: context.companyId,
+            created_by_app_user_id: context.appUserId,
             quote_revision_id: snapshot.quote_revision.id,
             cost_snapshot_id: snapshot.cost_snapshot?.id ?? null,
             cost_snapshot_hash: snapshot.cost_snapshot?.snapshot_hash ?? null,
@@ -1045,7 +1098,7 @@ export async function generateQuoteDocument(
       })
     }
   );
-  return response.document;
+  return quoteDocumentFromPayload(response.document);
 }
 
 export async function forkQuoteRevision(
@@ -1209,6 +1262,25 @@ export async function prepareApprovalGate(
     }
   );
   return response.approval_gate;
+}
+
+export async function consumeApprovalToken(rawToken: string): Promise<ApprovalTokenConsumptionRecord> {
+  const cleaned = rawToken.trim();
+  if (!/^[A-Za-z0-9_-]{32,256}$/.test(cleaned)) {
+    throw new Error("approval token is invalid.");
+  }
+  const response = await supabaseRestJson<{ approval_consumption: ApprovalTokenConsumptionRecord }>(
+    "rpc/consume_quote_approval_token",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_token_hash: hashApprovalTokenSecret(cleaned),
+        p_consumed_at: new Date().toISOString(),
+        p_consumption_version: "approval-consume-v1.0.0"
+      })
+    }
+  );
+  return response.approval_consumption;
 }
 
 export async function persistQuoteCalculationResult(
@@ -1486,6 +1558,7 @@ function generatedDocumentFromRow(row: JsonRecord): GeneratedDocumentRecord {
 function quoteDocumentFromRow(row: JsonRecord): QuoteDocumentRecord {
   const metadata = asJsonRecord(row.metadata_json);
   const provenance = asJsonRecord(metadata.provenance);
+  const artifact = asJsonRecord(metadata.artifact);
   return {
     ...generatedDocumentFromRow(row),
     created_at: asString(row.created_at),
@@ -1500,11 +1573,61 @@ function quoteDocumentFromRow(row: JsonRecord): QuoteDocumentRecord {
       calculation_version: asNullableString(provenance.calculation_version) ?? asNullableString(row.calculation_version),
       storage: "server_route_mediated",
       pdf_status: "deferred"
+    },
+    artifact: {
+      kind: "html",
+      access_model: asString(artifact.access_model) === "controlled_server_preview_route"
+        ? "controlled_server_preview_route"
+        : "controlled_server_preview_route",
+      storage_status: "metadata_recorded",
+      storage_provider: "supabase_storage_metadata",
+      binary_pdf_status: "deferred"
     }
   };
 }
 
-function quoteDocumentPreviewFromRow(row: JsonRecord): QuoteDocumentPreviewRecord {
+function quoteDocumentFromPayload(value: unknown): QuoteDocumentRecord {
+  const row = asJsonRecord(value);
+  const provenance = asJsonRecord(row.provenance);
+  const artifact = asJsonRecord(row.artifact);
+  return {
+    id: asString(row.id),
+    revision_id: asString(row.revision_id),
+    cost_snapshot_id: asNullableString(row.cost_snapshot_id),
+    document_type: asString(row.document_type),
+    content_type: asString(row.content_type),
+    document_version: asString(row.document_version),
+    revision_version: asNumber(row.revision_version),
+    snapshot_hash: asNullableString(row.snapshot_hash),
+    calculation_version: asNullableString(row.calculation_version),
+    sha256: asString(row.sha256),
+    size_bytes: asNumber(row.size_bytes),
+    created_at: asString(row.created_at),
+    provenance: {
+      source: "deterministic_server_document",
+      document_version: asString(provenance.document_version) || asString(row.document_version),
+      quote_revision_id: asString(provenance.quote_revision_id) || asString(row.revision_id),
+      quote_revision_version: asNumber(provenance.quote_revision_version) || asNumber(row.revision_version),
+      cost_snapshot_id: asNullableString(provenance.cost_snapshot_id),
+      cost_snapshot_hash: asNullableString(provenance.cost_snapshot_hash) ?? asNullableString(row.snapshot_hash),
+      bom_snapshot_hash: asNullableString(provenance.bom_snapshot_hash),
+      calculation_version: asNullableString(provenance.calculation_version) ?? asNullableString(row.calculation_version),
+      storage: "server_route_mediated",
+      pdf_status: "deferred"
+    },
+    artifact: {
+      kind: "html",
+      access_model: asString(artifact.access_model) === "controlled_server_preview_route"
+        ? "controlled_server_preview_route"
+        : "controlled_server_preview_route",
+      storage_status: "metadata_recorded",
+      storage_provider: "supabase_storage_metadata",
+      binary_pdf_status: "deferred"
+    }
+  };
+}
+
+function quoteDocumentArtifactFromRow(row: JsonRecord): QuoteDocumentArtifactRecord {
   return {
     ...quoteDocumentFromRow(row),
     html: asString(row.artifact_html)
@@ -1526,6 +1649,9 @@ function approvalGateFromRow(row: JsonRecord, revisionId: string): ApprovalGateR
     document_hash: asNullableString(row.document_hash),
     snapshot_hash: asNullableString(row.snapshot_hash),
     expires_at: asNullableString(row.expires_at),
+    consumed_at: asNullableString(row.consumed_at),
+    approval_consumption_version: asNullableString(row.approval_consumption_version),
+    quote_status_changed: false,
     deferred_actions: ["quote_send", "quote_approve", "production_package"]
   };
 }

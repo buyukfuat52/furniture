@@ -16,6 +16,7 @@ const forbidden = [
   "storage_bucket",
   "storage_path",
   "token_hash",
+  "artifact_html",
   "raw_storage_path"
 ];
 
@@ -196,11 +197,25 @@ for (const riskyKind of ["quote_send", "quote_approve", "generate_customer_docum
 requireMarker(mutationBoundaryText, 'writerRoles = new Set(["admin", "sales"])', "writer role set must stay limited to admin and sales");
 
 const routeGuardsText = readFileSync(join(root, "lib/server/routeGuards.ts"), "utf8");
+requireMarker(routeGuardsText, "requireMutationRequestSafety(request, session, action)", "mutation guard must enforce same-origin/rate-limit request safety");
 requireOrder(
   routeGuardsText,
   ["const session = await requireSession(request)", "const boundary = requireBoundary(session, kind)", "const parsed = (await request.json())", "await reserveIdempotency"],
   "mutation guard must authenticate and authorize before parsing payload and reserving idempotency"
 );
+
+const requestSecurityText = readFileSync(join(root, "lib/server/requestSecurity.ts"), "utf8");
+for (const marker of [
+  "requireSameOriginMutation",
+  "sec-fetch-site",
+  "origin",
+  "referer",
+  "requireRateLimit",
+  "createHash(\"sha256\")",
+  "requireApprovalTokenConsumeRateLimit"
+]) {
+  requireMarker(requestSecurityText, marker, `request security helper is missing ${marker}`);
+}
 for (const marker of [
   "idempotencyKeyFromRequest(request, body)",
   "companyId: session.mutationScope.companyId",
@@ -240,6 +255,21 @@ for (const marker of [
   requireMarker(p7MigrationText, marker, `P7 migration is missing security marker ${marker}`);
 }
 
+const p8MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0009_approval_consumption_and_artifact_hardening.sql"), "utf8");
+for (const marker of [
+  "consume_quote_approval_token",
+  "approval_consumption_version",
+  "idx_approvals_token_hash_unique",
+  "quote_status_changed",
+  "quote_send_triggered",
+  "production_package_triggered",
+  "quote_approval_token_consumed",
+  "grant execute on function public.consume_quote_approval_token",
+  "to service_role"
+]) {
+  requireMarker(p8MigrationText, marker, `P8 migration is missing security marker ${marker}`);
+}
+
 const mutationRouteChecks = [
   ["app/api/supabase/customers/route.ts", ["GET", "POST"], ["withMutationSession", "create_customer", "appendAuditEntry", "customer_created"]],
   ["app/api/supabase/projects/route.ts", ["GET", "POST"], ["withMutationSession", "create_project", "appendAuditEntry", "project_created"]],
@@ -248,15 +278,17 @@ const mutationRouteChecks = [
   ["app/api/supabase/projects/[projectId]/quote-revisions/route.ts", ["GET"], ["withReadSession", "listQuoteRevisions"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/route.ts", ["GET"], ["withReadSession", "getQuoteRevisionDetail"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft/route.ts", ["GET", "POST", "PATCH"], ["withReadSession", "withMutationSession", "create_quote_configuration_draft", "update_quote_configuration_draft", "appendAuditEntry", "quote_configuration_created", "quote_configuration_updated", "not_calculated"]],
-  ["app/api/supabase/quote-revisions/[quoteRevisionId]/calculate/route.ts", ["POST"], ["requireSession", "requireBoundary", "calculate_quote_snapshot", "rejectBrowserAuthority", "expected_configuration_version", "reserveIdempotency", "quote_snapshot_calculated", "calculateWardrobeQuoteSnapshot", "persistQuoteCalculationResult"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/calculate/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "calculate_quote_snapshot", "rejectBrowserAuthority", "expected_configuration_version", "reserveIdempotency", "quote_snapshot_calculated", "calculateWardrobeQuoteSnapshot", "persistQuoteCalculationResult"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/snapshot/route.ts", ["GET"], ["withReadSession", "getQuoteSnapshot"]],
-  ["app/api/supabase/quote-revisions/[quoteRevisionId]/documents/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "read_quote_document", "generate_frozen_quote_document", "listQuoteDocuments", "generateQuoteDocument", "reserveIdempotency", "quote_document_generated", "rejectBrowserAuthority"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/documents/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_document", "generate_frozen_quote_document", "listQuoteDocuments", "generateQuoteDocument", "reserveIdempotency", "quote_document_generated", "rejectBrowserAuthority"]],
   ["app/api/supabase/documents/[documentId]/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_document", "getQuoteDocument"]],
-  ["app/api/supabase/quote-revisions/[quoteRevisionId]/fork/route.ts", ["POST"], ["requireSession", "requireBoundary", "fork_quote_revision", "expected_revision_version", "forkQuoteRevision", "reserveIdempotency", "quote_revision_forked", "rejectBrowserAuthority"]],
+  ["app/api/supabase/documents/[documentId]/preview/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_document", "getQuoteDocumentArtifact", "Content-Security-Policy", "no-store", "nosniff"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/fork/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "fork_quote_revision", "expected_revision_version", "forkQuoteRevision", "reserveIdempotency", "quote_revision_forked", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/diff/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_revision_diff", "getQuoteRevisionDiff", "against", "rejectUnsupportedQuery"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-status/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_approval_status", "getApprovalGateStatus"]],
-  ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
-  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments"]]
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
+  ["app/api/supabase/approval-tokens/consume/route.ts", ["POST"], ["requireSameOriginMutation", "allowedBodyKeys", "requireApprovalTokenConsumeRateLimit", "consumeApprovalToken", "token_secret_returned", "quote_status_changed", "quote_send_triggered", "production_package_triggered"]],
+  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments"]]
 ];
 for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const text = readFileSync(join(root, route), "utf8");
@@ -384,6 +416,12 @@ requireMarker(prepareApprovalGateBlock, "rpc/prepare_quote_approval_gate_with_id
 requireMarker(prepareApprovalGateBlock, "p_token_hash: token.tokenHash", "prepareApprovalGate must pass only the token hash to persistence");
 requireMarker(prepareApprovalGateBlock, "p_idempotency_record_id: reservation.id", "prepareApprovalGate must bind durable idempotency");
 requireNoMarker(prepareApprovalGateBlock, "rawToken", "prepareApprovalGate must not expose a raw approval token");
+
+const consumeApprovalTokenBlock = sourceBlock(repositoryText, "consumeApprovalToken");
+requireMarker(consumeApprovalTokenBlock, "hashApprovalTokenSecret(cleaned)", "consumeApprovalToken must hash the raw token before persistence lookup");
+requireMarker(consumeApprovalTokenBlock, "rpc/consume_quote_approval_token", "consumeApprovalToken must use the service-role-only consumption RPC");
+requireMarker(consumeApprovalTokenBlock, "p_consumption_version", "consumeApprovalToken must bind an explicit consumption version");
+requireNoMarker(consumeApprovalTokenBlock, "quote_revision_id:", "consumeApprovalToken must not return revision identifiers from the repository mapper");
 
 const quoteStatusPolicyBlock = sourceBlock(repositoryText, "quoteStatusPolicy");
 requireMarker(quoteStatusPolicyBlock, "direct_status_update_allowed: false", "quote status policy must forbid browser direct status writes");

@@ -6,20 +6,20 @@ High priority:
 
 - Wire the Go core service to Supabase PostgreSQL repositories using the tenant-scoped migration constraints.
 - Move the P6/P7 deterministic wardrobe snapshot and quote lifecycle paths from the Next.js server boundary into the long-term backend/domain service or clearly preserve them as audited adapters until Go repositories are live.
-- Extend the P7 frozen HTML quote lifecycle into deterministic binary PDF generation, object-storage artifact metadata, approval-token consumption, quote send, and production-package persistence.
+- Extend the P8 frozen HTML quote lifecycle into deterministic binary PDF generation, customer-facing delivery, quote status approval/send transitions, and production-package persistence.
 - Replace or remove the remaining lower-page legacy P3 Go demo controls now that the Supabase lifecycle panel owns persisted document/fork/diff behavior.
 - Harden the local-demo session boundary into production auth with hashed/rotating sessions, revocation, device tracking, rate limiting, and audit trails.
-- Add CSRF/fetch-metadata enforcement for cookie-authenticated mutations and rate limiting for demo-login, mutation routes, and agent chat.
+- Replace the current process-local development rate limits with a durable distributed limiter for production deployment.
 - Replace static compute demo tokens with hashed, expiring sessions and revocation.
 - Extend the Phase 6 read-only web agent route into real Supabase-backed server tool execution with persisted tool invocations, read-audit policy, correlation IDs, and policy/catalog sync validation.
 - Move durable idempotency, domain write, and audit append into one SQL/RPC transaction for all mutating endpoints, matching the P6 snapshot persistence pattern.
-- Implement approval-token workflow for quote approval/send:
-  - consume the P7 pending approval gate without revealing token hashes
-  - bind approval consumption to company, actor, role, revision id, revision version, document hash, action, and idempotency key
-  - consume approval tokens once
-  - audit issue, deny, consume, and replay decisions
+- Extend the approval-token workflow into quote approval/send:
+  - keep the P8 one-time consumption contract, replay/expiry handling, and no-secret response shape
+  - add explicit human/customer intent capture before changing quote status
+  - bind final status transition to company, actor/customer identity, revision id/version, document hash, action, and idempotency key
+  - audit issue, deny, consume, replay, final approval, and send decisions
 - Implement deterministic PDF generation from the same cost snapshot used by HTML preview.
-- Add object storage metadata for generated documents: object key, version, content type, size, SHA-256, revision id, cost snapshot id, and formula version.
+- Move generated quote artifacts from database-held HTML into object storage with server-only keys, versioned metadata, checksums, and authenticated/signed short-lived retrieval when binary PDF generation lands.
 - Run and fix `go test ./...` in an environment with Go installed.
 - Add CI-hosted verification for the cloud path. Docker Desktop is not an active local requirement for this machine.
 
@@ -57,7 +57,7 @@ The next phase should focus on turning the P7 persisted HTML quote lifecycle int
 
 1. Wire core repositories to Supabase PostgreSQL with tenant predicates.
 2. Add deterministic binary PDF generation and object-storage metadata from the same frozen cost snapshot and document hash.
-3. Implement one-time approval-token consumption, quote send, and denial/replay audit trails.
+3. Promote the P8 approval-token consumption result into an explicit quote approval/send workflow without letting consumption itself change quote status.
 4. Transactionally integrate remaining draft mutations with domain write/audit append.
 5. Expand the read-only web agent route into authorized application queries through the gateway policy layer with persisted tool invocation records.
 6. Add Playwright E2E, Go integration tests, session/mutation security tests, and cloud verification to CI.

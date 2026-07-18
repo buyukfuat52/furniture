@@ -1,7 +1,7 @@
 # MobilyaOS Implementation Status
 
 Run ID: `20260715T040315+0300`
-Current scope: P7 frozen quote document, revision fork/diff, and approval gate on the Supabase Cloud path
+Current scope: P8 secure quote artifact, approval consumption, and external-delivery hardening on the Supabase Cloud path
 Parent orchestrator: `parent_codex`
 Created: 2026-07-15
 
@@ -20,6 +20,7 @@ Created: 2026-07-15
 | Post-P5.5 Phase 8 - Release checkpoint | P8 | Passed | Documentation, roadmap, Supabase setup, domain/runtime/QA notes, and sanitized non-Docker validation results are consolidated around the verified Supabase Cloud path. |
 | P6 - Deterministic persisted quote flow | P6 | Passed | Server-owned wardrobe calculation persists BOM/cost snapshots through Supabase RPCs and exposes sanitized snapshot reads/chat explanations. |
 | P7 - Frozen quote lifecycle | P7 | Passed | Frozen HTML quote documents, persisted revision fork/diff, admin-only approval-gate preparation, sanitized document/chat reads, and P7 security/QA smoke tests passed. |
+| P8 - Secure artifact and approval consumption | P8 | Passed | Document JSON is metadata-only, artifact HTML is served through an authenticated controlled preview route, approval-token consumption/replay/expiry is sanitized and audited, same-origin/rate-limit guards are in place, prompt-injection tests include malicious tool output, and non-Docker validation passed. |
 
 ## Repository State
 
@@ -53,6 +54,23 @@ Created: 2026-07-15
 - Manual dashboard login is required to create or select the `mobilyaos-dev` project and retrieve credentials.
 - No Supabase password, 2FA code, service role key, database password, or database URL was requested or printed.
 - `.env.local` exists locally in the repository root, is ignored by Git, and latest sanitized checks reported required values configured without printing values.
+
+## P8 Verification Log
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required values configured; database URL structures valid; no secret values printed. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0009_approval_consumption_and_artifact_hardening.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo Auth users existed or were updated; demo tenant data reseeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Database/RLS/storage/tenant checks passed; approval-consumption RPC grant check passed; direct sensitive reads and writes denied. |
+| `npm run typecheck -w apps/web` | Passed | TypeScript completed. |
+| `npm run test -w apps/web` | Passed | Static server-boundary check passed with P8 route markers. |
+| `npm run build -w apps/web` | Passed | Production build included controlled artifact and approval-consumption routes. |
+| `npm run test:session -w apps/web` | Passed | Session/login/logout, read-only chat, login throttling, approval-status explanation, and prompt-injection denial passed. |
+| `npm run test:mutations -w apps/web` | Passed | Draft mutation, snapshot, metadata-only document, controlled preview, approval consumption/replay/expiry, IDOR, audit, edge/labor/money checks passed. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | No lint findings. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Strict mypy passed. |
+| `py -3.12 -m pytest tests/test_tool_gateway_policy.py tests/test_agent_runtime.py` in `services/compute` | Passed | 31 passed; known TestClient deprecation warning. |
 
 ## P0 Verification Log
 
@@ -138,6 +156,7 @@ Primary bounded contexts:
 - ADR-0004: Use UUIDs initially, versioned deterministic product templates, workflow port/local adapter, and idempotent snapshot transaction boundaries.
 - ADR-0005: Enforce RBAC, approval tokens, and agent tool gateway policy server-side.
 - ADR-0008: Persist frozen quote lifecycle state through audited service-role RPCs and expose only sanitized server routes.
+- ADR-0009: Secure quote artifacts through controlled server routes and treat approval-token consumption as audited non-send/non-status-changing state.
 
 ## P1 Outputs
 
@@ -265,7 +284,7 @@ Fresh read-only `security_reviewer` and `qa_reviewer` passes were run after the 
 | High | Agent `send_quote` could still return `approval_required` for a viewer after other quote-document calls were denied. | Add explicit `send_quote` role authorization and test that viewer delivery requests are denied, not approval-gated. | Fixed and retested in compute tests. |
 | High | Compute search adapters could echo caller-supplied `project_id`/`revision_id` as found records without a tenant-backed lookup. | Refuse unknown caller-supplied IDs until core-backed tenant lookup is wired; add negative test. | Fixed and retested in compute tests. |
 | High | Labor operations were passed into calculation without an explicit tenant filter. | Filter labor operations by `company_id` before building labor lines. | Fixed in core code; Go tests remain blocked by missing Go. |
-| High | Core approval transition lacks a real approval-token/workflow store with actor/action/revision/document binding. | Implement durable approval token issuance/consume/replay protection and bind token to company, actor, revision version, document hash, action, and idempotency key. | Open; requires workflow/persistence work. |
+| High | Core approval transition lacks a final approval/send workflow with actor/action/revision/document binding. | Extend P8 one-time approval-token consumption into explicit final quote approval/send commands with actor/customer intent, idempotency, and audit. | Partially addressed by P8 token consumption; final quote status/send workflow remains open. |
 | High | PDF total-vs-snapshot consistency is not implemented because this slice only generates HTML. | Add deterministic PDF generation from the same snapshot, object metadata, and PDF parsing/golden tests. | Open; HTML compatibility is fixed and tested in Go test source but not executable locally. |
 | Medium | Edge-band coverage has one golden case and integer door-width division can lose remainder for non-divisible widths. | Add more edge-band golden cases and define door remainder policy. | Open. |
 | Medium | Prompt-injection tests cover request text, not malicious tool results/uploads. | Add tool-output and uploaded-content injection evals. | Open. |
@@ -343,7 +362,7 @@ Release handover can proceed as a documented local-demo snapshot, but G5 cannot 
 - `make` is not installed, so required Makefile targets could not execute.
 - Docker is not installed, so Docker Compose demo/runtime validation could not execute.
 - Go is not installed, so core tests could not execute.
-- Durable approval-token workflow, real PDF generation, PostgreSQL repositories, and idempotency replay storage remain deferred.
+- Final quote approval/send workflow, real PDF generation, PostgreSQL repositories, and broader transactional idempotency integration remain deferred.
 
 ## Supabase Cloud Setup Outputs
 
@@ -1234,7 +1253,7 @@ Agent implementation reports:
 - `backend_engineer`: added `0006_authenticated_read_only_rls.sql`, seeded a deterministic second tenant, expanded live Supabase verification, and preserved service-role server routes as the only write path.
 - `frontend_engineer`: expanded session and mutation smoke scripts to log into primary and second tenant demo users and probe true existing-row IDOR cases.
 - `ai_prompt_engineer`: no prompt files changed; Phase 6 read-only agent route now has cross-tenant selector smoke coverage.
-- `security_reviewer`: high findings for broad authenticated RLS writes and missing second-tenant proof were fixed. Medium findings for browser company-id realism and tracked secret scan were fixed. CSRF/fetch-metadata and rate limiting remain documented hardening work.
+- `security_reviewer`: high findings for broad authenticated RLS writes and missing second-tenant proof were fixed. Medium findings for browser company-id realism and tracked secret scan were fixed. CSRF/fetch-metadata and rate limiting remained documented hardening work at the Phase 7 checkpoint and were partially addressed by P8 local-dev guards.
 - `qa_reviewer`: recommended exact second-tenant fixture IDs and IDOR assertions; integrated into seed, verifier, session smoke, and mutation smoke.
 
 Severity findings and remediation:
@@ -1245,7 +1264,7 @@ Severity findings and remediation:
 | High | Tenant isolation was previously tested mostly with fake UUIDs, not existing rows from another tenant. | Added second tenant company, user, customer, project, template, variant, revision, and audit fixture; added true primary/second-tenant read/write IDOR probes. | `npm run test:session -w apps/web`, `npm run test:mutations -w apps/web`, and live verifier passed. |
 | Medium | Browser `company_id` ignore was not proven with a real other-tenant ID. | Mutation/session smokes now use real second-tenant IDs and forged browser authority markers. | Live web smokes passed with sanitized payload checks. |
 | Medium | Secret scanning was an ad hoc command, not a reusable tracked-file gate. | Added `scripts/secret_scan.py`, wired `npm run secret-scan`, and added it to `make verify`. | `py -3.12 scripts/secret_scan.py` and `npm run secret-scan` passed. |
-| Medium | CSRF/fetch-metadata and rate limiting are not implemented. | Documented as remaining hardening work; no runtime control added in Phase 7. | Not retested; remains open risk. |
+| Medium | CSRF/fetch-metadata and rate limiting were not implemented at the Phase 7 checkpoint. | Documented as remaining hardening work in P7; P8 later added same-origin/fetch-metadata guards and process-local development rate limits. | P8 session/mutation smokes passed; durable production limiter remains open. |
 
 Files added or materially changed:
 
@@ -1477,11 +1496,11 @@ Remaining P6 risks:
 - The supported product slice is wardrobe only.
 - Official HTML/PDF quote documents, approval/send, persisted fork/diff, production package, nesting, and broader templates remain future work.
 - Go, Docker, and GNU Make remain unavailable locally, so Go/Docker/make gates are still blocked.
-- CSRF/fetch-metadata, rate limiting, production auth hardening, and broader prompt/tool-output injection evals remain roadmap items.
+- Durable production rate limiting, production auth hardening, and broader uploaded-content prompt-injection evals remain roadmap items. P8 added local same-origin/fetch-metadata guards and malicious tool-output prompt-injection tests.
 
 ## P7 Frozen Quote Document, Revision Fork/Diff, And Approval Gate
 
-Current result: complete. P7 added the first persisted Supabase-backed quote lifecycle after calculation: frozen deterministic HTML quote documents, sanitized quote document preview, revision fork, deterministic revision diff, approval-gate status, and admin-only approval-gate preparation. Quote send, approval-token consumption, binary PDF generation, object-storage uploads, production package creation, and mutating runtime agent tool execution remain disabled.
+Current result: complete. P7 added the first persisted Supabase-backed quote lifecycle after calculation: frozen deterministic HTML quote documents, sanitized quote document preview, revision fork, deterministic revision diff, approval-gate status, and admin-only approval-gate preparation. At the P7 checkpoint, quote send, approval-token consumption, binary PDF generation, object-storage uploads, production package creation, and mutating runtime agent tool execution remained disabled. P8 later implemented sanitized token consumption without quote status/send side effects.
 
 Agent assignments:
 
@@ -1532,7 +1551,7 @@ P7 behavior:
 - `POST /api/supabase/quote-revisions/[quoteRevisionId]/fork` creates a draft child revision and copies configuration input only; snapshots, documents, approval gates, and production state are not copied.
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/diff?against=...` computes a deterministic same-project diff server-side.
 - `POST /api/supabase/quote-revisions/[quoteRevisionId]/approval-token` is admin-only, binds the gate to the draft revision version, frozen document, document hash, cost snapshot ID, snapshot hash, expiry, and idempotency scope, and returns no raw token or token hash.
-- The read-only web chat route can explain trusted project/revision/snapshot/document/diff facts but cannot calculate costs, generate/send PDFs, consume approvals, or mutate state.
+- The read-only web chat route can explain trusted project/revision/snapshot/document/diff facts but cannot calculate costs, generate/send PDFs, consume approvals from chat, or mutate state.
 
 P7 security and QA findings:
 
@@ -1572,6 +1591,6 @@ P7 command log:
 Remaining P7 risks:
 
 - The supported product/document lifecycle is still the narrow wardrobe demo slice.
-- Binary PDF rendering, object-storage upload metadata, quote send, approval-token consumption, and production package creation remain future work.
+- Binary PDF rendering, object-storage upload metadata, quote send/final approval status transition, customer delivery UI, and production package creation remain future work.
 - The long-term Go core PostgreSQL repository path is still not live because Go is not installed locally.
-- CSRF/fetch-metadata, rate limiting, production auth revocation/rotation, and broader tool-output prompt-injection evals remain roadmap items.
+- Durable production rate limiting, production auth revocation/rotation, and broader uploaded-content prompt-injection evals remain roadmap items. P8 added local same-origin/fetch-metadata guards and tool-output prompt-injection tests.

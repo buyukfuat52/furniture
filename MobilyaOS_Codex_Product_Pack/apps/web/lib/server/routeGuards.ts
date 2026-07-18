@@ -7,13 +7,14 @@ import {
   type IdempotencyReservation
 } from "./idempotency";
 import { planProductMutationBoundary, type PlannedMutationKind } from "./productMutationBoundary";
+import { requireMutationRequestSafety } from "./requestSecurity";
 import { resolveAuthenticatedSession, type ResolvedSession } from "./sessionContext";
 
 export type ApiHandlerContext = {
   session: ResolvedSession;
 };
 
-export function safeError(status: 401 | 403 | 404 | 409 | 422 | 503, title: string, detail: string): NextResponse {
+export function safeError(status: 400 | 401 | 403 | 404 | 409 | 422 | 429 | 503, title: string, detail: string): NextResponse {
   return NextResponse.json({ title, detail }, { status });
 }
 
@@ -65,6 +66,10 @@ export async function withMutationSession(
   const boundary = requireBoundary(session, kind);
   if (boundary) {
     return boundary;
+  }
+  const requestSafety = requireMutationRequestSafety(request, session, action);
+  if (requestSafety) {
+    return requestSafety;
   }
   let body: Record<string, unknown>;
   try {

@@ -131,11 +131,13 @@ The web app now has a server-side Supabase session and read boundary:
 - `POST /api/supabase/quote-revisions/[quoteRevisionId]/calculate` runs the first deterministic persisted wardrobe snapshot flow from the saved configuration draft only.
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/snapshot` reads the current persisted BOM/cost snapshot only when its provenance matches the current configuration draft/version.
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/documents` lists or generates a frozen HTML quote document bound to the current revision version, cost snapshot, calculation version, and snapshot hash.
-- `GET /api/supabase/documents/[documentId]` returns a sanitized frozen quote document preview without storage locators or approval token material.
+- `GET /api/supabase/documents/[documentId]` returns sanitized frozen quote document metadata without storage locators, raw HTML, or approval token material.
+- `GET /api/supabase/documents/[documentId]/preview` serves the HTML artifact through an authenticated, tenant-scoped, no-store server route with a restrictive CSP.
 - `POST /api/supabase/quote-revisions/[quoteRevisionId]/fork` forks a draft child revision from an approved/sent/source revision by copying configuration input only.
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/diff?against=...` returns a deterministic server-derived diff between two same-project revisions.
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/approval-status` returns sanitized approval-gate status.
 - `POST /api/supabase/quote-revisions/[quoteRevisionId]/approval-token` prepares an admin-only pending approval gate bound to the frozen document and snapshot hashes. It never returns raw approval tokens or token hashes.
+- `POST /api/supabase/approval-tokens/consume` consumes one-time approval tokens from a strict POST body only. It returns sanitized consumption status, does not require a browser session, does not return tenant/document/revision identifiers, and does not approve, send, or change quote status.
 - `POST /api/supabase/agent-chat` provides the read-only web chat prototype through the HTTP-only session boundary.
 - Browser-supplied `company_id` values are not trusted as authority.
 - The browser receives only sanitized demo rows and safe status fields. It does not receive Supabase access tokens, service keys, database URLs, storage paths, or `auth_user_id`.
@@ -147,6 +149,7 @@ The web app now has a server-side Supabase session and read boundary:
 - `viewer` is read-only; `sales` and `admin` can create customer, project, quote draft, create/update quote configuration draft records, generate frozen quote documents, and fork revisions. Approval-gate preparation is `admin` only.
 - Successful mutations append server-side audit entries.
 - Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key.
+- Cookie-authenticated mutations and approval-token consumption are guarded by same-origin/fetch-metadata checks where applicable, plus process-local development rate limits for demo login, active mutations, and token consumption.
 - Quote configuration drafts store only validated draft input: integer millimetre dimensions, explicit piece quantity, bounded option counts, SKUs, notes, validation status, and `not_calculated` draft status. The P6 calculate route creates frozen BOM and cost snapshots for the narrow wardrobe slice only. The P7 document route creates a frozen HTML quote artifact from that snapshot; it does not send, approve, generate a binary PDF, or create a production package.
 - Direct authenticated table writes to quote revisions/configuration drafts are blocked or no-effect, and database guards reject quote revision status changes, approved/sent revision mutations, approved-revision config drafts, and invalid config draft shapes.
 
@@ -164,7 +167,7 @@ Sprint boundary docs:
 - `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
 - `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
 
-`apps/web/lib/server/productMutationBoundary.ts` defines trusted server-side scope and allows only the reviewed draft and P7 lifecycle mutations above. Quote send, approval consumption, binary PDF generation, production package creation, and mutating runtime agent tool execution remain disabled/deferred.
+`apps/web/lib/server/productMutationBoundary.ts` defines trusted server-side scope and allows only the reviewed draft and P7/P8 lifecycle mutations above. Quote send, quote status approval, binary PDF generation, production package creation, and mutating runtime agent tool execution remain disabled/deferred.
 
 ## Optional Docker Compose
 
@@ -208,8 +211,9 @@ Blocked on this machine:
 - Demo login verifies Supabase Auth credentials server-side, maps them to seeded app users, creates an encrypted HTTP-only session cookie, exposes a sanitized session endpoint, and supports logout.
 - Supabase-backed draft mutations now work for customer creation, draft project creation, quote draft shell creation, quote revision list/read, quote configuration draft create/update, and audit append.
 - Supabase-backed lifecycle mutations now work for deterministic frozen HTML quote generation, sanitized document preview, revision fork, deterministic revision diff, approval-gate status, and admin-only approval-gate preparation.
+- Supabase-backed P8 hardening now works for metadata-only document JSON, authenticated controlled HTML artifact preview, same-origin/fetch-metadata mutation guards, demo/mutation/token rate limits, sanitized approval-token consumption/replay/expiry, and approval-consumption audit trails.
 - Server-only mutation policy keeps `viewer` read-only, permits `sales`/`admin` only for reviewed draft/document/fork mutations, and restricts approval-gate preparation to `admin`.
-- The web chat UI has a read-only Supabase-backed route that can summarize current projects, quote revisions, audit state, configuration draft status, cost snapshots, frozen quote documents, and revision diffs without authoritative calculations or mutations.
+- The web chat UI has a read-only Supabase-backed route that can summarize current projects, quote revisions, audit state, configuration draft status, cost snapshots, frozen quote document metadata, artifact access state, approval status, and revision diffs without authoritative calculations or mutations.
 - Compute/agent service passes tests and enforces bearer auth, role derivation, prompt-injection blocking, tool allowlists, and quote-send denial/approval gating.
 - Supabase migrations define tenant-scoped tables, composite foreign keys, RLS policies, and private storage buckets.
 - Supabase scripts support env validation, migration, seeding, and verification without printing secrets.
@@ -220,9 +224,9 @@ Blocked on this machine:
 - Go core tests are written but cannot be executed on this machine without Go.
 - Core still uses in-memory demo state; the currently live persistence path is the Next.js server boundary plus Supabase RPCs.
 - Binary PDF generation is not implemented; the current persisted quote artifact is deterministic HTML with hashes and provenance.
-- The demo session is a local-development boundary, not a production-grade auth system with revocation, rotation, device management, or rate limiting.
+- The demo session is a local-development boundary, not a production-grade auth system with revocation, rotation, device management, or durable distributed rate limiting.
 - Runtime agent/tool-gateway integration is documented; the web route is read-only and mutating/official-document agent execution remains disabled.
-- Approval-gate preparation exists, but approval-token delivery/consumption, quote sending, and production release are not implemented.
+- Approval-gate preparation and sanitized approval-token consumption exist, but customer approval UI, quote sending, quote-status transitions, and production release are not implemented.
 - Durable idempotency is implemented for current Supabase-backed draft, snapshot, document, fork, and approval-gate routes. Older draft REST routes still use separate write/audit steps rather than one audited SQL/RPC transaction.
 - Direct compute agent tool adapters are still deterministic local adapters and do not yet query the Supabase-backed application repository. The browser UI uses the Supabase web route instead.
 
@@ -249,7 +253,7 @@ Known gaps:
 
 - Supabase live migration/seed/verify requires saved local `.env.local` values; the scripts stop safely if required values are missing.
 - Static demo passwords and the local-demo session model are only suitable for demo/local development.
-- Approval-token consumption and quote sending are still required before real customer approval or dispatch.
+- Final customer approval, quote-status transition, and quote sending are still required before real customer approval or dispatch.
 - Binary PDF generation, object-storage upload metadata, and production package creation remain deferred beyond the P7 persisted HTML lifecycle slice.
 - Tool whitelist drift and malicious tool-output prompt injection need additional validation.
 

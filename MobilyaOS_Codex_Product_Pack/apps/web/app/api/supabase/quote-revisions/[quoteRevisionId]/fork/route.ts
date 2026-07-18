@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { forkQuoteRevision } from "../../../../../../lib/server/supabaseRepository";
 import { idempotencyKeyFromRequest, reserveIdempotency, storeIdempotencyResult } from "../../../../../../lib/server/idempotency";
+import { requireMutationRequestSafety } from "../../../../../../lib/server/requestSecurity";
 import { requireBoundary, requireSession, safeError } from "../../../../../../lib/server/routeGuards";
 
 export const dynamic = "force-dynamic";
@@ -51,6 +52,10 @@ export async function POST(request: Request, context: RouteContext) {
   const boundary = requireBoundary(session, "fork_quote_revision");
   if (boundary) {
     return boundary;
+  }
+  const requestSafety = requireMutationRequestSafety(request, session, "quote_revision_forked", 20);
+  if (requestSafety) {
+    return requestSafety;
   }
 
   let body: Record<string, unknown>;

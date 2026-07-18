@@ -39,10 +39,13 @@ const forbiddenStoredKeys = new Set([
   "auth_user_id",
   "actor_app_user_id",
   "access_token",
+  "approval_token",
+  "artifact_html",
   "refresh_token",
   "service_role",
   "storage_path",
   "raw_storage_path",
+  "html",
   "database_password"
 ]);
 

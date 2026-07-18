@@ -384,6 +384,35 @@ def verify_configuration_database_guards(cur: Any) -> bool:
     return status_guard and approved_guard and shape_guard
 
 
+def verify_approval_consumption_rpc(cur: Any) -> bool:
+    cur.execute(
+        """
+        select count(*)
+        from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public'
+          and p.proname = 'consume_quote_approval_token'
+        """
+    )
+    function_count = cur.fetchone()[0]
+    if function_count != 1:
+        print("Approval consumption RPC: missing")
+        return False
+    cur.execute(
+        """
+        select grantee
+        from information_schema.routine_privileges
+        where specific_schema = 'public'
+          and routine_name = 'consume_quote_approval_token'
+          and privilege_type = 'EXECUTE'
+        """
+    )
+    grantees = {row[0] for row in cur.fetchall()}
+    ok = "service_role" in grantees and "anon" not in grantees and "authenticated" not in grantees
+    print(f"Approval consumption RPC grants: {'ok' if ok else 'failed'}")
+    return ok
+
+
 def main() -> int:
     env = load_env()
     missing = missing_required(env)
@@ -538,6 +567,7 @@ def main() -> int:
                 second_revision_count = cur.fetchone()[0]
                 cur.execute("select id from storage.buckets where id = any(%s)", (REQUIRED_BUCKETS,))
                 found_buckets = {row[0] for row in cur.fetchall()}
+                approval_consumption_rpc_ok = verify_approval_consumption_rpc(cur)
                 guard_ok = verify_configuration_database_guards(cur)
     except Exception as exc:
         print(f"Cannot verify Supabase database: {safe_exception_label(exc)}")
@@ -571,6 +601,8 @@ def main() -> int:
     ):
         failed = True
     if not guard_ok:
+        failed = True
+    if not approval_consumption_rpc_ok:
         failed = True
     if not verify_authenticated_rls(env):
         failed = True

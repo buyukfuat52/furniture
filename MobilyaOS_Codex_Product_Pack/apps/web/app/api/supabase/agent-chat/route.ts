@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { safeError, withReadSession } from "../../../../lib/server/routeGuards";
 import {
   getProjectDetail,
+  getApprovalGateStatus,
   getQuoteConfigurationDraft,
   getQuoteDocument,
   getQuoteRevisionDetail,
@@ -9,6 +10,7 @@ import {
   getQuoteSnapshot,
   listQuoteDocuments,
   listProjects,
+  type ApprovalGateRecord,
   type AuditEntryRecord,
   type ProjectDetailRecord,
   type QuoteConfigurationDraftRecord,
@@ -108,7 +110,7 @@ function classifyMessage(message: string): { agentId: AgentId; classification: s
 
 function looksLikePromptInjection(message: string): boolean {
   const normalized = searchText(message);
-  return /ignore previous|system prompt|developer message|bypass|override|whitelist|policy|secret|token|password|service role|database url|cookie/i.test(normalized);
+  return /ignore previous|system prompt|developer message|bypass|override|whitelist|policy|secret|token|approval token|document access token|password|service role|database url|cookie|signed url|storage path|tool output|malicious tool|call forbidden tool/i.test(normalized);
 }
 
 function asksForMutation(message: string): boolean {
@@ -253,7 +255,27 @@ function documentFacts(document: QuoteDocumentRecord | null): Array<{ label: str
     { label: "Snapshot hash", value: document.snapshot_hash ?? "yok" },
     { label: "Hesaplama versiyonu", value: document.calculation_version ?? "yok" },
     { label: "PDF durumu", value: document.provenance.pdf_status },
-    { label: "Depolama erisimi", value: document.provenance.storage }
+    { label: "Depolama erisimi", value: document.provenance.storage },
+    { label: "Artifact erisimi", value: document.artifact.access_model },
+    { label: "Artifact durumu", value: document.artifact.storage_status }
+  ];
+}
+
+function approvalFacts(approvalGate: ApprovalGateRecord | null): Array<{ label: string; value: unknown }> {
+  if (!approvalGate) {
+    return [
+      { label: "Onay durumu", value: "not_prepared" },
+      { label: "Onay token secret", value: "not_returned" }
+    ];
+  }
+  return [
+    { label: "Onay durumu", value: approvalGate.status },
+    { label: "Onay aksiyonu", value: approvalGate.action },
+    { label: "Onay token secret", value: "not_returned" },
+    { label: "Onay tuketimi", value: approvalGate.status === "consumed" ? "consumed" : "not_consumed" },
+    { label: "Quote status changed", value: approvalGate.quote_status_changed ?? false },
+    { label: "Onay dokuman baglantisi", value: approvalGate.generated_document_id ? "bound" : "missing" },
+    { label: "Onay snapshot baglantisi", value: approvalGate.snapshot_hash ? "bound" : "missing" }
   ];
 }
 
@@ -302,8 +324,8 @@ export async function POST(request: Request) {
         agentId,
         classification: mutationToolBlockedMarker,
         status: "failed",
-        summary: "Bu sohbet katmani P6'da salt okunur; teklif gonderme, onay, PDF, uretim veya veri degisikligi yapamaz.",
-        toolCalls: [deniedTool("agent-tool-1", "mutating_tool_request", "P6 salt okunur politika mutasyonu engelledi.")],
+        summary: "Bu sohbet katmani P8'de salt okunur; teklif gonderme, onay token tuketimi, PDF, uretim veya veri degisikligi yapamaz.",
+        toolCalls: [deniedTool("agent-tool-1", "mutating_tool_request", "P8 salt okunur politika mutasyonu engelledi.")],
         proposedActions: [{
           action: "request_backend_approval_gate",
           description: "Riskli islemler icin once backend/domain onay kapisi tamamlanmali.",
@@ -329,6 +351,7 @@ export async function POST(request: Request) {
     let configurationDraft: QuoteConfigurationDraftRecord | null = null;
     let quoteSnapshot: QuoteSnapshotResponse | null = null;
     let quoteDocument: QuoteDocumentRecord | null = null;
+    let approvalGate: ApprovalGateRecord | null = null;
 
     if (projectId) {
       projectDetail = await getProjectDetail(session.mutationScope, projectId);
@@ -351,10 +374,12 @@ export async function POST(request: Request) {
       }
       configurationDraft = await getQuoteConfigurationDraft(session.mutationScope, revisionId);
       quoteSnapshot = await getQuoteSnapshot(session.mutationScope, revisionId);
+      approvalGate = await getApprovalGateStatus(session.mutationScope, revisionId);
       toolCalls.push(completedTool("agent-tool-2", "get_quote_revision_detail", "Oturum sirketine ait revizyon okundu."));
       toolCalls.push(completedTool("agent-tool-3", "get_quote_configuration_draft", "Konfigurasyon taslagi salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-4", "get_quote_snapshot", "Deterministik snapshot salt okunur okundu."));
-      facts.push(...revisionFacts(revisionDetail), ...configurationFacts(configurationDraft), ...snapshotFacts(quoteSnapshot));
+      toolCalls.push(completedTool("agent-tool-approval-status", "get_approval_status", "Onay kapisi durumu salt okunur okundu."));
+      facts.push(...revisionFacts(revisionDetail), ...configurationFacts(configurationDraft), ...snapshotFacts(quoteSnapshot), ...approvalFacts(approvalGate));
     } else {
       missingInformation.push("Supabase proje veya revizyon secimi");
     }

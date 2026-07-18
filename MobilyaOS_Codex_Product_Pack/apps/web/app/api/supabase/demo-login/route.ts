@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireDemoLoginRateLimit } from "../../../../lib/server/requestSecurity";
 import { createSessionClaims, sealSession, SESSION_COOKIE_NAME, sessionCookieOptions } from "../../../../lib/server/session";
 import { signInAndMapDemoUser, toPublicMappedAppUser } from "../../../../lib/server/supabaseRepository";
 
@@ -10,6 +11,10 @@ export async function POST(request: Request) {
     const payload = (await request.json()) as { email?: unknown; password?: unknown };
     const email = typeof payload.email === "string" ? payload.email : "";
     const password = typeof payload.password === "string" ? payload.password : "";
+    const requestSafety = requireDemoLoginRateLimit(request, email);
+    if (requestSafety) {
+      return requestSafety;
+    }
     const mapped = await signInAndMapDemoUser(email, password);
     const claims = createSessionClaims({
       appUserId: mapped.app_user.id,

@@ -417,6 +417,21 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                             "calculation_version": "wardrobe-cost-v1",
                             "storage": "server_route_mediated",
                             "pdf_status": "deferred",
+                        },
+                        "artifact": {
+                            "kind": "html",
+                            "access_model": "controlled_server_preview_route",
+                            "storage_status": "metadata_recorded",
+                            "storage_provider": "supabase_storage_metadata",
+                            "binary_pdf_status": "deferred",
+                        },
+                        "bindings": {
+                            "company_id": DEMO_COMPANY_ID,
+                            "created_by_app_user_id": DEMO_USERS[0].id,
+                            "quote_revision_id": DEMO_REVISION_ID,
+                            "cost_snapshot_id": DEMO_COST_SNAPSHOT_ID,
+                            "cost_snapshot_hash": "demo-cost-hash-v1",
+                            "bom_snapshot_hash": "demo-bom-hash-v1",
                         }
                     }),
                     "<!doctype html><html><body><h1>Demo frozen quote</h1><p>Grand total 14491.51 TRY</p><p>demo-cost-hash-v1</p></body></html>",
