@@ -1,8 +1,51 @@
 import { loadSupabaseServerEnv } from "./supabaseEnv";
 import type { IdempotencyReservation } from "./idempotency";
 import type { BOMSnapshot, CostSnapshot, QuoteCalculationResult } from "./quoteCalculation";
+import {
+  buildApprovalTokenSecret,
+  buildFrozenQuoteHtmlDocument,
+  configurationDiffEntries,
+  diffValue,
+  quoteDocumentVersion,
+  revisionDiffEntries
+} from "./quoteLifecycle";
 
 type JsonRecord = Record<string, unknown>;
+
+const quoteRevisionSelect = "id,company_id,project_id,parent_revision_id,product_variant_id,revision_number,status,version";
+const generatedDocumentListSelect = [
+  "id",
+  "company_id",
+  "revision_id",
+  "cost_snapshot_id",
+  "document_type",
+  "content_type",
+  "document_version",
+  "revision_version",
+  "snapshot_hash",
+  "calculation_version",
+  "sha256",
+  "size_bytes",
+  "metadata_json",
+  "created_at"
+].join(",");
+const generatedDocumentPreviewSelect = `${generatedDocumentListSelect},artifact_html`;
+const approvalGateSelect = [
+  "id",
+  "company_id",
+  "revision_id",
+  "action",
+  "status",
+  "quote_revision_version",
+  "cost_snapshot_id",
+  "generated_document_id",
+  "snapshot_hash",
+  "document_hash",
+  "expires_at",
+  "approval_token_version",
+  "metadata_json",
+  "created_at"
+].join(",");
 
 export type CompanyRecord = {
   id: string;
@@ -57,6 +100,8 @@ export type ProjectInput = {
 export type QuoteRevisionRecord = {
   id: string;
   project_id: string;
+  parent_revision_id: string | null;
+  product_variant_id: string | null;
   revision_number: number;
   status: string;
   version: number;
@@ -151,6 +196,11 @@ export type GeneratedDocumentRecord = {
   cost_snapshot_id: string | null;
   document_type: string;
   content_type: string;
+  document_version: string;
+  revision_version: number;
+  snapshot_hash: string | null;
+  calculation_version: string | null;
+  sha256: string;
   size_bytes: number;
 };
 
@@ -159,6 +209,64 @@ export type ApprovalRecord = {
   revision_id: string;
   action: string;
   status: string;
+};
+
+export type QuoteDocumentRecord = GeneratedDocumentRecord & {
+  created_at: string;
+  provenance: {
+    source: "deterministic_server_document";
+    document_version: string;
+    quote_revision_id: string;
+    quote_revision_version: number;
+    cost_snapshot_id: string | null;
+    cost_snapshot_hash: string | null;
+    bom_snapshot_hash: string | null;
+    calculation_version: string | null;
+    storage: "server_route_mediated";
+    pdf_status: "deferred";
+  };
+};
+
+export type QuoteDocumentPreviewRecord = QuoteDocumentRecord & {
+  html: string;
+};
+
+export type QuoteForkResponse = {
+  quote_revision: QuoteRevisionRecord;
+  configuration_draft: QuoteConfigurationDraftRecord | null;
+  snapshot_copy_policy: "snapshots_not_copied";
+  document_copy_policy: "documents_not_copied";
+  deferred_actions: string[];
+};
+
+export type QuoteDiffEntry = {
+  category: string;
+  field: string;
+  before: string;
+  after: string;
+};
+
+export type QuoteRevisionDiffResponse = {
+  left_revision: QuoteRevisionRecord;
+  right_revision: QuoteRevisionRecord;
+  entries: QuoteDiffEntry[];
+  diff_version: "revision-diff-v1.0.0";
+  source: "deterministic_server_diff";
+};
+
+export type ApprovalGateRecord = {
+  id: string | null;
+  revision_id: string;
+  action: "quote_approve";
+  status: "not_prepared" | "pending" | "approved" | "rejected" | "consumed" | "expired";
+  token_secret_returned: false;
+  approval_token_version: string | null;
+  quote_revision_version: number | null;
+  generated_document_id: string | null;
+  document_hash: string | null;
+  snapshot_hash: string | null;
+  expires_at: string | null;
+  deferred_actions: string[];
 };
 
 export type AuditEntryRecord = {
@@ -228,6 +336,12 @@ function asNumber(value: unknown): number {
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function asJsonRecord(value: unknown): JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as JsonRecord
+    : {};
 }
 
 function cleanText(value: string, maxLength: number): string {
@@ -484,10 +598,10 @@ export async function loadDemoTenantOverview(
     supabaseRest<JsonRecord[]>(tenantQuery("app_users", companyId, "id,company_id,email,role", "email.asc")),
     supabaseRest<JsonRecord[]>(tenantQuery("customers", companyId, "id,company_id,name,email,phone,version", "created_at.asc")),
     supabaseRest<JsonRecord[]>(tenantQuery("projects", companyId, "id,company_id,customer_id,name,status,version", "created_at.asc")),
-    supabaseRest<JsonRecord[]>(tenantQuery("quote_revisions", companyId, "id,company_id,project_id,revision_number,status,version", "created_at.asc")),
+    supabaseRest<JsonRecord[]>(tenantQuery("quote_revisions", companyId, quoteRevisionSelect, "created_at.asc")),
     supabaseRest<JsonRecord[]>(tenantQuery("bom_snapshots", companyId, "id,company_id,revision_id,formula_version,bom_json,edge_json", "created_at.desc")),
     supabaseRest<JsonRecord[]>(tenantQuery("cost_snapshots", companyId, "id,company_id,revision_id,formula_version,currency,subtotal_minor,markup_minor,vat_minor,grand_total_minor,categories_json", "created_at.desc")),
-    supabaseRest<JsonRecord[]>(tenantQuery("generated_documents", companyId, "id,company_id,revision_id,cost_snapshot_id,document_type,content_type,size_bytes", "created_at.desc")),
+    supabaseRest<JsonRecord[]>(tenantQuery("generated_documents", companyId, generatedDocumentListSelect, "created_at.desc")),
     supabaseRest<JsonRecord[]>(tenantQuery("approvals", companyId, "id,company_id,revision_id,action,status", "created_at.desc")),
     supabaseRest<JsonRecord[]>(tenantQuery("audit_entries", companyId, "id,company_id,action,target_type,target_id,decision,created_at", "created_at.desc"))
   ]);
@@ -528,13 +642,7 @@ export async function loadDemoTenantOverview(
       status: asString(row.status),
       version: asNumber(row.version)
     })),
-    quote_revisions: revisionRows.map((row) => ({
-      id: asString(row.id),
-      project_id: asString(row.project_id),
-      revision_number: asNumber(row.revision_number),
-      status: asString(row.status),
-      version: asNumber(row.version)
-    })),
+    quote_revisions: revisionRows.map(quoteRevisionFromRow),
     bom_snapshots: bomRows.map((row) => ({
       id: asString(row.id),
       revision_id: asString(row.revision_id),
@@ -553,14 +661,7 @@ export async function loadDemoTenantOverview(
       grand_total_minor: asNumber(row.grand_total_minor),
       category_count: asArray(row.categories_json).length
     })),
-    generated_documents: documentRows.map((row) => ({
-      id: asString(row.id),
-      revision_id: asString(row.revision_id),
-      cost_snapshot_id: asNullableString(row.cost_snapshot_id),
-      document_type: asString(row.document_type),
-      content_type: asString(row.content_type),
-      size_bytes: asNumber(row.size_bytes)
-    })),
+    generated_documents: documentRows.map(generatedDocumentFromRow),
     approvals: approvalRows.map((row) => ({
       id: asString(row.id),
       revision_id: asString(row.revision_id),
@@ -735,7 +836,7 @@ export async function listQuoteRevisions(
     `quote_revisions?${new URLSearchParams({
       company_id: `eq.${context.companyId}`,
       project_id: `eq.${trustedProjectId}`,
-      select: "id,company_id,project_id,revision_number,status,version",
+      select: quoteRevisionSelect,
       order: "revision_number.asc"
     }).toString()}`
   );
@@ -752,7 +853,7 @@ export async function getQuoteRevision(
     `quote_revisions?${new URLSearchParams({
       id: `eq.${trustedRevisionId}`,
       company_id: `eq.${context.companyId}`,
-      select: "id,company_id,project_id,revision_number,status,version"
+      select: quoteRevisionSelect
     }).toString()}`
   );
   if (rows.length !== 1) {
@@ -837,6 +938,277 @@ export async function getQuoteSnapshot(
     cost_snapshot: matchesCurrentDraft ? costSnapshot : null,
     deferred_actions: ["quote_send", "quote_approve", "quote_pdf", "production_package"]
   };
+}
+
+async function getCurrentCalculatedQuoteSnapshot(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteSnapshotResponse> {
+  const snapshot = await getQuoteSnapshot(context, quoteRevisionId);
+  if (
+    snapshot.calculation_status !== "calculated" ||
+    !snapshot.configuration_draft ||
+    !snapshot.bom_snapshot ||
+    !snapshot.cost_snapshot
+  ) {
+    throw new Error("trusted calculated snapshot is required.");
+  }
+  return snapshot;
+}
+
+export async function listQuoteDocuments(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteDocumentRecord[]> {
+  const quoteRevision = await getQuoteRevision(context, quoteRevisionId);
+  const rows = await supabaseRest<JsonRecord[]>(
+    `generated_documents?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      revision_id: `eq.${quoteRevision.id}`,
+      select: generatedDocumentListSelect,
+      order: "created_at.desc"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "generated_documents");
+  return rows.map(quoteDocumentFromRow);
+}
+
+export async function getQuoteDocument(
+  context: TrustedRepositoryContext,
+  documentId: string
+): Promise<QuoteDocumentPreviewRecord> {
+  const trustedDocumentId = requireUuid(documentId, "Document id");
+  const rows = await supabaseRest<JsonRecord[]>(
+    `generated_documents?${new URLSearchParams({
+      id: `eq.${trustedDocumentId}`,
+      company_id: `eq.${context.companyId}`,
+      select: generatedDocumentPreviewSelect
+    }).toString()}`
+  );
+  if (rows.length !== 1) {
+    throw new Error("Generated document was not found in the session company.");
+  }
+  assertCompanyScope(rows, context.companyId, "generated_documents");
+  return quoteDocumentPreviewFromRow(rows[0]);
+}
+
+export async function generateQuoteDocument(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string,
+  reservation: IdempotencyReservation
+): Promise<QuoteDocumentPreviewRecord> {
+  const snapshot = await getCurrentCalculatedQuoteSnapshot(context, quoteRevisionId);
+  const project = await getProject(context, snapshot.quote_revision.project_id);
+  const build = buildFrozenQuoteHtmlDocument({ project, snapshot });
+  const storagePath = `${context.companyId}/${snapshot.quote_revision.id}/${build.sha256}.html`;
+  const provenance = {
+    source: "deterministic_server_document",
+    document_version: quoteDocumentVersion,
+    quote_revision_id: snapshot.quote_revision.id,
+    quote_revision_version: snapshot.quote_revision.version,
+    cost_snapshot_id: snapshot.cost_snapshot?.id ?? null,
+    cost_snapshot_hash: snapshot.cost_snapshot?.snapshot_hash ?? null,
+    bom_snapshot_hash: snapshot.bom_snapshot?.snapshot_hash ?? null,
+    calculation_version: snapshot.cost_snapshot?.formula_version ?? null,
+    storage: "server_route_mediated",
+    pdf_status: "deferred"
+  };
+  const response = await supabaseRestJson<{ document: QuoteDocumentPreviewRecord }>(
+    "rpc/persist_frozen_quote_document",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_company_id: context.companyId,
+        p_actor_app_user_id: context.appUserId,
+        p_revision_id: snapshot.quote_revision.id,
+        p_cost_snapshot_id: snapshot.cost_snapshot?.id ?? null,
+        p_idempotency_record_id: reservation.id,
+        p_request_hash: reservation.requestHash,
+        p_storage_path: storagePath,
+        p_content_type: build.contentType,
+        p_sha256: build.sha256,
+        p_size_bytes: build.sizeBytes,
+        p_document_version: build.documentVersion,
+        p_revision_version: snapshot.quote_revision.version,
+        p_snapshot_hash: snapshot.cost_snapshot?.snapshot_hash ?? null,
+        p_calculation_version: snapshot.cost_snapshot?.formula_version ?? null,
+        p_metadata_json: {
+          provenance,
+          bindings: {
+            quote_revision_id: snapshot.quote_revision.id,
+            cost_snapshot_id: snapshot.cost_snapshot?.id ?? null,
+            cost_snapshot_hash: snapshot.cost_snapshot?.snapshot_hash ?? null,
+            bom_snapshot_hash: snapshot.bom_snapshot?.snapshot_hash ?? null
+          }
+        },
+        p_artifact_html: build.html
+      })
+    }
+  );
+  return response.document;
+}
+
+export async function forkQuoteRevision(
+  context: TrustedRepositoryContext,
+  sourceRevisionId: string,
+  expectedRevisionVersion: number,
+  reservation: IdempotencyReservation
+): Promise<QuoteForkResponse> {
+  return supabaseRestJson<QuoteForkResponse>(
+    "rpc/fork_quote_revision_with_idempotency",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_company_id: context.companyId,
+        p_actor_app_user_id: context.appUserId,
+        p_source_revision_id: requireUuid(sourceRevisionId, "Quote revision id"),
+        p_expected_revision_version: expectedRevisionVersion,
+        p_idempotency_record_id: reservation.id,
+        p_request_hash: reservation.requestHash
+      })
+    }
+  );
+}
+
+export async function getQuoteRevisionDiff(
+  context: TrustedRepositoryContext,
+  leftRevisionId: string,
+  rightRevisionId: string
+): Promise<QuoteRevisionDiffResponse> {
+  const [leftRevision, rightRevision] = await Promise.all([
+    getQuoteRevision(context, leftRevisionId),
+    getQuoteRevision(context, rightRevisionId)
+  ]);
+  if (leftRevision.project_id !== rightRevision.project_id) {
+    throw new Error("Revision diff project scope is invalid.");
+  }
+  const [leftConfiguration, rightConfiguration, leftSnapshot, rightSnapshot, leftDocuments, rightDocuments] = await Promise.all([
+    getQuoteConfigurationDraft(context, leftRevision.id),
+    getQuoteConfigurationDraft(context, rightRevision.id),
+    getQuoteSnapshot(context, leftRevision.id),
+    getQuoteSnapshot(context, rightRevision.id),
+    listQuoteDocuments(context, leftRevision.id),
+    listQuoteDocuments(context, rightRevision.id)
+  ]);
+  const leftDocument = leftDocuments[0] ?? null;
+  const rightDocument = rightDocuments[0] ?? null;
+  const comparisons: QuoteDiffEntry[] = [
+    ...revisionDiffEntries(leftRevision, rightRevision),
+    ...configurationDiffEntries(leftConfiguration, rightConfiguration)
+  ];
+  const snapshotFields: Array<[string, unknown, unknown]> = [
+    ["calculation_status", leftSnapshot.calculation_status, rightSnapshot.calculation_status],
+    ["bom_snapshot_hash", leftSnapshot.bom_snapshot?.snapshot_hash ?? null, rightSnapshot.bom_snapshot?.snapshot_hash ?? null],
+    ["cost_snapshot_hash", leftSnapshot.cost_snapshot?.snapshot_hash ?? null, rightSnapshot.cost_snapshot?.snapshot_hash ?? null],
+    ["grand_total_minor", leftSnapshot.cost_snapshot?.grand_total_minor ?? null, rightSnapshot.cost_snapshot?.grand_total_minor ?? null],
+    ["calculation_version", leftSnapshot.cost_snapshot?.formula_version ?? null, rightSnapshot.cost_snapshot?.formula_version ?? null],
+    ["latest_document_hash", leftDocument?.sha256 ?? null, rightDocument?.sha256 ?? null]
+  ];
+  for (const [field, beforeValue, afterValue] of snapshotFields) {
+    const before = diffValue(beforeValue);
+    const after = diffValue(afterValue);
+    if (before !== after) {
+      comparisons.push({ category: "snapshot", field, before, after });
+    }
+  }
+  return {
+    left_revision: leftRevision,
+    right_revision: rightRevision,
+    entries: comparisons,
+    diff_version: "revision-diff-v1.0.0",
+    source: "deterministic_server_diff"
+  };
+}
+
+export async function getApprovalGateStatus(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<ApprovalGateRecord> {
+  const quoteRevision = await getQuoteRevision(context, quoteRevisionId);
+  const rows = await supabaseRest<JsonRecord[]>(
+    `approvals?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      revision_id: `eq.${quoteRevision.id}`,
+      action: "eq.quote_approve",
+      select: approvalGateSelect,
+      order: "created_at.desc",
+      limit: "1"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "approvals");
+  if (!rows[0]) {
+    return {
+      id: null,
+      revision_id: quoteRevision.id,
+      action: "quote_approve",
+      status: "not_prepared",
+      token_secret_returned: false,
+      approval_token_version: null,
+      quote_revision_version: null,
+      generated_document_id: null,
+      document_hash: null,
+      snapshot_hash: null,
+      expires_at: null,
+      deferred_actions: ["quote_send", "quote_approve", "production_package"]
+    };
+  }
+  const gate = approvalGateFromRow(rows[0], quoteRevision.id);
+  if (gate.status === "pending" && gate.expires_at && Date.parse(gate.expires_at) <= Date.now()) {
+    return { ...gate, status: "expired" };
+  }
+  return gate;
+}
+
+export async function prepareApprovalGate(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string,
+  documentId: string | null,
+  reservation: IdempotencyReservation
+): Promise<ApprovalGateRecord> {
+  const snapshot = await getCurrentCalculatedQuoteSnapshot(context, quoteRevisionId);
+  if (snapshot.quote_revision.status !== "draft") {
+    throw new Error("Approval gate status conflict.");
+  }
+  const document = documentId
+    ? await getQuoteDocument(context, requireUuid(documentId, "Document id"))
+    : (await listQuoteDocuments(context, snapshot.quote_revision.id)).find((candidate) => (
+      candidate.snapshot_hash === snapshot.cost_snapshot?.snapshot_hash &&
+      candidate.cost_snapshot_id === snapshot.cost_snapshot?.id
+    )) ?? null;
+  if (!document) {
+    throw new Error("Generated document is required before approval preparation.");
+  }
+  if (
+    document.revision_id !== snapshot.quote_revision.id ||
+    document.cost_snapshot_id !== snapshot.cost_snapshot?.id ||
+    document.snapshot_hash !== snapshot.cost_snapshot?.snapshot_hash
+  ) {
+    throw new Error("Generated document snapshot binding is invalid.");
+  }
+  const token = buildApprovalTokenSecret();
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const response = await supabaseRestJson<{ approval_gate: ApprovalGateRecord }>(
+    "rpc/prepare_quote_approval_gate_with_idempotency",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_company_id: context.companyId,
+        p_actor_app_user_id: context.appUserId,
+        p_revision_id: snapshot.quote_revision.id,
+        p_quote_revision_version: snapshot.quote_revision.version,
+        p_cost_snapshot_id: snapshot.cost_snapshot?.id ?? null,
+        p_generated_document_id: document.id,
+        p_snapshot_hash: snapshot.cost_snapshot?.snapshot_hash ?? null,
+        p_document_hash: document.sha256,
+        p_expires_at: expiresAt,
+        p_approval_token_version: token.version,
+        p_token_hash: token.tokenHash,
+        p_idempotency_record_id: reservation.id,
+        p_request_hash: reservation.requestHash
+      })
+    }
+  );
+  return response.approval_gate;
 }
 
 export async function persistQuoteCalculationResult(
@@ -974,7 +1346,7 @@ export async function createQuoteDraft(
   );
   const nextRevisionNumber = existingRows.reduce((max, row) => Math.max(max, asNumber(row.revision_number)), 0) + 1;
   const row = await supabaseRestObject<JsonRecord>(
-    "quote_revisions?select=id,company_id,project_id,revision_number,status,version",
+    `quote_revisions?select=${encodeURIComponent(quoteRevisionSelect)}`,
     {
       method: "POST",
       headers: { Prefer: "return=representation" },
@@ -993,8 +1365,17 @@ export async function createQuoteDraft(
 export async function appendAuditEntry(
   context: TrustedRepositoryContext,
   input: {
-    action: "customer_created" | "project_created" | "quote_draft_created" | "quote_configuration_created" | "quote_configuration_updated" | "quote_snapshot_calculated";
-    target_type: "customer" | "project" | "quote_revision" | "quote_configuration_draft";
+    action:
+      | "customer_created"
+      | "project_created"
+      | "quote_draft_created"
+      | "quote_configuration_created"
+      | "quote_configuration_updated"
+      | "quote_snapshot_calculated"
+      | "quote_document_generated"
+      | "quote_revision_forked"
+      | "quote_approval_gate_prepared";
+    target_type: "customer" | "project" | "quote_revision" | "quote_configuration_draft" | "generated_document" | "approval";
     target_id: string;
     metadata?: Record<string, unknown>;
   }
@@ -1078,9 +1459,74 @@ function quoteRevisionFromRow(row: JsonRecord): QuoteRevisionRecord {
   return {
     id: asString(row.id),
     project_id: asString(row.project_id),
+    parent_revision_id: asNullableString(row.parent_revision_id),
+    product_variant_id: asNullableString(row.product_variant_id),
     revision_number: asNumber(row.revision_number),
     status: asString(row.status),
     version: asNumber(row.version)
+  };
+}
+
+function generatedDocumentFromRow(row: JsonRecord): GeneratedDocumentRecord {
+  return {
+    id: asString(row.id),
+    revision_id: asString(row.revision_id),
+    cost_snapshot_id: asNullableString(row.cost_snapshot_id),
+    document_type: asString(row.document_type),
+    content_type: asString(row.content_type),
+    document_version: asString(row.document_version),
+    revision_version: asNumber(row.revision_version),
+    snapshot_hash: asNullableString(row.snapshot_hash),
+    calculation_version: asNullableString(row.calculation_version),
+    sha256: asString(row.sha256),
+    size_bytes: asNumber(row.size_bytes)
+  };
+}
+
+function quoteDocumentFromRow(row: JsonRecord): QuoteDocumentRecord {
+  const metadata = asJsonRecord(row.metadata_json);
+  const provenance = asJsonRecord(metadata.provenance);
+  return {
+    ...generatedDocumentFromRow(row),
+    created_at: asString(row.created_at),
+    provenance: {
+      source: "deterministic_server_document",
+      document_version: asString(provenance.document_version) || asString(row.document_version),
+      quote_revision_id: asString(provenance.quote_revision_id) || asString(row.revision_id),
+      quote_revision_version: asNumber(provenance.quote_revision_version) || asNumber(row.revision_version),
+      cost_snapshot_id: asNullableString(provenance.cost_snapshot_id),
+      cost_snapshot_hash: asNullableString(provenance.cost_snapshot_hash) ?? asNullableString(row.snapshot_hash),
+      bom_snapshot_hash: asNullableString(provenance.bom_snapshot_hash),
+      calculation_version: asNullableString(provenance.calculation_version) ?? asNullableString(row.calculation_version),
+      storage: "server_route_mediated",
+      pdf_status: "deferred"
+    }
+  };
+}
+
+function quoteDocumentPreviewFromRow(row: JsonRecord): QuoteDocumentPreviewRecord {
+  return {
+    ...quoteDocumentFromRow(row),
+    html: asString(row.artifact_html)
+  };
+}
+
+function approvalGateFromRow(row: JsonRecord, revisionId: string): ApprovalGateRecord {
+  return {
+    id: asNullableString(row.id),
+    revision_id: asString(row.revision_id) || revisionId,
+    action: "quote_approve",
+    status: asString(row.status) as ApprovalGateRecord["status"],
+    token_secret_returned: false,
+    approval_token_version: asNullableString(row.approval_token_version),
+    quote_revision_version: row.quote_revision_version === null || row.quote_revision_version === undefined
+      ? null
+      : asNumber(row.quote_revision_version),
+    generated_document_id: asNullableString(row.generated_document_id),
+    document_hash: asNullableString(row.document_hash),
+    snapshot_hash: asNullableString(row.snapshot_hash),
+    expires_at: asNullableString(row.expires_at),
+    deferred_actions: ["quote_send", "quote_approve", "production_package"]
   };
 }
 

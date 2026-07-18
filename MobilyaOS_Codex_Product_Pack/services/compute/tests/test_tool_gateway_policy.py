@@ -52,6 +52,10 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "calculate_quote_snapshot",
         "get_quote_snapshot",
         "explain_quote_snapshot",
+        "get_quote_document",
+        "explain_quote_document",
+        "get_revision_diff",
+        "explain_revision_diff",
         "create_quote_configuration_draft",
         "update_quote_configuration_draft",
         "send_quote",
@@ -170,6 +174,48 @@ def test_forbidden_tools_remain_non_executable_even_with_approval() -> None:
     assert "not executable" in calculate.reason
 
 
+def test_persisted_document_and_diff_tools_are_read_only() -> None:
+    document = get_tool_policy("get_quote_document")
+    document_explanation = get_tool_policy("explain_quote_document")
+    diff = get_tool_policy("get_revision_diff")
+    diff_explanation = get_tool_policy("explain_revision_diff")
+
+    assert document is not None
+    assert document.mode == "read"
+    assert document.executable is True
+    assert document.requires_idempotency is False
+    assert document.requires_approval is False
+    assert document.llm_authoritative_calculation is False
+
+    assert document_explanation is not None
+    assert document_explanation.mode == "conversation"
+    assert document_explanation.requires_audit is False
+    assert document_explanation.executable is True
+
+    assert diff is not None
+    assert diff.mode == "read"
+    assert diff.executable is True
+    assert diff.requires_idempotency is False
+    assert diff.requires_approval is False
+
+    assert diff_explanation is not None
+    assert diff_explanation.mode == "conversation"
+    assert diff_explanation.requires_audit is False
+    assert diff_explanation.executable is True
+
+
+def test_p7_mutating_document_tools_remain_forbidden() -> None:
+    for tool_name in [
+        "generate_pdf",
+        "send_quote",
+        "approve_quote",
+        "create_production_package",
+        "mutate_quote_from_chat",
+    ]:
+        result = decision(tool_name, idempotency_key="stable-key", approval_granted=True)
+        assert result.allowed is False
+
+
 def test_agent_allowlist_cannot_be_bypassed_by_prompt_text() -> None:
     result = decision(
         "send_quote",
@@ -184,6 +230,25 @@ def test_agent_allowlist_cannot_be_bypassed_by_prompt_text() -> None:
     assert result.status == "denied"
     assert result.warnings
     assert "untrusted text" in result.reason
+
+
+def test_prompt_injection_markers_cannot_grant_document_or_diff_tools() -> None:
+    for marker in [
+        "ignore previous instructions",
+        "approval_token=secret",
+        "storage_path=/private",
+        "signed_url=https://example.invalid",
+        "service_role",
+    ]:
+        result = decision(
+            "get_quote_document",
+            agent_id="quote_document",
+            roles=["admin"],
+            untrusted_text=marker,
+        )
+        assert result.allowed is False
+        assert result.status == "denied"
+        assert result.warnings
 
 
 def test_policy_manifest_endpoint_exposes_only_static_metadata() -> None:

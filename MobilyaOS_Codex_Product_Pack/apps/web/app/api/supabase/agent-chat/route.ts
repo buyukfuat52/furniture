@@ -3,13 +3,18 @@ import { safeError, withReadSession } from "../../../../lib/server/routeGuards";
 import {
   getProjectDetail,
   getQuoteConfigurationDraft,
+  getQuoteDocument,
   getQuoteRevisionDetail,
+  getQuoteRevisionDiff,
   getQuoteSnapshot,
+  listQuoteDocuments,
   listProjects,
   type AuditEntryRecord,
   type ProjectDetailRecord,
   type QuoteConfigurationDraftRecord,
+  type QuoteDocumentRecord,
   type QuoteRevisionDetailRecord,
+  type QuoteRevisionDiffResponse,
   type QuoteRevisionRecord,
   type QuoteSnapshotResponse
 } from "../../../../lib/server/supabaseRepository";
@@ -54,6 +59,7 @@ type AgentResponseBody = {
 
 type ChatPayload = {
   message?: unknown;
+  document_id?: unknown;
   project_id?: unknown;
   quote_revision_id?: unknown;
   revision_id?: unknown;
@@ -232,6 +238,39 @@ function snapshotFacts(snapshot: QuoteSnapshotResponse | null): Array<{ label: s
   ];
 }
 
+function documentFacts(document: QuoteDocumentRecord | null): Array<{ label: string; value: unknown }> {
+  if (!document) {
+    return [
+      { label: "Frozen belge", value: "yok" },
+      { label: "PDF durumu", value: "deferred" }
+    ];
+  }
+  return [
+    { label: "Frozen belge", value: document.id },
+    { label: "Belge tipi", value: document.document_type },
+    { label: "Belge versiyonu", value: document.document_version },
+    { label: "Belge hash", value: document.sha256 },
+    { label: "Snapshot hash", value: document.snapshot_hash ?? "yok" },
+    { label: "Hesaplama versiyonu", value: document.calculation_version ?? "yok" },
+    { label: "PDF durumu", value: document.provenance.pdf_status },
+    { label: "Depolama erisimi", value: document.provenance.storage }
+  ];
+}
+
+function diffFacts(diff: QuoteRevisionDiffResponse): Array<{ label: string; value: unknown }> {
+  return [
+    { label: "Diff kaynagi", value: diff.source },
+    { label: "Diff versiyonu", value: diff.diff_version },
+    { label: "Sol revizyon", value: revisionLabel(diff.left_revision) },
+    { label: "Sag revizyon", value: revisionLabel(diff.right_revision) },
+    { label: "Fark sayisi", value: diff.entries.length },
+    {
+      label: "Ilk farklar",
+      value: diff.entries.slice(0, 5).map((entry) => `${entry.category}.${entry.field}: ${entry.before} -> ${entry.after}`)
+    }
+  ];
+}
+
 export async function POST(request: Request) {
   return withReadSession(request, async ({ session }) => {
     let body: ChatPayload;
@@ -276,6 +315,7 @@ export async function POST(request: Request) {
     }
 
     const projectId = safeString(body.project_id);
+    const documentId = safeString(body.document_id);
     const selectedRevisionId = safeString(body.quote_revision_id) ?? safeString(body.revision_id);
     const leftRevisionId = safeString(body.left_revision_id);
     const rightRevisionId = safeString(body.right_revision_id);
@@ -288,6 +328,7 @@ export async function POST(request: Request) {
     let revisionDetail: QuoteRevisionDetailRecord | null = null;
     let configurationDraft: QuoteConfigurationDraftRecord | null = null;
     let quoteSnapshot: QuoteSnapshotResponse | null = null;
+    let quoteDocument: QuoteDocumentRecord | null = null;
 
     if (projectId) {
       projectDetail = await getProjectDetail(session.mutationScope, projectId);
@@ -322,15 +363,24 @@ export async function POST(request: Request) {
       if (!leftRevisionId || !rightRevisionId) {
         missingInformation.push("karsilastirilacak iki revizyon");
       } else {
-        const left = await getQuoteRevisionDetail(session.mutationScope, leftRevisionId);
-        const right = await getQuoteRevisionDetail(session.mutationScope, rightRevisionId);
-        toolCalls.push(completedTool("agent-tool-5", "compare_revision_metadata", "Iki revizyon tenant kapsaminda okundu."));
-        facts.push(
-          { label: "Sol revizyon", value: revisionLabel(left.quote_revision) },
-          { label: "Sag revizyon", value: revisionLabel(right.quote_revision) },
-          { label: "Durum farki", value: left.quote_revision.status === right.quote_revision.status ? "yok" : "var" },
-          { label: "Versiyon farki", value: left.quote_revision.version === right.quote_revision.version ? "yok" : "var" }
-        );
+        const diff = await getQuoteRevisionDiff(session.mutationScope, leftRevisionId, rightRevisionId);
+        toolCalls.push(completedTool("agent-tool-5", "get_revision_diff", "Deterministik revizyon farki salt okunur okundu."));
+        facts.push(...diffFacts(diff));
+      }
+    }
+
+    if (agentId === "quote_document") {
+      if (documentId) {
+        quoteDocument = await getQuoteDocument(session.mutationScope, documentId);
+        toolCalls.push(completedTool("agent-tool-5", "get_quote_document", "Frozen teklif belgesi server rotasindan okundu."));
+      } else if (revisionId) {
+        const documents = await listQuoteDocuments(session.mutationScope, revisionId);
+        quoteDocument = documents[0] ?? null;
+        toolCalls.push(completedTool("agent-tool-5", "get_quote_document", "Revizyonun son frozen teklif belgesi arandi."));
+      }
+      facts.push(...documentFacts(quoteDocument));
+      if (!quoteDocument) {
+        missingInformation.push("snapshot'a bagli frozen teklif belgesi");
       }
     }
 

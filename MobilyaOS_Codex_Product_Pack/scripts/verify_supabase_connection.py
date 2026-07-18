@@ -199,6 +199,11 @@ def tenant_revision_rows(env: dict[str, str], token: str, revision_id: str) -> A
     return rest_request(env, "GET", f"/rest/v1/quote_revisions?{query}", token=token)
 
 
+def sensitive_table_rows(env: dict[str, str], token: str, table: str, select: str, revision_id: str) -> Any:
+    query = urlencode({"select": select, "revision_id": f"eq.{revision_id}"})
+    return rest_request(env, "GET", f"/rest/v1/{table}?{query}", token=token)
+
+
 def expect_direct_app_write_blocked(env: dict[str, str], token: str, role_label: str) -> bool:
     customer_write_blocked = expect_authenticated_rest_denied(
         env,
@@ -258,6 +263,20 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
         primary_reads_second = tenant_project_rows(env, access_token, SECOND_TENANT_PROJECT_ID)
         second_reads_primary_revision = tenant_revision_rows(env, second_access_token, DEMO_REVISION_ID)
         primary_reads_second_revision = tenant_revision_rows(env, access_token, SECOND_TENANT_REVISION_ID)
+        direct_documents = sensitive_table_rows(
+            env,
+            access_token,
+            "generated_documents",
+            "id,storage_bucket,storage_path,artifact_html",
+            DEMO_REVISION_ID,
+        )
+        direct_approvals = sensitive_table_rows(
+            env,
+            access_token,
+            "approvals",
+            "id,token_hash,metadata_json",
+            DEMO_REVISION_ID,
+        )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Authenticated RLS smoke: failed ({exc.__class__.__name__})")
         return False
@@ -281,6 +300,13 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             and len(primary_reads_second_revision) == 0
         )
         print(f"Cross-tenant authenticated read: {'ok' if cross_read_ok else 'failed'}")
+        direct_sensitive_read_blocked = (
+            isinstance(direct_documents, list)
+            and len(direct_documents) == 0
+            and isinstance(direct_approvals, list)
+            and len(direct_approvals) == 0
+        )
+        print(f"Authenticated direct sensitive table read: {'ok' if direct_sensitive_read_blocked else 'failed'}")
         cross_write_blocked = expect_authenticated_rest_denied(
             env,
             second_access_token,
@@ -296,7 +322,13 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
         )
         sales_direct_write_blocked = expect_direct_app_write_blocked(env, access_token, "sales")
         viewer_direct_write_blocked = expect_direct_app_write_blocked(env, viewer_access_token, "viewer")
-        return cross_read_ok and cross_write_blocked and sales_direct_write_blocked and viewer_direct_write_blocked
+        return (
+            cross_read_ok
+            and direct_sensitive_read_blocked
+            and cross_write_blocked
+            and sales_direct_write_blocked
+            and viewer_direct_write_blocked
+        )
     print("Authenticated RLS smoke: failed (unexpected row count)")
     return False
 

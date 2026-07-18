@@ -371,9 +371,10 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                 """
                 insert into public.generated_documents (
                   id, company_id, revision_id, cost_snapshot_id, document_type, storage_bucket,
-                  storage_path, content_type, sha256, size_bytes
+                  storage_path, content_type, sha256, size_bytes, document_version, revision_version,
+                  snapshot_hash, calculation_version, metadata_json, artifact_html
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
                 on conflict (id) do update
                 set cost_snapshot_id = excluded.cost_snapshot_id,
                     storage_bucket = excluded.storage_bucket,
@@ -381,6 +382,12 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                     content_type = excluded.content_type,
                     sha256 = excluded.sha256,
                     size_bytes = excluded.size_bytes,
+                    document_version = excluded.document_version,
+                    revision_version = excluded.revision_version,
+                    snapshot_hash = excluded.snapshot_hash,
+                    calculation_version = excluded.calculation_version,
+                    metadata_json = excluded.metadata_json,
+                    artifact_html = excluded.artifact_html,
                     updated_at = now()
                 """,
                 (
@@ -392,8 +399,27 @@ def seed_database_rows(env: dict[str, str], auth_ids: dict[str, str | None]) -> 
                     "quote-documents",
                     f"{DEMO_COMPANY_ID}/{DEMO_REVISION_ID}/quote.html",
                     "text/html; charset=utf-8",
-                    "demo-document-sha256",
-                    128,
+                    "d" * 64,
+                    256,
+                    "quote-html-v1.0.0",
+                    1,
+                    "demo-cost-hash-v1",
+                    "wardrobe-cost-v1",
+                    json.dumps({
+                        "provenance": {
+                            "source": "deterministic_server_document",
+                            "document_version": "quote-html-v1.0.0",
+                            "quote_revision_id": DEMO_REVISION_ID,
+                            "quote_revision_version": 1,
+                            "cost_snapshot_id": DEMO_COST_SNAPSHOT_ID,
+                            "cost_snapshot_hash": "demo-cost-hash-v1",
+                            "bom_snapshot_hash": "demo-bom-hash-v1",
+                            "calculation_version": "wardrobe-cost-v1",
+                            "storage": "server_route_mediated",
+                            "pdf_status": "deferred",
+                        }
+                    }),
+                    "<!doctype html><html><body><h1>Demo frozen quote</h1><p>Grand total 14491.51 TRY</p><p>demo-cost-hash-v1</p></body></html>",
                 ),
             )
             cur.execute(

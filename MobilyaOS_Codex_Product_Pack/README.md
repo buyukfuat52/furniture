@@ -97,7 +97,7 @@ py -3.12 scripts/seed_supabase.py
 py -3.12 scripts/verify_supabase_connection.py
 ```
 
-Run `check-env` first. It must report every required Supabase variable as `configured` and `DATABASE_URL` as structurally valid before migration, seed, or live verification can run.
+Run `check-env` first. It must report every required Supabase variable as `configured` and both `DATABASE_URL` and `DIRECT_DATABASE_URL` as structurally valid before migration, seed, or live verification can run.
 
 The migration/seed/verify scripts need `psycopg`:
 
@@ -114,7 +114,7 @@ Behavior:
 
 `verify_supabase_connection.py` also checks demo app users, demo project/revision rows, second-tenant fixture rows, tenant `company_id` columns, RLS enablement, absence of public/anon policies, the two Storage buckets, authenticated cross-tenant read/write denial, and direct authenticated public-key write denial for sales/viewer users.
 
-## Supabase-backed Web Session And Draft Mutations
+## Supabase-backed Web Session, Drafts, And Quote Lifecycle
 
 The web app now has a server-side Supabase session and read boundary:
 
@@ -130,18 +130,24 @@ The web app now has a server-side Supabase session and read boundary:
 - `GET/POST/PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft` reads, creates, and updates a tenant-scoped wardrobe configuration draft attached to a draft quote revision.
 - `POST /api/supabase/quote-revisions/[quoteRevisionId]/calculate` runs the first deterministic persisted wardrobe snapshot flow from the saved configuration draft only.
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/snapshot` reads the current persisted BOM/cost snapshot only when its provenance matches the current configuration draft/version.
+- `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/documents` lists or generates a frozen HTML quote document bound to the current revision version, cost snapshot, calculation version, and snapshot hash.
+- `GET /api/supabase/documents/[documentId]` returns a sanitized frozen quote document preview without storage locators or approval token material.
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/fork` forks a draft child revision from an approved/sent/source revision by copying configuration input only.
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/diff?against=...` returns a deterministic server-derived diff between two same-project revisions.
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/approval-status` returns sanitized approval-gate status.
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/approval-token` prepares an admin-only pending approval gate bound to the frozen document and snapshot hashes. It never returns raw approval tokens or token hashes.
 - `POST /api/supabase/agent-chat` provides the read-only web chat prototype through the HTTP-only session boundary.
 - Browser-supplied `company_id` values are not trusted as authority.
 - The browser receives only sanitized demo rows and safe status fields. It does not receive Supabase access tokens, service keys, database URLs, storage paths, or `auth_user_id`.
 - The session cookie contains only minimal encrypted local-demo claims and expires automatically.
 - The server loads root `.env` and `.env.local` automatically even when Next.js is started from `apps/web`.
 - The UI's "Load demo data" action now reads from Supabase-backed API routes only after login.
-- The UI can create customer, project, quote draft, create/update quote configuration draft records, run the saved draft through the deterministic snapshot route, and display persisted BOM/edge/labor/cost results without browser arithmetic.
-- The UI chat panel reads project/revision/configuration/snapshot status through `/api/supabase/agent-chat`; it does not call compute directly or send browser-owned company, role, user, cost snapshot, or diff authority.
-- `viewer` is read-only; `sales` and `admin` can create customer, project, quote draft, and create/update quote configuration draft records.
+- The UI can create customer, project, quote draft, create/update quote configuration draft records, run the saved draft through the deterministic snapshot route, generate/preview a frozen HTML quote, fork revisions, view revision diffs, and prepare an admin-only approval gate.
+- The UI chat panel reads project/revision/configuration/snapshot/document/diff status through `/api/supabase/agent-chat`; it does not call compute directly or send browser-owned company, role, user, cost snapshot, document, or diff authority.
+- `viewer` is read-only; `sales` and `admin` can create customer, project, quote draft, create/update quote configuration draft records, generate frozen quote documents, and fork revisions. Approval-gate preparation is `admin` only.
 - Successful mutations append server-side audit entries.
 - Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key.
-- Quote configuration drafts store only validated draft input: integer millimetre dimensions, explicit piece quantity, bounded option counts, SKUs, notes, validation status, and `not_calculated` draft status. The P6 calculate route creates frozen BOM and cost snapshots for the narrow wardrobe slice only; it does not approve, send, generate an official PDF, or create a production package.
+- Quote configuration drafts store only validated draft input: integer millimetre dimensions, explicit piece quantity, bounded option counts, SKUs, notes, validation status, and `not_calculated` draft status. The P6 calculate route creates frozen BOM and cost snapshots for the narrow wardrobe slice only. The P7 document route creates a frozen HTML quote artifact from that snapshot; it does not send, approve, generate a binary PDF, or create a production package.
 - Direct authenticated table writes to quote revisions/configuration drafts are blocked or no-effect, and database guards reject quote revision status changes, approved/sent revision mutations, approved-revision config drafts, and invalid config draft shapes.
 
 Run the app without Docker:
@@ -150,7 +156,7 @@ Run the app without Docker:
 npm run dev -w apps/web
 ```
 
-The original P3 quote document/fork/diff buttons still call the Go core demo API through `NEXT_PUBLIC_API_BASE_URL` / `API_BASE_URL`. On this machine that path is not fully live because Go is not on `PATH` and the core service is still in-memory. Treat official document, fork, and diff actions as the next wiring target, not as production-ready Supabase actions.
+The lower legacy P3 demo controls still call the Go core demo API through `NEXT_PUBLIC_API_BASE_URL` / `API_BASE_URL`. On this machine that path is not fully live because Go is not on `PATH` and the core service is still in-memory. Use the Supabase lifecycle panel for the persisted document, fork, diff, and approval-gate preparation flow.
 
 Sprint boundary docs:
 
@@ -158,7 +164,7 @@ Sprint boundary docs:
 - `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
 - `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
 
-`apps/web/lib/server/productMutationBoundary.ts` defines trusted server-side scope and allows only the low-risk draft mutations above. Quote send, approval, PDF generation, production package creation, and mutating runtime agent tool execution remain disabled/deferred.
+`apps/web/lib/server/productMutationBoundary.ts` defines trusted server-side scope and allows only the reviewed draft and P7 lifecycle mutations above. Quote send, approval consumption, binary PDF generation, production package creation, and mutating runtime agent tool execution remain disabled/deferred.
 
 ## Optional Docker Compose
 
@@ -201,8 +207,9 @@ Blocked on this machine:
 - Web app builds, renders the vertical-slice workflow, and reads seeded demo tenant data from Supabase through server-side routes.
 - Demo login verifies Supabase Auth credentials server-side, maps them to seeded app users, creates an encrypted HTTP-only session cookie, exposes a sanitized session endpoint, and supports logout.
 - Supabase-backed draft mutations now work for customer creation, draft project creation, quote draft shell creation, quote revision list/read, quote configuration draft create/update, and audit append.
-- Server-only mutation policy keeps `viewer` read-only and permits `sales`/`admin` only for the low-risk draft mutations.
-- The web chat UI has a read-only Supabase-backed route that can summarize current projects, quote revisions, audit state, and configuration draft status without authoritative calculations or mutations.
+- Supabase-backed lifecycle mutations now work for deterministic frozen HTML quote generation, sanitized document preview, revision fork, deterministic revision diff, approval-gate status, and admin-only approval-gate preparation.
+- Server-only mutation policy keeps `viewer` read-only, permits `sales`/`admin` only for reviewed draft/document/fork mutations, and restricts approval-gate preparation to `admin`.
+- The web chat UI has a read-only Supabase-backed route that can summarize current projects, quote revisions, audit state, configuration draft status, cost snapshots, frozen quote documents, and revision diffs without authoritative calculations or mutations.
 - Compute/agent service passes tests and enforces bearer auth, role derivation, prompt-injection blocking, tool allowlists, and quote-send denial/approval gating.
 - Supabase migrations define tenant-scoped tables, composite foreign keys, RLS policies, and private storage buckets.
 - Supabase scripts support env validation, migration, seeding, and verification without printing secrets.
@@ -211,13 +218,12 @@ Blocked on this machine:
 ## Deferred Features
 
 - Go core tests are written but cannot be executed on this machine without Go.
-- Core still uses in-memory demo state; deterministic product calculation and document/fork/diff persistence are deferred.
-- The web product calculate/quote document/fork/diff actions are not yet Supabase-persisted. Configuration draft persistence is Supabase-backed but non-authoritative.
+- Core still uses in-memory demo state; the currently live persistence path is the Next.js server boundary plus Supabase RPCs.
+- Binary PDF generation is not implemented; the current persisted quote artifact is deterministic HTML with hashes and provenance.
 - The demo session is a local-development boundary, not a production-grade auth system with revocation, rotation, device management, or rate limiting.
 - Runtime agent/tool-gateway integration is documented; the web route is read-only and mutating/official-document agent execution remains disabled.
-- Real PDF generation is not implemented; the current quote artifact is HTML.
-- Durable approval-token workflow is not complete.
-- Durable idempotency is implemented for current Supabase-backed draft mutations, but reservation, domain write, and audit append are not yet one SQL transaction.
+- Approval-gate preparation exists, but approval-token delivery/consumption, quote sending, and production release are not implemented.
+- Durable idempotency is implemented for current Supabase-backed draft, snapshot, document, fork, and approval-gate routes. Older draft REST routes still use separate write/audit steps rather than one audited SQL/RPC transaction.
 - Direct compute agent tool adapters are still deterministic local adapters and do not yet query the Supabase-backed application repository. The browser UI uses the Supabase web route instead.
 
 ## Security Status
@@ -235,6 +241,7 @@ Implemented/guarded:
 - Demo-data requires a valid HTTP-only session cookie and uses the session company scope instead of browser-supplied tenant identifiers.
 - Route smoke tests check login cookie flags, invalid login, session, logout, session-required demo-data, and forbidden response keys.
 - Mutation smoke tests check unauthenticated 401, viewer 403, sales/admin writes, true second-tenant read/write IDOR denial, idempotency replay/conflict across server restarts/users/tenants, quote draft status, configuration draft create/read/update, invalid config rejection, approved-revision config denial, deterministic snapshot calculation/persistence, integer money and millimetre checks, edge-band and labor quantity assertions, audit append/no-extra-on-denial, and forbidden response keys.
+- P7 smoke tests check frozen document generation from the calculated snapshot, HTML total/snapshot consistency, sanitized document preview, revision fork copy policy, deterministic diff, admin-only approval-gate preparation, and direct authenticated sensitive-table read denial.
 - `scripts/secret_scan.py` scans tracked files only and fails on committed `.env.local` or value-shaped secrets without printing matched values.
 - Mutation-boundary and runtime-agent docs keep authoritative calculations and approval decisions in backend/domain services.
 
@@ -242,8 +249,8 @@ Known gaps:
 
 - Supabase live migration/seed/verify requires saved local `.env.local` values; the scripts stop safely if required values are missing.
 - Static demo passwords and the local-demo session model are only suitable for demo/local development.
-- Durable approval-token workflow is still required before real quote approval or sending.
-- Official PDF/document persistence, quote fork, revision diff persistence, and production package creation remain deferred beyond the P6 persisted snapshot slice.
+- Approval-token consumption and quote sending are still required before real customer approval or dispatch.
+- Binary PDF generation, object-storage upload metadata, and production package creation remain deferred beyond the P7 persisted HTML lifecycle slice.
 - Tool whitelist drift and malicious tool-output prompt injection need additional validation.
 
 See `ROADMAP.md` for next-phase work.

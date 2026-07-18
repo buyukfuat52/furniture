@@ -10,6 +10,7 @@ const repoRoot = findRepoRoot(appRoot);
 const fakeCustomerId = "00000000-0000-4000-8000-000000000001";
 const fakeProjectId = "00000000-0000-4000-8000-000000000002";
 const fakeQuoteRevisionId = "00000000-0000-4000-8000-000000000003";
+const fakeDocumentId = "00000000-0000-4000-8000-000000000004";
 const demoCustomerId = "77777777-7777-4777-8777-777777777777";
 const demoProjectId = "44444444-4444-4444-8444-444444444444";
 const demoQuoteRevisionId = "14141414-1414-4141-8141-141414141414";
@@ -35,8 +36,10 @@ const forbiddenPayloadKeys = [
   "access_token",
   "refresh_token",
   "service_role",
+  "signed_url",
   "storage_bucket",
   "storage_path",
+  "token_hash",
   "raw_storage_path",
   "database_password"
 ];
@@ -47,7 +50,10 @@ const forbiddenResponseFields = [
   "access_token",
   "refresh_token",
   "service_role",
+  "signed_url",
+  "storage_bucket",
   "storage_path",
+  "token_hash",
   "raw_storage_path",
   "database_password"
 ];
@@ -456,6 +462,80 @@ function assertQuoteSnapshotCalculated(payload, expected, label) {
   }
 }
 
+function moneyMinorText(amountMinor, currency) {
+  const whole = Math.floor(amountMinor / 100);
+  const cents = String(amountMinor % 100).padStart(2, "0");
+  return `${whole}.${cents} ${currency}`;
+}
+
+function assertFrozenQuoteDocument(payload, expected, label) {
+  const document = payload.document;
+  requireSafe(Boolean(document?.id), `${label} must include a document id.`);
+  requireSafe(document.revision_id === expected.quoteRevisionId, `${label} must bind to the quote revision.`);
+  requireSafe(document.cost_snapshot_id === expected.costSnapshotId, `${label} must bind to the cost snapshot.`);
+  requireSafe(document.document_type === "quote_html", `${label} document type must be quote_html.`);
+  requireSafe(document.content_type === "text/html; charset=utf-8", `${label} content type must be HTML.`);
+  requireSafe(document.document_version === "quote-html-v1.0.0", `${label} document version must be deterministic.`);
+  requireSafe(document.revision_version === expected.quoteRevisionVersion, `${label} must bind quote revision version.`);
+  requireSafe(document.snapshot_hash === expected.costSnapshotHash, `${label} must bind cost snapshot hash.`);
+  requireSafe(document.calculation_version === deterministicCalculationVersion, `${label} must bind calculation version.`);
+  requireSafe(/^[0-9a-f]{64}$/i.test(document.sha256), `${label} document hash must be sha256.`);
+  requirePositiveInteger(document.size_bytes, `${label} document size`);
+  requireSafe(document.provenance?.source === "deterministic_server_document", `${label} provenance source must be deterministic.`);
+  requireSafe(document.provenance?.storage === "server_route_mediated", `${label} storage must be mediated by server route.`);
+  requireSafe(document.provenance?.pdf_status === "deferred", `${label} PDF must remain deferred.`);
+  requireSafe(typeof document.html === "string" && document.html.startsWith("<!doctype html>"), `${label} preview HTML must be present.`);
+  requireSafe(!/<script/i.test(document.html), `${label} preview HTML must not contain script tags.`);
+  requireSafe(document.html.includes(expected.costSnapshotHash), `${label} HTML must include the trusted cost snapshot hash.`);
+  requireSafe(
+    document.html.includes(moneyMinorText(expected.grandTotalMinor, expected.currency)),
+    `${label} HTML total must match the cost snapshot total.`
+  );
+  assertNoForbiddenResponseFields(label, payload);
+}
+
+function assertQuoteFork(payload, expected, label) {
+  const revision = payload.quote_revision;
+  requireSafe(Boolean(revision?.id), `${label} must include a fork revision id.`);
+  requireSafe(revision.id !== expected.sourceRevisionId, `${label} fork id must be new.`);
+  requireSafe(revision.parent_revision_id === expected.sourceRevisionId, `${label} fork must point to the source parent.`);
+  requireSafe(revision.project_id === expected.projectId, `${label} fork must stay in the same project.`);
+  requireSafe(revision.status === "draft", `${label} fork must be draft.`);
+  requireSafe(revision.version === 1, `${label} fork must start at version 1.`);
+  requireSafe(payload.snapshot_copy_policy === "snapshots_not_copied", `${label} must not copy snapshots.`);
+  requireSafe(payload.document_copy_policy === "documents_not_copied", `${label} must not copy documents.`);
+  requireSafe(payload.configuration_draft?.quote_revision_id === revision.id, `${label} must copy config to the fork only.`);
+  requireSafe(payload.configuration_draft?.calculation_status === "not_calculated", `${label} fork config must require recalculation.`);
+}
+
+function assertRevisionDiff(payload, expected, label) {
+  const diff = payload.diff;
+  requireSafe(diff?.source === "deterministic_server_diff", `${label} source must be deterministic.`);
+  requireSafe(diff.diff_version === "revision-diff-v1.0.0", `${label} version must match.`);
+  requireSafe(diff.left_revision?.id === expected.leftRevisionId, `${label} left revision must match.`);
+  requireSafe(diff.right_revision?.id === expected.rightRevisionId, `${label} right revision must match.`);
+  requireSafe(Array.isArray(diff.entries), `${label} entries must be an array.`);
+  requireSafe(
+    diff.entries.some((entry) => entry.field === "parent_revision_id"),
+    `${label} must include the parent revision difference.`
+  );
+}
+
+function assertApprovalGate(payload, expected, label) {
+  const gate = payload.approval_gate;
+  requireSafe(Boolean(gate?.id), `${label} must include an approval id.`);
+  requireSafe(gate.revision_id === expected.quoteRevisionId, `${label} must bind to the quote revision.`);
+  requireSafe(gate.action === "quote_approve", `${label} action must be quote_approve.`);
+  requireSafe(gate.status === "pending", `${label} status must be pending.`);
+  requireSafe(gate.token_secret_returned === false, `${label} must not return the token secret.`);
+  requireSafe(gate.generated_document_id === expected.documentId, `${label} must bind document id.`);
+  requireSafe(gate.document_hash === expected.documentHash, `${label} must bind document hash.`);
+  requireSafe(gate.snapshot_hash === expected.costSnapshotHash, `${label} must bind snapshot hash.`);
+  requireSafe(gate.quote_revision_version === expected.quoteRevisionVersion, `${label} must bind revision version.`);
+  requireSafe(Date.parse(gate.expires_at) > Date.now(), `${label} must include a future expiry.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
 function configurationDraftBody(overrides = {}) {
   return {
     ...forgedPayloadMarkers,
@@ -518,6 +598,21 @@ async function main() {
         key: "quote-calculate",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/calculate`,
         body: { expected_configuration_version: 1 }
+      },
+      {
+        key: "quote-document",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/documents`,
+        body: { ...forgedPayloadMarkers, grand_total_minor: 1 }
+      },
+      {
+        key: "quote-fork",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/fork`,
+        body: { ...forgedPayloadMarkers, expected_revision_version: 1, status: "approved" }
+      },
+      {
+        key: "approval-token",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/approval-token`,
+        body: { ...forgedPayloadMarkers, document_id: fakeDocumentId, token_hash: "browser-supplied" }
       }
     ];
 
@@ -550,6 +645,22 @@ async function main() {
       {
         label: "unauthenticated quote snapshot get",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/snapshot`
+      },
+      {
+        label: "unauthenticated quote document list",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/documents`
+      },
+      {
+        label: "unauthenticated quote document preview",
+        path: `/api/supabase/documents/${fakeDocumentId}`
+      },
+      {
+        label: "unauthenticated quote revision diff",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/diff?against=${fakeQuoteRevisionId}`
+      },
+      {
+        label: "unauthenticated approval status",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/approval-status`
       }
     ];
     for (const probe of readProbes) {
@@ -650,6 +761,18 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/snapshot`
       },
       {
+        label: "second tenant reads primary quote documents",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/documents`
+      },
+      {
+        label: "second tenant reads primary approval status",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/approval-status`
+      },
+      {
+        label: "second tenant reads primary revision diff",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/diff?against=${demoApprovedQuoteRevisionId}`
+      },
+      {
         label: "primary tenant reads second project detail",
         path: `/api/supabase/projects/${secondTenantProjectId}`,
         cookie: salesCookie
@@ -672,6 +795,21 @@ async function main() {
       {
         label: "primary tenant reads second quote snapshot",
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/snapshot`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second quote documents",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/documents`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second approval status",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/approval-status`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second revision diff",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/diff?against=${secondTenantQuoteRevisionId}`,
         cookie: salesCookie
       }
     ];
@@ -707,6 +845,18 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/calculate`,
         method: "POST",
         body: { expected_configuration_version: 1 }
+      },
+      {
+        label: "second tenant document primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/documents`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "second tenant fork primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/fork`,
+        method: "POST",
+        body: { expected_revision_version: 1 }
       }
     ];
     for (const probe of secondTenantWriteProbes) {
@@ -745,6 +895,18 @@ async function main() {
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/calculate`,
         method: "POST",
         body: { expected_configuration_version: 1 }
+      },
+      {
+        label: "primary tenant document second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/documents`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "primary tenant fork second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/fork`,
+        method: "POST",
+        body: { expected_revision_version: 1 }
       }
     ];
     for (const probe of primaryToSecondTenantWriteProbes) {
@@ -1253,6 +1415,13 @@ async function main() {
     requireSafe(result.response.ok, "Quote snapshot read before calculate must succeed.");
     assertQuoteSnapshotNotCalculated(result.payload, "quote snapshot read before calculate");
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `pre-calc-document-${suffix}` },
+      body: JSON.stringify({})
+    }, "quote document before calculate");
+    requireSafe([409, 422].includes(result.response.status), "Quote document generation before calculation must not succeed.");
+
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/calculate`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: salesCookie },
@@ -1385,6 +1554,219 @@ async function main() {
     const auditAfterQuoteCalculation = countAuditActions(result.payload.audit_entries);
     requireAuditDelta(auditBeforeQuoteCalculation, auditAfterQuoteCalculation, "quote_snapshot_calculated", 1);
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `forged-document-${suffix}` },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        grand_total_minor: 1,
+        snapshot_hash: "browser-supplied",
+        document_hash: "browser-supplied",
+        token_hash: "browser-supplied"
+      })
+    }, "quote document forged authority");
+    requireSafe(result.response.status === 422, "Quote document generation must reject forged authoritative fields.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before quote document");
+    requireSafe(result.response.ok, "Demo data must succeed before quote document generation.");
+    const auditBeforeQuoteDocument = countAuditActions(result.payload.audit_entries);
+
+    const documentKey = `quote-document-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": documentKey },
+      body: JSON.stringify({})
+    }, "quote document generate");
+    requireSafe(result.response.status === 201, "Quote document generation must return 201.");
+    assertFrozenQuoteDocument(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteRevisionVersion: quoteRevision.version,
+      costSnapshotId: calculatedCostSnapshot.id,
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash,
+      grandTotalMinor: calculatedCostSnapshot.grand_total_minor,
+      currency: calculatedCostSnapshot.currency
+    }, "quote document generate");
+    const generatedDocument = result.payload.document;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": documentKey },
+      body: JSON.stringify({})
+    }, "quote document idempotency replay");
+    requireSafe(result.response.status === 201, "Quote document replay must return the stored status.");
+    requireSafe(result.payload.document?.id === generatedDocument.id, "Quote document replay must return original document id.");
+    requireSafe(result.payload.document?.sha256 === generatedDocument.sha256, "Quote document replay must return original hash.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": documentKey },
+      body: JSON.stringify({ idempotency_key: `conflicting-document-${suffix}` })
+    }, "quote document idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote document idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/documents`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote document list");
+    requireSafe(result.response.ok, "Quote document list must succeed.");
+    requireSafe(
+      result.payload.documents?.some((document) => document.id === generatedDocument.id),
+      "Quote document list must include generated document."
+    );
+    assertNoForbiddenResponseFields("quote document list", result.payload);
+
+    result = await requestJson(baseUrl, `/api/supabase/documents/${generatedDocument.id}`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote document preview");
+    requireSafe(result.response.ok, "Quote document preview must succeed.");
+    assertFrozenQuoteDocument(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteRevisionVersion: quoteRevision.version,
+      costSnapshotId: calculatedCostSnapshot.id,
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash,
+      grandTotalMinor: calculatedCostSnapshot.grand_total_minor,
+      currency: calculatedCostSnapshot.currency
+    }, "quote document preview");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after quote document");
+    requireSafe(result.response.ok, "Demo data must succeed after quote document generation.");
+    const auditAfterQuoteDocument = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforeQuoteDocument, auditAfterQuoteDocument, "quote_document_generated", 1);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-fork-${suffix}` },
+      body: JSON.stringify({ expected_revision_version: quoteRevision.version })
+    }, "viewer quote fork");
+    requireSafe(result.response.status === 403, "Viewer quote fork must return 403.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before quote fork");
+    requireSafe(result.response.ok, "Demo data must succeed before quote fork.");
+    const auditBeforeQuoteFork = countAuditActions(result.payload.audit_entries);
+
+    const forkKey = `quote-fork-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": forkKey },
+      body: JSON.stringify({ expected_revision_version: quoteRevision.version })
+    }, "quote revision fork");
+    requireSafe(result.response.status === 201, "Quote revision fork must return 201.");
+    assertQuoteFork(result.payload, {
+      sourceRevisionId: quoteRevision.id,
+      projectId: project.id
+    }, "quote revision fork");
+    const forkedQuoteRevision = result.payload.quote_revision;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": forkKey },
+      body: JSON.stringify({ expected_revision_version: quoteRevision.version })
+    }, "quote revision fork replay");
+    requireSafe(result.response.status === 201, "Quote revision fork replay must return the stored status.");
+    requireSafe(result.payload.quote_revision?.id === forkedQuoteRevision.id, "Quote revision fork replay must return original fork id.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": forkKey },
+      body: JSON.stringify({ expected_revision_version: quoteRevision.version, idempotency_key: `conflicting-fork-${suffix}` })
+    }, "quote revision fork conflict");
+    requireSafe(result.response.status === 409, "Quote revision fork idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/diff?against=${forkedQuoteRevision.id}`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote revision diff");
+    requireSafe(result.response.ok, "Quote revision diff must succeed.");
+    assertRevisionDiff(result.payload, {
+      leftRevisionId: quoteRevision.id,
+      rightRevisionId: forkedQuoteRevision.id
+    }, "quote revision diff");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/diff?against=${forkedQuoteRevision.id}&diff_entries=browser`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote revision diff forged query");
+    requireSafe(result.response.status === 422, "Quote revision diff must reject forged query fields.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after quote fork");
+    requireSafe(result.response.ok, "Demo data must succeed after quote fork.");
+    const auditAfterQuoteFork = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforeQuoteFork, auditAfterQuoteFork, "quote_revision_forked", 1);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/approval-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-approval-${suffix}` },
+      body: JSON.stringify({ document_id: generatedDocument.id })
+    }, "viewer approval gate prepare");
+    requireSafe(result.response.status === 403, "Viewer approval gate prepare must return 403.");
+
+    const adminDocumentKey = `admin-document-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${adminQuoteRevision.id}/documents`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": adminDocumentKey },
+      body: JSON.stringify({})
+    }, "admin quote document before calculate");
+    requireSafe([409, 422].includes(result.response.status), "Admin quote document without snapshot must not succeed.");
+
+    const approvalKey = `quote-approval-gate-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/approval-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": approvalKey },
+      body: JSON.stringify({ document_id: generatedDocument.id })
+    }, "admin approval gate prepare");
+    requireSafe(result.response.status === 201, "Admin approval gate prepare must return 201.");
+    assertApprovalGate(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteRevisionVersion: quoteRevision.version,
+      documentId: generatedDocument.id,
+      documentHash: generatedDocument.sha256,
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash
+    }, "admin approval gate prepare");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/approval-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: adminCookie, "x-idempotency-key": approvalKey },
+      body: JSON.stringify({ document_id: generatedDocument.id })
+    }, "admin approval gate replay");
+    requireSafe(result.response.status === 201, "Admin approval gate replay must return stored status.");
+    requireSafe(result.payload.approval_gate?.id, "Admin approval gate replay must include approval id.");
+
+    const salesApproval = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/approval-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `sales-approval-denied-${suffix}` },
+      body: JSON.stringify({ document_id: generatedDocument.id })
+    }, "sales approval gate prepare");
+    requireSafe(salesApproval.response.status === 403, "Sales approval gate prepare must be admin-only in P7.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/approval-status`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "approval gate status after denied attempts");
+    requireSafe(result.response.ok, "Approval gate status must remain readable.");
+    requireSafe(result.payload.approval_gate?.status === "pending", "Approval gate status must be pending after admin preparation.");
+    requireSafe(result.payload.approval_gate?.token_secret_returned === false, "Approval gate status must never return the token secret.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after approval gate");
+    requireSafe(result.response.ok, "Demo data must succeed after approval gate preparation.");
+    const auditAfterApprovalGate = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditAfterQuoteFork, auditAfterApprovalGate, "quote_approval_gate_prepared", 1);
+
     result = await requestJson(baseUrl, `/api/supabase/projects/${project.id}`, {
       method: "GET",
       headers: { Cookie: salesCookie }
@@ -1431,6 +1813,9 @@ async function main() {
     requireSafe(auditActions.has("quote_configuration_created"), "Audit entries must include quote_configuration_created.");
     requireSafe(auditActions.has("quote_configuration_updated"), "Audit entries must include quote_configuration_updated.");
     requireSafe(auditActions.has("quote_snapshot_calculated"), "Audit entries must include quote_snapshot_calculated.");
+    requireSafe(auditActions.has("quote_document_generated"), "Audit entries must include quote_document_generated.");
+    requireSafe(auditActions.has("quote_revision_forked"), "Audit entries must include quote_revision_forked.");
+    requireSafe(auditActions.has("quote_approval_gate_prepared"), "Audit entries must include quote_approval_gate_prepared.");
     const auditAfter = countAuditActions(result.payload.audit_entries);
     requireAuditIncrease(auditBefore, auditAfter, "customer_created");
     requireAuditIncrease(auditBefore, auditAfter, "project_created");
@@ -1438,6 +1823,9 @@ async function main() {
     requireAuditIncrease(auditBefore, auditAfter, "quote_configuration_created");
     requireAuditIncrease(auditBefore, auditAfter, "quote_configuration_updated");
     requireAuditIncrease(auditBefore, auditAfter, "quote_snapshot_calculated");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_document_generated");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_revision_forked");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_approval_gate_prepared");
 
     console.log("web mutation route smoke passed");
   } finally {

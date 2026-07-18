@@ -395,7 +395,10 @@ a {
 }
 
 .calculationBoundary,
-.snapshotPanel {
+.snapshotPanel,
+.lifecyclePanel,
+.documentPreviewPanel,
+.diffPanel {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
@@ -404,6 +407,26 @@ a {
 }
 
 .snapshotPanel {
+  background: #fbfcfb;
+}
+
+.lifecyclePanel {
+  background: #ffffff;
+}
+
+.lifecycleHeader {
+  align-items: start;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lifecycleHeader h3 {
+  margin: 0;
+}
+
+.documentPreviewPanel,
+.diffPanel {
   background: #fbfcfb;
 }
 

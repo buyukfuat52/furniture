@@ -133,7 +133,15 @@ export type SupabaseDemoOverview = {
     status: string;
     version: number;
   }>;
-  quote_revisions: Array<{ id: string; project_id: string; revision_number: number; status: string; version: number }>;
+  quote_revisions: Array<{
+    id: string;
+    project_id: string;
+    parent_revision_id: string | null;
+    product_variant_id: string | null;
+    revision_number: number;
+    status: string;
+    version: number;
+  }>;
   bom_snapshots: Array<{ id: string; revision_id: string; formula_version: string; part_count: number; edge_count: number }>;
   cost_snapshots: Array<{
     id: string;
@@ -152,6 +160,11 @@ export type SupabaseDemoOverview = {
     cost_snapshot_id: string | null;
     document_type: string;
     content_type: string;
+    document_version: string;
+    revision_version: number;
+    snapshot_hash: string | null;
+    calculation_version: string | null;
+    sha256: string;
     size_bytes: number;
   }>;
   approvals: Array<{ id: string; revision_id: string; action: string; status: string }>;
@@ -169,6 +182,73 @@ export type SupabaseDemoOverview = {
 export type SupabaseAuditEntry = SupabaseDemoOverview["audit_entries"][number];
 export type SupabaseProject = SupabaseDemoOverview["projects"][number];
 export type SupabaseQuoteRevision = SupabaseDemoOverview["quote_revisions"][number];
+
+export type SupabaseQuoteDocument = {
+  id: string;
+  revision_id: string;
+  cost_snapshot_id: string | null;
+  document_type: string;
+  content_type: string;
+  document_version: string;
+  revision_version: number;
+  snapshot_hash: string | null;
+  calculation_version: string | null;
+  sha256: string;
+  size_bytes: number;
+  created_at: string;
+  provenance: {
+    source: "deterministic_server_document";
+    document_version: string;
+    quote_revision_id: string;
+    quote_revision_version: number;
+    cost_snapshot_id: string | null;
+    cost_snapshot_hash: string | null;
+    bom_snapshot_hash: string | null;
+    calculation_version: string | null;
+    storage: "server_route_mediated";
+    pdf_status: "deferred";
+  };
+};
+
+export type SupabaseQuoteDocumentPreview = SupabaseQuoteDocument & {
+  html: string;
+};
+
+export type SupabaseQuoteForkResponse = {
+  quote_revision: SupabaseQuoteRevision;
+  configuration_draft: SupabaseQuoteConfigurationDraft | null;
+  snapshot_copy_policy: "snapshots_not_copied";
+  document_copy_policy: "documents_not_copied";
+  deferred_actions: string[];
+};
+
+export type SupabaseQuoteRevisionDiff = {
+  left_revision: SupabaseQuoteRevision;
+  right_revision: SupabaseQuoteRevision;
+  entries: Array<{
+    category: string;
+    field: string;
+    before: string;
+    after: string;
+  }>;
+  diff_version: "revision-diff-v1.0.0";
+  source: "deterministic_server_diff";
+};
+
+export type SupabaseApprovalGate = {
+  id: string | null;
+  revision_id: string;
+  action: "quote_approve";
+  status: "not_prepared" | "pending" | "approved" | "rejected" | "consumed" | "expired";
+  token_secret_returned: false;
+  approval_token_version: string | null;
+  quote_revision_version: number | null;
+  generated_document_id: string | null;
+  document_hash: string | null;
+  snapshot_hash: string | null;
+  expires_at: string | null;
+  deferred_actions: string[];
+};
 
 export type SupabaseQuoteStatusPolicy = {
   status: string;

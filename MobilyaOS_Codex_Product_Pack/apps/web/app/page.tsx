@@ -11,9 +11,14 @@ import {
   QuoteRevision,
   SupabaseDemoLoginResponse,
   SupabaseDemoOverview,
+  SupabaseApprovalGate,
   SupabaseProjectDetail,
   SupabaseQuoteConfigurationDraftResponse,
+  SupabaseQuoteDocument,
+  SupabaseQuoteDocumentPreview,
+  SupabaseQuoteForkResponse,
   SupabaseQuoteRevisionDetail,
+  SupabaseQuoteRevisionDiff,
   SupabaseQuoteSnapshotResponse,
   SupabaseSessionResponse
 } from "../lib/api";
@@ -51,6 +56,10 @@ export default function HomePage() {
   const [cloudRevisionDetail, setCloudRevisionDetail] = useState<SupabaseQuoteRevisionDetail | null>(null);
   const [cloudConfigurationDraft, setCloudConfigurationDraft] = useState<SupabaseQuoteConfigurationDraftResponse | null>(null);
   const [cloudQuoteSnapshot, setCloudQuoteSnapshot] = useState<SupabaseQuoteSnapshotResponse | null>(null);
+  const [cloudDocuments, setCloudDocuments] = useState<SupabaseQuoteDocument[]>([]);
+  const [cloudDocumentPreview, setCloudDocumentPreview] = useState<SupabaseQuoteDocumentPreview | null>(null);
+  const [cloudRevisionDiff, setCloudRevisionDiff] = useState<SupabaseQuoteRevisionDiff | null>(null);
+  const [cloudApprovalGate, setCloudApprovalGate] = useState<SupabaseApprovalGate | null>(null);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [chatInput, setChatInput] = useState("Bu projenin maliyet snapshot sonucunu acikla");
   const [chatResult, setChatResult] = useState<AgentChatResponse | null>(null);
@@ -161,6 +170,10 @@ export default function HomePage() {
       setCloudProjectDetail(null);
       setCloudRevisionDetail(null);
       setCloudQuoteSnapshot(null);
+      setCloudDocuments([]);
+      setCloudDocumentPreview(null);
+      setCloudRevisionDiff(null);
+      setCloudApprovalGate(null);
       setSeedSummary("");
       setStep("login");
     } finally {
@@ -265,8 +278,14 @@ export default function HomePage() {
     try {
       const detail = await supabaseGet<SupabaseQuoteRevisionDetail>(`/api/supabase/quote-revisions/${quoteRevisionId}`);
       setCloudRevisionDetail(detail);
-      await loadSupabaseConfigurationDraft(quoteRevisionId, false);
-      await loadSupabaseQuoteSnapshot(quoteRevisionId, false);
+      setCloudDocumentPreview(null);
+      setCloudRevisionDiff(null);
+      await Promise.all([
+        loadSupabaseConfigurationDraft(quoteRevisionId, false),
+        loadSupabaseQuoteSnapshot(quoteRevisionId, false),
+        loadSupabaseQuoteDocuments(quoteRevisionId, false),
+        loadSupabaseApprovalStatus(quoteRevisionId, false)
+      ]);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -307,6 +326,46 @@ export default function HomePage() {
       setCloudQuoteSnapshot(result);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseQuoteDocuments(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ documents: SupabaseQuoteDocument[] }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/documents`
+      );
+      setCloudDocuments(result.documents);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+      setCloudDocuments([]);
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseApprovalStatus(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ approval_gate: SupabaseApprovalGate }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/approval-status`
+      );
+      setCloudApprovalGate(result.approval_gate);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+      setCloudApprovalGate(null);
     } finally {
       if (setBusy) {
         setCloudBusy(false);
@@ -443,9 +502,124 @@ export default function HomePage() {
         { expected_configuration_version: configurationVersion }
       );
       setCloudQuoteSnapshot(result);
+      setCloudDocumentPreview(null);
+      setCloudRevisionDiff(null);
       setSeedSummary(`Deterministik snapshot kaydedildi: ${result.cost_snapshot ? money(result.cost_snapshot.grand_total_minor, result.cost_snapshot.currency) : "hesaplanmadi"}`);
       await refreshCloudOverview(false);
       await loadSupabaseQuoteRevisionDetail(revisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function generateSupabaseQuoteDocument() {
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    if (!revisionId) {
+      setError("Teklif belgesi icin Supabase revizyon secimi gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<{ document: SupabaseQuoteDocumentPreview }>(
+        `/api/supabase/quote-revisions/${revisionId}/documents`,
+        {}
+      );
+      setCloudDocumentPreview(result.document);
+      setSeedSummary(`Frozen teklif belgesi uretildi: ${result.document.sha256.slice(0, 12)}`);
+      await refreshCloudOverview(false);
+      await loadSupabaseQuoteDocuments(revisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function loadSupabaseQuoteDocumentPreview(documentId: string) {
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabaseGet<{ document: SupabaseQuoteDocumentPreview }>(`/api/supabase/documents/${documentId}`);
+      setCloudDocumentPreview(result.document);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function forkSupabaseQuoteRevision() {
+    const revision = cloudRevisionDetail?.quote_revision;
+    if (!revision) {
+      setError("Revizyon catali icin Supabase revizyon secimi gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<SupabaseQuoteForkResponse>(
+        `/api/supabase/quote-revisions/${revision.id}/fork`,
+        { expected_revision_version: revision.version }
+      );
+      setSeedSummary(`Revizyon catali olustu: R${result.quote_revision.revision_number}`);
+      await refreshCloudOverview(false);
+      await loadSupabaseProjectDetail(result.quote_revision.project_id);
+      await loadSupabaseQuoteRevisionDetail(result.quote_revision.id, false);
+      await loadSupabaseRevisionDiff(result.quote_revision.parent_revision_id ?? revision.id, result.quote_revision.id, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function loadSupabaseRevisionDiff(leftId?: string, rightId?: string, setBusy = true) {
+    const rightRevisionId = rightId ?? cloudRevisionDetail?.quote_revision.id;
+    const leftRevisionId = leftId
+      ?? cloudRevisionDetail?.quote_revision.parent_revision_id
+      ?? cloudProjectDetail?.quote_revisions.find((candidate) => candidate.id !== rightRevisionId)?.id;
+    if (!leftRevisionId || !rightRevisionId || leftRevisionId === rightRevisionId) {
+      setError("Fark karsilastirmasi icin iki Supabase revizyonu gerekli.");
+      return;
+    }
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ diff: SupabaseQuoteRevisionDiff }>(
+        `/api/supabase/quote-revisions/${leftRevisionId}/diff?against=${encodeURIComponent(rightRevisionId)}`
+      );
+      setCloudRevisionDiff(result.diff);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function prepareSupabaseApprovalGate() {
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    const documentId = cloudDocumentPreview?.id ?? cloudDocuments[0]?.id;
+    if (!revisionId || !documentId) {
+      setError("Onay kapisi icin snapshot'a bagli frozen belge gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<{ approval_gate: SupabaseApprovalGate }>(
+        `/api/supabase/quote-revisions/${revisionId}/approval-token`,
+        { document_id: documentId }
+      );
+      setCloudApprovalGate(result.approval_gate);
+      setSeedSummary(`Onay kapisi hazirlandi: ${result.approval_gate.status}`);
+      await refreshCloudOverview(false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -569,6 +743,7 @@ export default function HomePage() {
         credentials: "same-origin",
         body: JSON.stringify({
           message: chatInput,
+          document_id: cloudDocumentPreview?.id || cloudDocuments[0]?.id || undefined,
           project_id: activeProjectId,
           quote_revision_id: activeRevisionId,
           left_revision_id: cloudProjectDetail?.quote_revisions[0]?.id || revision?.id || undefined,
@@ -663,13 +838,23 @@ export default function HomePage() {
 
         {cloudProjectDetail || cloudRevisionDetail ? (
           <SupabaseTimelinePanel
+            approvalGate={cloudApprovalGate}
             busy={cloudBusy}
+            canPrepareApproval={cloudSession?.app_user.role === "admin"}
             configurationDraft={cloudConfigurationDraft}
+            documentPreview={cloudDocumentPreview}
+            documents={cloudDocuments}
             onCalculateQuoteSnapshot={calculateSupabaseQuoteSnapshot}
+            onForkRevision={forkSupabaseQuoteRevision}
+            onGenerateQuoteDocument={generateSupabaseQuoteDocument}
+            onLoadDocumentPreview={loadSupabaseQuoteDocumentPreview}
             onSaveConfigurationDraft={saveSupabaseConfigurationDraft}
+            onLoadRevisionDiff={() => loadSupabaseRevisionDiff()}
             projectDetail={cloudProjectDetail}
             quoteSnapshot={cloudQuoteSnapshot}
+            revisionDiff={cloudRevisionDiff}
             revisionDetail={cloudRevisionDetail}
+            onPrepareApprovalGate={prepareSupabaseApprovalGate}
             onLoadRevisionDetail={loadSupabaseQuoteRevisionDetail}
           />
         ) : null}
@@ -936,22 +1121,42 @@ function SupabaseOverview({
 }
 
 function SupabaseTimelinePanel({
+  approvalGate,
   busy,
+  canPrepareApproval,
   configurationDraft,
+  documentPreview,
+  documents,
   onCalculateQuoteSnapshot,
+  onForkRevision,
+  onGenerateQuoteDocument,
+  onLoadDocumentPreview,
+  onLoadRevisionDiff,
   onLoadRevisionDetail,
+  onPrepareApprovalGate,
   onSaveConfigurationDraft,
   projectDetail,
   quoteSnapshot,
+  revisionDiff,
   revisionDetail
 }: {
+  approvalGate: SupabaseApprovalGate | null;
   busy: boolean;
+  canPrepareApproval: boolean;
   configurationDraft: SupabaseQuoteConfigurationDraftResponse | null;
+  documentPreview: SupabaseQuoteDocumentPreview | null;
+  documents: SupabaseQuoteDocument[];
   onCalculateQuoteSnapshot: () => void;
+  onForkRevision: () => void;
+  onGenerateQuoteDocument: () => void;
+  onLoadDocumentPreview: (documentId: string) => void;
+  onLoadRevisionDiff: () => void;
   onLoadRevisionDetail: (quoteRevisionId: string) => void;
+  onPrepareApprovalGate: () => void;
   onSaveConfigurationDraft: (event: FormEvent<HTMLFormElement>) => void;
   projectDetail: SupabaseProjectDetail | null;
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
+  revisionDiff: SupabaseQuoteRevisionDiff | null;
   revisionDetail: SupabaseQuoteRevisionDetail | null;
 }) {
   const auditEntries = projectDetail?.audit_entries ?? revisionDetail?.audit_entries ?? [];
@@ -1042,6 +1247,23 @@ function SupabaseTimelinePanel({
             </div>
           </div>
           {quoteSnapshot ? <SupabaseQuoteSnapshotPanel snapshot={quoteSnapshot} /> : null}
+          {revisionDetail ? (
+            <SupabaseQuoteLifecyclePanel
+              approvalGate={approvalGate}
+              busy={busy}
+              canPrepareApproval={canPrepareApproval}
+              documentPreview={documentPreview}
+              documents={documents}
+              onForkRevision={onForkRevision}
+              onGenerateQuoteDocument={onGenerateQuoteDocument}
+              onLoadDocumentPreview={onLoadDocumentPreview}
+              onLoadRevisionDiff={onLoadRevisionDiff}
+              onPrepareApprovalGate={onPrepareApprovalGate}
+              quoteSnapshot={quoteSnapshot}
+              revisionDiff={revisionDiff}
+              revisionDetail={revisionDetail}
+            />
+          ) : null}
         </div>
       ) : null}
       <h3>Audit zaman cizelgesi</h3>
@@ -1060,6 +1282,143 @@ function SupabaseTimelinePanel({
         <div className="warningBox">Bu secim icin audit kaydi yok.</div>
       )}
     </section>
+  );
+}
+
+function SupabaseQuoteLifecyclePanel({
+  approvalGate,
+  busy,
+  canPrepareApproval,
+  documentPreview,
+  documents,
+  onForkRevision,
+  onGenerateQuoteDocument,
+  onLoadDocumentPreview,
+  onLoadRevisionDiff,
+  onPrepareApprovalGate,
+  quoteSnapshot,
+  revisionDiff,
+  revisionDetail
+}: {
+  approvalGate: SupabaseApprovalGate | null;
+  busy: boolean;
+  canPrepareApproval: boolean;
+  documentPreview: SupabaseQuoteDocumentPreview | null;
+  documents: SupabaseQuoteDocument[];
+  onForkRevision: () => void;
+  onGenerateQuoteDocument: () => void;
+  onLoadDocumentPreview: (documentId: string) => void;
+  onLoadRevisionDiff: () => void;
+  onPrepareApprovalGate: () => void;
+  quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
+  revisionDiff: SupabaseQuoteRevisionDiff | null;
+  revisionDetail: SupabaseQuoteRevisionDetail;
+}) {
+  const hasCalculatedSnapshot = quoteSnapshot?.calculation_status === "calculated" && Boolean(quoteSnapshot.cost_snapshot);
+  const latestDocument = documents[0] ?? null;
+  const canPreview = Boolean(latestDocument);
+  return (
+    <div className="lifecyclePanel">
+      <div className="lifecycleHeader">
+        <div>
+          <h3>Frozen teklif yasam dongusu</h3>
+          <p className="smallNote">Belge, revizyon farki ve onay kapisi kayitli snapshot verisinden server tarafinda uretilir.</p>
+        </div>
+        <span className="status">R{revisionDetail.quote_revision.revision_number}</span>
+      </div>
+
+      <div className="grid">
+        <SummaryCard title="Belgeler" value={`${documents.length} kayit`} />
+        <SummaryCard title="Son belge" value={latestDocument ? latestDocument.sha256.slice(0, 12) : "-"} />
+        <SummaryCard title="Onay kapisi" value={approvalGate?.status ?? "not_prepared"} />
+      </div>
+
+      <div className="buttonRow">
+        <button disabled={busy || !hasCalculatedSnapshot} onClick={onGenerateQuoteDocument} type="button">
+          HTML belgeyi dondur
+        </button>
+        <button disabled={busy || !canPreview} onClick={() => latestDocument ? onLoadDocumentPreview(latestDocument.id) : undefined} type="button">
+          Son belgeyi ac
+        </button>
+        <button disabled={busy} onClick={onForkRevision} type="button">
+          Revizyon catalla
+        </button>
+        <button disabled={busy} onClick={onLoadRevisionDiff} type="button">
+          Farklari goster
+        </button>
+        <button disabled={busy || !canPrepareApproval || !canPreview} onClick={onPrepareApprovalGate} type="button">
+          Onay kapisi hazirla
+        </button>
+        <button disabled type="button">Teklifi gonder</button>
+        <button disabled type="button">Uretim paketi</button>
+      </div>
+
+      {documents.length ? (
+        <table className="table">
+          <thead><tr><th>Belge</th><th>Snapshot</th><th>Surum</th><th>Boyut</th><th></th></tr></thead>
+          <tbody>
+            {documents.map((doc) => (
+              <tr key={doc.id}>
+                <td>{doc.sha256.slice(0, 12)}</td>
+                <td>{doc.snapshot_hash?.slice(0, 12) ?? "-"}</td>
+                <td>{doc.document_version}</td>
+                <td>{doc.size_bytes}</td>
+                <td><button disabled={busy} onClick={() => onLoadDocumentPreview(doc.id)} type="button">Ac</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="warningBox">Bu revizyon icin frozen teklif belgesi henuz yok.</div>
+      )}
+
+      {documentPreview ? (
+        <div className="documentPreviewPanel">
+          <div className="configurationReadback">
+            <span>{documentPreview.document_version}</span>
+            <span>{documentPreview.provenance.storage}</span>
+            <span>PDF {documentPreview.provenance.pdf_status}</span>
+            <span>{documentPreview.sha256.slice(0, 12)}</span>
+          </div>
+          <iframe className="quoteFrame" sandbox="" srcDoc={documentPreview.html} title="Supabase frozen teklif belgesi" />
+        </div>
+      ) : null}
+
+      {revisionDiff ? (
+        <div className="diffPanel">
+          <div className="configurationReadback">
+            <span>{revisionDiff.source}</span>
+            <span>{revisionDiff.diff_version}</span>
+            <span>R{revisionDiff.left_revision.revision_number} {"->"} R{revisionDiff.right_revision.revision_number}</span>
+          </div>
+          <table className="table">
+            <thead><tr><th>Kategori</th><th>Alan</th><th>Once</th><th>Sonra</th></tr></thead>
+            <tbody>
+              {revisionDiff.entries.map((entry) => (
+                <tr key={`${entry.category}-${entry.field}`}>
+                  <td>{entry.category}</td>
+                  <td>{entry.field}</td>
+                  <td>{entry.before}</td>
+                  <td>{entry.after}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      {approvalGate ? (
+        <div className="approvalBox">
+          <strong>{approvalGate.status}</strong>
+          <p>
+            Belge {approvalGate.generated_document_id ? approvalGate.generated_document_id.slice(0, 8) : "-"} /
+            snapshot {approvalGate.snapshot_hash ? approvalGate.snapshot_hash.slice(0, 12) : "-"} /
+            token secret returned: {String(approvalGate.token_secret_returned)}
+          </p>
+          <p className="smallNote">{approvalGate.expires_at ? new Date(approvalGate.expires_at).toLocaleString("tr-TR") : "Hazir degil"}</p>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

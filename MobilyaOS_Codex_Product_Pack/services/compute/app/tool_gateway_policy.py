@@ -179,12 +179,38 @@ TOOL_POLICIES: tuple[ToolPolicy, ...] = (
         ("admin", "sales", "costing"),
     ),
     _policy(
-        "explain_revision_diff",
+        "get_quote_document",
+        "document_tool",
+        "get_quote_document",
+        "read",
+        ("quote_document",),
+        READ_ROLES,
+    ),
+    _policy(
+        "explain_quote_document",
+        "document_tool",
+        "explain_quote_document",
+        "conversation",
+        ("quote_document",),
+        READ_ROLES,
+        requires_audit=False,
+    ),
+    _policy(
+        "get_revision_diff",
         "manufacturing_tool",
-        "diff_manufacturing",
+        "get_revision_diff",
         "read",
         ("revision_diff",),
         READ_ROLES,
+    ),
+    _policy(
+        "explain_revision_diff",
+        "manufacturing_tool",
+        "explain_revision_diff",
+        "conversation",
+        ("revision_diff",),
+        READ_ROLES,
+        requires_audit=False,
     ),
     _policy(
         "explain_cost_diff", "costing_tool", "cost_diff", "read", ("revision_diff",), READ_ROLES
@@ -196,9 +222,6 @@ TOOL_POLICIES: tuple[ToolPolicy, ...] = (
         "read",
         ("revision_diff",),
         READ_ROLES,
-    ),
-    _policy(
-        "preview_quote", "document_tool", "preview_quote", "read", ("quote_document",), QUOTE_ROLES
     ),
     _policy(
         "request_missing_measurement_info",
@@ -371,6 +394,8 @@ def detect_untrusted_policy_bypass(text: str | None) -> bool:
     markers = (
         "ignore previous instructions",
         "approval_token=",
+        "storage_path",
+        "signed_url",
         "service_role",
         "database_url",
         "direct_database_url",

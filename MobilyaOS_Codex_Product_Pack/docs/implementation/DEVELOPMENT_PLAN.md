@@ -215,3 +215,23 @@ Large-scale backend/frontend application coding must not start until:
 - Snapshot/audit/idempotency completion is performed by the audited Supabase RPC `persist_quote_calculation_result` after the web route reserves the scoped idempotency record.
 - Read-only chat may fetch and explain a trusted persisted snapshot server-side. It must request a deterministic snapshot when one is missing and must not calculate BOM, cost, tax, margin, totals, labor, or edge-band values.
 - Quote send, approval, official PDF, revision fork/diff persistence, production package creation, nesting, broader product templates, and production pricing adapters remain future phases.
+
+## P7 Frozen Quote Lifecycle Decisions
+
+- Frozen quote documents are generated from the current persisted calculated cost snapshot only. The browser cannot submit totals, document hashes, snapshot hashes, approval data, storage locators, or revision status as authority.
+- The first official artifact is deterministic HTML with `quote-html-v1.0.0`; binary PDF generation and object-storage uploads remain future work.
+- Generated documents bind to company, project, quote revision, revision version, cost snapshot, calculation version, snapshot hash, document version, and SHA-256 hash.
+- Document persistence, revision fork, and approval-gate preparation use service-role-only Supabase RPCs that validate state, append audit, and complete durable idempotency after route-level reservation.
+- Authenticated public-key reads of `generated_documents` and `approvals` are intentionally blocked; server routes return sanitized DTOs without storage paths, token hashes, or raw approval token material.
+- Revision fork creates a draft child with `parent_revision_id` and copies configuration input only. Snapshots, generated documents, approval gates, send state, and production state are never copied to the child.
+- Revision diff is deterministic and server-derived from tenant-scoped revisions, configuration drafts, current snapshots, and latest document metadata before any chat explanation.
+- Approval-gate preparation is `admin` only and creates a pending gate bound to revision version, frozen document, document hash, cost snapshot, snapshot hash, expiry, and approval token version. Approval-token delivery/consumption and quote send are not enabled.
+- Read-only chat can call only read tools such as project search, snapshot explanation, quote document facts, and revision diff facts. It cannot calculate costs, generate PDFs, send quotes, approve quotes, or create production packages.
+
+## Next Phase Plan
+
+1. Add deterministic binary PDF generation from the exact frozen HTML/cost snapshot inputs and compare PDF totals to the cost snapshot in tests.
+2. Add object-storage upload metadata for generated artifacts without exposing bucket/path locators to browser DTOs.
+3. Implement approval-token consumption, denial/replay handling, and quote-send gates with one-time token semantics.
+4. Move the P6/P7 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
+5. Add CSRF/fetch-metadata controls, rate limiting, production session revocation/rotation, and persisted tool invocation audit records.

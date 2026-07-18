@@ -1,7 +1,7 @@
 # MobilyaOS Implementation Status
 
 Run ID: `20260715T040315+0300`
-Current scope: Supabase Cloud development path setup
+Current scope: P7 frozen quote document, revision fork/diff, and approval gate on the Supabase Cloud path
 Parent orchestrator: `parent_codex`
 Created: 2026-07-15
 
@@ -18,13 +18,15 @@ Created: 2026-07-15
 | Post-P5.5 Phase 6 - Read-only agent UI | P6 | Passed | Browser chat now uses `POST /api/supabase/agent-chat`; direct browser-to-compute chat was removed; live session smoke covers injection, mutation denial, and sanitized payloads. |
 | Post-P5.5 Phase 7 - Multi-tenant hardening | P7 | Passed | Second tenant fixture, true IDOR smokes, authenticated read-only RLS, direct sales/viewer REST write denial, and tracked-file secret scan passed. |
 | Post-P5.5 Phase 8 - Release checkpoint | P8 | Passed | Documentation, roadmap, Supabase setup, domain/runtime/QA notes, and sanitized non-Docker validation results are consolidated around the verified Supabase Cloud path. |
+| P6 - Deterministic persisted quote flow | P6 | Passed | Server-owned wardrobe calculation persists BOM/cost snapshots through Supabase RPCs and exposes sanitized snapshot reads/chat explanations. |
+| P7 - Frozen quote lifecycle | P7 | Passed | Frozen HTML quote documents, persisted revision fork/diff, admin-only approval-gate preparation, sanitized document/chat reads, and P7 security/QA smoke tests passed. |
 
 ## Repository State
 
 - Workspace path: `C:\Users\ultra\OneDrive\Masaustu\furniture\MobilyaOS_Codex_Product_Pack`.
 - Package identity: `MANIFEST.json` declares `MobilyaOS Codex Product Pack` version `1.1.0`.
 - Current repository started as an unpacked product/specification pack and now contains the Supabase-backed post-P5.5 build-train checkpoint.
-- Git is available; local checkpoint commits were created through Phase 8.
+- Git is available; local checkpoint commits were created through Phase 8, with the P7 lifecycle commit prepared after final validation.
 - Remote probe for `https://github.com/buyukfuat52/furniture.git` timed out during P0; remote state was not verified.
 - Implementation directories now contain P2 skeleton source for `apps/web`, `services/core`, and `services/compute`.
 - Root `Makefile`, `package.json`, `package-lock.json`, `docker-compose.yml`, OpenAPI/AsyncAPI files, migrations, and application source files now exist.
@@ -135,6 +137,7 @@ Primary bounded contexts:
 - ADR-0003: Enforce phase gates, parent-owned shared files, and contract freeze before implementation fan-out.
 - ADR-0004: Use UUIDs initially, versioned deterministic product templates, workflow port/local adapter, and idempotent snapshot transaction boundaries.
 - ADR-0005: Enforce RBAC, approval tokens, and agent tool gateway policy server-side.
+- ADR-0008: Persist frozen quote lifecycle state through audited service-role RPCs and expose only sanitized server routes.
 
 ## P1 Outputs
 
@@ -1475,3 +1478,100 @@ Remaining P6 risks:
 - Official HTML/PDF quote documents, approval/send, persisted fork/diff, production package, nesting, and broader templates remain future work.
 - Go, Docker, and GNU Make remain unavailable locally, so Go/Docker/make gates are still blocked.
 - CSRF/fetch-metadata, rate limiting, production auth hardening, and broader prompt/tool-output injection evals remain roadmap items.
+
+## P7 Frozen Quote Document, Revision Fork/Diff, And Approval Gate
+
+Current result: complete. P7 added the first persisted Supabase-backed quote lifecycle after calculation: frozen deterministic HTML quote documents, sanitized quote document preview, revision fork, deterministic revision diff, approval-gate status, and admin-only approval-gate preparation. Quote send, approval-token consumption, binary PDF generation, object-storage uploads, production package creation, and mutating runtime agent tool execution remain disabled.
+
+Agent assignments:
+
+- `domain_architect`: reviewed lifecycle domain rules: quote documents bind to calculated snapshots, approved/sent revisions fork instead of mutating, diff is deterministic before any agent summary, and approval gates bind revision/document/snapshot hashes.
+- `backend_engineer`: reviewed Supabase migration/RPC/repository/route boundaries before parent-owned implementation.
+- `frontend_engineer`: reviewed the lifecycle panel shape for document generation/preview, fork, diff, and approval state without turning the UI into the authority.
+- `ai_prompt_engineer`: reviewed read-only chat tools for quote document and revision diff explanation while keeping all mutations non-executable.
+- `security_reviewer`: reviewed tenant isolation, direct-table exposure, approval-token leakage, risky-route gates, and tool whitelist behavior.
+- `qa_reviewer`: reviewed P7 route smoke, prompt-injection, document total compatibility, fork/diff, and approval-gate test coverage.
+
+Files added or materially changed:
+
+- `apps/web/lib/server/quoteLifecycle.ts`
+- `apps/web/lib/server/supabaseRepository.ts`
+- `apps/web/lib/server/productMutationBoundary.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/documents/route.ts`
+- `apps/web/app/api/supabase/documents/[documentId]/route.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/fork/route.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/diff/route.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/approval-status/route.ts`
+- `apps/web/app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts`
+- `apps/web/app/page.tsx`
+- `apps/web/app/globals.css`
+- `apps/web/lib/api.ts`
+- `apps/web/scripts/server-boundary-check.mjs`
+- `apps/web/scripts/session-route-smoke.mjs`
+- `apps/web/scripts/mutation-route-smoke.mjs`
+- `services/compute/app/tool_gateway_policy.py`
+- `services/compute/app/agent_runtime.py`
+- `services/compute/tests/test_tool_gateway_policy.py`
+- `services/compute/tests/test_agent_runtime.py`
+- `scripts/seed_supabase.py`
+- `scripts/verify_supabase_connection.py`
+- `supabase/migrations/0008_quote_document_revision_approval_gate.sql`
+- `docs/adr/0008-frozen-quote-lifecycle-rpcs.md`
+- `README.md`
+- `STATUS.md`
+- `ROADMAP.md`
+- `docs/implementation/DEVELOPMENT_PLAN.md`
+- `docs/implementation/STATUS.md`
+
+P7 behavior:
+
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/documents` generates a deterministic frozen HTML quote only after a current calculated cost snapshot exists.
+- The document generation route accepts only an idempotency key from the browser and rejects forged authority fields.
+- Frozen documents store document version, revision version, cost snapshot binding, calculation version, snapshot hash, SHA-256 document hash, metadata, and sanitized HTML.
+- Public-key authenticated direct reads of sensitive generated-document and approval fields are denied by RLS; application reads use server routes and sanitized DTOs.
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/fork` creates a draft child revision and copies configuration input only; snapshots, documents, approval gates, and production state are not copied.
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/diff?against=...` computes a deterministic same-project diff server-side.
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/approval-token` is admin-only, binds the gate to the draft revision version, frozen document, document hash, cost snapshot ID, snapshot hash, expiry, and idempotency scope, and returns no raw token or token hash.
+- The read-only web chat route can explain trusted project/revision/snapshot/document/diff facts but cannot calculate costs, generate/send PDFs, consume approvals, or mutate state.
+
+P7 security and QA findings:
+
+| Severity | Finding | Remediation | Retest |
+| --- | --- | --- | --- |
+| Critical | Authenticated Supabase direct reads could expose generated document internals and approval token hashes if tenant read policies remained broad. | Migration `0008` replaces broad direct read policies for `generated_documents` and `approvals` with no-direct-read authenticated policies; server routes return sanitized DTOs only. | Live `verify_supabase_connection.py`, static boundary test, session smoke, and mutation smoke passed sensitive-field denial checks. |
+| High | Quote document generation, fork, and approval-gate preparation needed state/version/hash preconditions and audited database boundaries. | Added service-role-only RPCs for frozen document persistence, revision fork, and approval-gate preparation with version/hash checks, audit append, and idempotency completion. | Live migrations, seed, mutation smoke, and idempotency replay/conflict checks passed. |
+| High | Browser-provided document, diff, approval, or total fields could become authority. | P7 routes allowlist inputs, derive tenant/user/role server-side, fetch snapshots/documents server-side, and reject unsupported authority fields. | Static boundary and live mutation smoke passed forged-authority and sanitized-response checks. |
+| High | Approval gates could leak or return reusable token material. | Token secret is generated server-side, only a hash/version is stored, and API responses omit raw tokens and hashes. Actual delivery/consumption remains disabled. | Mutation smoke passed no-token/no-hash response checks and admin-only gate checks. |
+| Medium | HTML quote output could drift from the cost snapshot total. | Frozen HTML is generated from the persisted cost snapshot and hash-bound metadata; smoke tests compare the rendered total to the snapshot. | Live mutation smoke passed HTML total/snapshot compatibility. |
+| Medium | Tool whitelist drift could re-enable document/approval mutations from chat. | Compute policy now registers read-only `get_quote_document` and `get_revision_diff` tools; PDF/send/approval/production/mutation tools remain forbidden or non-executable. | Compute gateway tests and web session smoke passed prompt-injection, whitelist, and mutation-denial checks. |
+
+P7 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `npm run test -w apps/web` | Passed | Static server-boundary checks passed, including P7 route/RPC/sanitization markers. |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript passed. |
+| `npm run build -w apps/web` | Passed | Next.js production build passed with the P7 routes. |
+| `py -3.12 -m pytest tests/test_tool_gateway_policy.py` in `services/compute` | Passed | 12 passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 43 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Ruff passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Mypy passed. |
+| `py -3.12 -m py_compile scripts/apply_supabase_migrations.py scripts/seed_supabase.py scripts/verify_supabase_connection.py scripts/check_supabase_env.py scripts/supabase_common.py` | Passed | Supabase helper scripts compile. |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | Required values configured and database URLs valid; no secret values printed. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0008_quote_document_revision_approval_gate.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo fixtures seeded after the P7 generated-document seed was updated. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live DB/RLS/storage/tenant/sensitive-read checks passed. |
+| `npm run test:session -w apps/web` | Passed | Session/chat smoke passed document and diff explanation coverage. |
+| `npm run test:mutations -w apps/web` | Passed | Live mutation smoke passed P7 document/fork/diff/approval-gate coverage. |
+| `npm run lint -w apps/web` | Passed | Web lint script delegates to TypeScript and passed. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| `npm run secret-scan` | Passed | Tracked-file secret scan passed; `.env.local` is not tracked. |
+| `git diff --check` | Passed | No whitespace errors; Git reported standard CRLF conversion warnings only. |
+| `make verify` | Blocked | GNU Make is not on PATH. Equivalent web, compute, Supabase, pack, and secret-scan gates above passed. |
+
+Remaining P7 risks:
+
+- The supported product/document lifecycle is still the narrow wardrobe demo slice.
+- Binary PDF rendering, object-storage upload metadata, quote send, approval-token consumption, and production package creation remain future work.
+- The long-term Go core PostgreSQL repository path is still not live because Go is not installed locally.
+- CSRF/fetch-metadata, rate limiting, production auth revocation/rotation, and broader tool-output prompt-injection evals remain roadmap items.

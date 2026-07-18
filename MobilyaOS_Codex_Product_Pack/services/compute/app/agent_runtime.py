@@ -245,8 +245,8 @@ class ToolGateway:
             "_diff"
         ):
             return self._revision_diff(agent_id, tool, action, context)
-        if tool == "document_tool" and action == "preview_quote":
-            return self._quote_preview(agent_id, context)
+        if tool == "document_tool" and action == "get_quote_document":
+            return self._quote_document(agent_id, context)
         if tool == "document_tool" and action == "send_quote":
             return self._approval_required(agent_id, tool, action)
         if tool == "workflow_tool" and action == "request_approval":
@@ -499,14 +499,14 @@ class ToolGateway:
             [],
         )
 
-    def _quote_preview(self, agent_id: AgentID, context: ChatContext) -> GatewayResult:
+    def _quote_document(self, agent_id: AgentID, context: ChatContext) -> GatewayResult:
         revision_id = context.revision_id
         record = self._record(
             agent_id,
             "document_tool",
-            "preview_quote",
+            "get_quote_document",
             "completed" if revision_id else "denied",
-            "quote preview prepared" if revision_id else "revision_id is required",
+            "quote document returned" if revision_id else "revision_id is required",
         )
         if revision_id is None:
             return GatewayResult(record, [], [], [], [], ["revision_id"])
@@ -514,7 +514,7 @@ class ToolGateway:
             return self._denied(
                 agent_id,
                 "document_tool",
-                "preview_quote",
+                "get_quote_document",
                 "revision_id was not found in the authorized tenant tool adapter",
             )
         if (
@@ -524,7 +524,7 @@ class ToolGateway:
             return self._denied(
                 agent_id,
                 "document_tool",
-                "preview_quote",
+                "get_quote_document",
                 "revision version is stale in the authorized tenant tool adapter",
             )
         return GatewayResult(
@@ -535,7 +535,7 @@ class ToolGateway:
                     value={"revision_id": revision_id, "template_id": "corporate-tr-v1"},
                     source=Source(
                         type="tool_result",
-                        id="document_tool.preview_quote",
+                        id="document_tool.get_quote_document",
                         revision_id=revision_id,
                         tool_call_id=record.id,
                     ),
@@ -729,7 +729,7 @@ class AgentRuntime:
                 self._gateway.call(
                     agent_id=agent_id,
                     tool="manufacturing_tool",
-                    action="diff_manufacturing",
+                    action="get_revision_diff",
                     context=context,
                     untrusted_text=request.message,
                 ),
@@ -753,7 +753,7 @@ class AgentRuntime:
             self._gateway.call(
                 agent_id=agent_id,
                 tool="document_tool",
-                action="preview_quote",
+                action="get_quote_document",
                 context=context,
                 untrusted_text=request.message,
             )

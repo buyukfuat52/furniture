@@ -160,7 +160,7 @@ def test_quote_preview_blocks_approval_workflow_and_does_not_send() -> None:
 
     assert payload["agent_id"] == "quote_document"
     actions = [call["action"] for call in payload["tool_calls"]]
-    assert "preview_quote" in actions
+    assert "get_quote_document" in actions
     assert "request_approval" in actions
     approval_call = next(
         call for call in payload["tool_calls"] if call["action"] == "request_approval"

@@ -11,6 +11,12 @@ export type PlannedMutationKind =
   | "create_quote_configuration_draft"
   | "update_quote_configuration_draft"
   | "calculate_quote_snapshot"
+  | "generate_frozen_quote_document"
+  | "fork_quote_revision"
+  | "prepare_quote_approval_token"
+  | "read_quote_document"
+  | "read_revision_diff"
+  | "read_approval_status"
   | "read_quote_revision"
   | "list_project_quote_revisions"
   | "append_audit_entry"
@@ -34,7 +40,9 @@ const activeMutationKinds = new Set<PlannedMutationKind>([
   "create_quote_revision_draft",
   "create_quote_configuration_draft",
   "update_quote_configuration_draft",
-  "calculate_quote_snapshot"
+  "calculate_quote_snapshot",
+  "generate_frozen_quote_document",
+  "fork_quote_revision"
 ]);
 
 function hasTrustedScope(scope: TrustedMutationScope): boolean {
@@ -54,7 +62,13 @@ export function planProductMutationBoundary(
     };
   }
 
-  if (kind === "read_quote_revision" || kind === "list_project_quote_revisions") {
+  if (
+    kind === "read_quote_revision" ||
+    kind === "list_project_quote_revisions" ||
+    kind === "read_quote_document" ||
+    kind === "read_revision_diff" ||
+    kind === "read_approval_status"
+  ) {
     return {
       kind,
       allowed: true,
@@ -70,7 +84,18 @@ export function planProductMutationBoundary(
       status: writerRoles.has(scope.role) ? "allowed_mutation" : "denied",
       reason: writerRoles.has(scope.role)
         ? "Low-risk draft mutation may proceed through tenant-scoped repository methods."
-        : "Viewer and non-writer roles cannot create customer, project, quote draft, quote configuration draft, or quote calculation snapshot records."
+        : "Viewer and non-writer roles cannot create customer, project, quote draft, quote configuration draft, quote calculation snapshot, frozen document, or fork records."
+    };
+  }
+
+  if (kind === "prepare_quote_approval_token") {
+    return {
+      kind,
+      allowed: approvalRoles.has(scope.role),
+      status: approvalRoles.has(scope.role) ? "allowed_mutation" : "denied",
+      reason: approvalRoles.has(scope.role)
+        ? "Approval gate preparation may proceed without approving or sending the quote."
+        : "Approval-token preparation is limited to admin in this sprint."
     };
   }
 

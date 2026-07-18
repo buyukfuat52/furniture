@@ -12,6 +12,10 @@ const forbidden = [
   "SESSION_ENCRYPTION_KEY",
   "database_password",
   "service_role",
+  "signed_url",
+  "storage_bucket",
+  "storage_path",
+  "token_hash",
   "raw_storage_path"
 ];
 
@@ -80,6 +84,16 @@ function sourceBlock(text, name) {
   return text.slice(start, end);
 }
 
+function textBlock(text, startMarker, endMarker, label) {
+  const start = text.indexOf(startMarker);
+  if (start < 0) {
+    violations.push(`${label} was not found for boundary inspection`);
+    return "";
+  }
+  const end = text.indexOf(endMarker, start + startMarker.length);
+  return text.slice(start, end > start ? end : text.length);
+}
+
 function exportedMethods(text) {
   return [...text.matchAll(/export\s+async\s+function\s+(GET|POST|PUT|PATCH|DELETE)\b/g)].map((match) => match[1]);
 }
@@ -111,9 +125,11 @@ const violations = [];
 for (const file of clientFiles) {
   const text = readFileSync(file, "utf8");
   const rel = relative(root, file).replaceAll("\\", "/");
-  for (const key of forbidden) {
-    if (text.includes(key)) {
-      violations.push(`${rel} references ${key}`);
+  if (!rel.startsWith("scripts/")) {
+    for (const key of forbidden) {
+      if (text.includes(key)) {
+        violations.push(`${rel} references ${key}`);
+      }
     }
   }
   if (!rel.startsWith("scripts/")) {
@@ -132,6 +148,10 @@ requireNoRegex(
   /generated_documents[\s\S]*?storage_bucket/,
   "public generated document DTO/query must not expose storage bucket metadata"
 );
+const approvalGateSelectBlock = textBlock(repositoryText, "const approvalGateSelect", "].join", "approvalGateSelect");
+requireNoMarker(approvalGateSelectBlock, "token_hash", "approval gate select must not expose token hashes");
+const generatedDocumentRecordBlock = textBlock(repositoryText, "export type GeneratedDocumentRecord", "export type ApprovalRecord", "GeneratedDocumentRecord");
+requireNoRegex(generatedDocumentRecordBlock, /(storage_bucket|storage_path|signed_url)/, "public generated document type must not expose storage locators");
 requireNoRegex(
   repositoryText,
   /\b(company_id|actor_app_user_id|decision|status)\s*:\s*input\./,
@@ -205,6 +225,21 @@ for (const marker of [
 }
 requireNoMarker(idempotencyText, "cache = new Map", "idempotency must not use process-local memory as the durable store");
 
+const p7MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0008_quote_document_revision_approval_gate.sql"), "utf8");
+for (const marker of [
+  '"tenant generated_documents no direct read"',
+  '"tenant approvals no direct read"',
+  "persist_frozen_quote_document",
+  "fork_quote_revision_with_idempotency",
+  "prepare_quote_approval_gate_with_idempotency",
+  "revoke all on function public.persist_frozen_quote_document",
+  "revoke all on function public.fork_quote_revision_with_idempotency",
+  "revoke all on function public.prepare_quote_approval_gate_with_idempotency",
+  "to service_role"
+]) {
+  requireMarker(p7MigrationText, marker, `P7 migration is missing security marker ${marker}`);
+}
+
 const mutationRouteChecks = [
   ["app/api/supabase/customers/route.ts", ["GET", "POST"], ["withMutationSession", "create_customer", "appendAuditEntry", "customer_created"]],
   ["app/api/supabase/projects/route.ts", ["GET", "POST"], ["withMutationSession", "create_project", "appendAuditEntry", "project_created"]],
@@ -215,7 +250,13 @@ const mutationRouteChecks = [
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft/route.ts", ["GET", "POST", "PATCH"], ["withReadSession", "withMutationSession", "create_quote_configuration_draft", "update_quote_configuration_draft", "appendAuditEntry", "quote_configuration_created", "quote_configuration_updated", "not_calculated"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/calculate/route.ts", ["POST"], ["requireSession", "requireBoundary", "calculate_quote_snapshot", "rejectBrowserAuthority", "expected_configuration_version", "reserveIdempotency", "quote_snapshot_calculated", "calculateWardrobeQuoteSnapshot", "persistQuoteCalculationResult"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/snapshot/route.ts", ["GET"], ["withReadSession", "getQuoteSnapshot"]],
-  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft"]]
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/documents/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "read_quote_document", "generate_frozen_quote_document", "listQuoteDocuments", "generateQuoteDocument", "reserveIdempotency", "quote_document_generated", "rejectBrowserAuthority"]],
+  ["app/api/supabase/documents/[documentId]/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_document", "getQuoteDocument"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/fork/route.ts", ["POST"], ["requireSession", "requireBoundary", "fork_quote_revision", "expected_revision_version", "forkQuoteRevision", "reserveIdempotency", "quote_revision_forked", "rejectBrowserAuthority"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/diff/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_revision_diff", "getQuoteRevisionDiff", "against", "rejectUnsupportedQuery"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-status/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_approval_status", "getApprovalGateStatus"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
+  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments"]]
 ];
 for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const text = readFileSync(join(root, route), "utf8");
@@ -233,10 +274,15 @@ for (const [route, allowedMethods, markers] of mutationRouteChecks) {
     requireNoMarker(text, "updateQuoteConfigurationDraft", "agent chat route must not call mutating repository functions");
     requireNoMarker(text, 'risk: "high"', "agent chat route proposed action risk must match the shared schema");
   }
+  const p7PostRoute = route.includes("/documents/route.ts") || route.includes("/fork/route.ts") || route.includes("/approval-token/route.ts");
   const riskyMethods = route.includes("calculate")
     ? ["GET", "PUT", "PATCH", "DELETE"]
+    : p7PostRoute
+      ? ["PUT", "PATCH", "DELETE"]
     : route.includes("snapshot")
       ? riskyQuoteRouteMethods
+      : route.includes("diff") || route.includes("approval-status") || route.includes("documents/[documentId]")
+        ? riskyQuoteRouteMethods
       : route.includes("configuration-draft")
     ? ["PUT", "DELETE"]
     : route.includes("quote-revisions/[quoteRevisionId]")
@@ -316,6 +362,28 @@ requireMarker(persistQuoteCalculationResultBlock, "p_company_id: context.company
 requireMarker(persistQuoteCalculationResultBlock, "p_actor_app_user_id: context.appUserId", "persistQuoteCalculationResult must use trusted actor scope");
 requireMarker(persistQuoteCalculationResultBlock, "p_idempotency_record_id: reservation.id", "persistQuoteCalculationResult must bind durable idempotency");
 requireMarker(persistQuoteCalculationResultBlock, "p_request_hash: reservation.requestHash", "persistQuoteCalculationResult must bind request hash");
+
+const generateQuoteDocumentBlock = sourceBlock(repositoryText, "generateQuoteDocument");
+requireMarker(generateQuoteDocumentBlock, "getCurrentCalculatedQuoteSnapshot", "generateQuoteDocument must require a current trusted snapshot");
+requireMarker(generateQuoteDocumentBlock, "buildFrozenQuoteHtmlDocument", "generateQuoteDocument must build frozen HTML server-side");
+requireMarker(generateQuoteDocumentBlock, "rpc/persist_frozen_quote_document", "generateQuoteDocument must use the atomic document RPC");
+requireMarker(generateQuoteDocumentBlock, "p_idempotency_record_id: reservation.id", "generateQuoteDocument must bind durable idempotency");
+requireMarker(generateQuoteDocumentBlock, "p_request_hash: reservation.requestHash", "generateQuoteDocument must bind request hash");
+requireMarker(generateQuoteDocumentBlock, "p_actor_app_user_id: context.appUserId", "generateQuoteDocument must use trusted actor scope");
+
+const forkQuoteRevisionBlock = sourceBlock(repositoryText, "forkQuoteRevision");
+requireMarker(forkQuoteRevisionBlock, "rpc/fork_quote_revision_with_idempotency", "forkQuoteRevision must use the atomic fork RPC");
+requireMarker(forkQuoteRevisionBlock, "p_expected_revision_version: expectedRevisionVersion", "forkQuoteRevision must bind expected source revision version");
+requireMarker(forkQuoteRevisionBlock, "p_idempotency_record_id: reservation.id", "forkQuoteRevision must bind durable idempotency");
+requireMarker(forkQuoteRevisionBlock, "p_request_hash: reservation.requestHash", "forkQuoteRevision must bind request hash");
+
+const prepareApprovalGateBlock = sourceBlock(repositoryText, "prepareApprovalGate");
+requireMarker(prepareApprovalGateBlock, "getCurrentCalculatedQuoteSnapshot", "prepareApprovalGate must require a current trusted snapshot");
+requireMarker(prepareApprovalGateBlock, "buildApprovalTokenSecret", "prepareApprovalGate must create the token hash server-side");
+requireMarker(prepareApprovalGateBlock, "rpc/prepare_quote_approval_gate_with_idempotency", "prepareApprovalGate must use the atomic approval-gate RPC");
+requireMarker(prepareApprovalGateBlock, "p_token_hash: token.tokenHash", "prepareApprovalGate must pass only the token hash to persistence");
+requireMarker(prepareApprovalGateBlock, "p_idempotency_record_id: reservation.id", "prepareApprovalGate must bind durable idempotency");
+requireNoMarker(prepareApprovalGateBlock, "rawToken", "prepareApprovalGate must not expose a raw approval token");
 
 const quoteStatusPolicyBlock = sourceBlock(repositoryText, "quoteStatusPolicy");
 requireMarker(quoteStatusPolicyBlock, "direct_status_update_allowed: false", "quote status policy must forbid browser direct status writes");
