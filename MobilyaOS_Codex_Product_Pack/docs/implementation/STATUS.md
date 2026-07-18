@@ -15,13 +15,16 @@ Created: 2026-07-15
 | P3 - Vertical slice implementation | G3 | In progress | First wardrobe quote slice implemented in core/web contracts: login, seed data, customer/project, wardrobe calculation, BOM, edge, labor, cost, HTML quote document, fork, and diff. Go/Docker/make verification remains blocked locally. |
 | P4 - Integration, adversarial review, repair | G4 | Partially passed | Security and QA reviewers completed two read-only review passes; fixable critical/high findings repaired and retested where local toolchain permits. Approval-token workflow, PDF generation, Go tests, and Docker validation remain open. |
 | P5 - Release verification and handover | G5 | Partially passed / Supabase Cloud live | Supabase Cloud migration, seed, verify, server-side web demo reads, local-demo session boundary, and demo login mapping passed. Docker/Go/make remain unavailable locally, and mutating product flows are not yet Supabase-persisted. |
+| Post-P5.5 Phase 6 - Read-only agent UI | P6 | Passed | Browser chat now uses `POST /api/supabase/agent-chat`; direct browser-to-compute chat was removed; live session smoke covers injection, mutation denial, and sanitized payloads. |
+| Post-P5.5 Phase 7 - Multi-tenant hardening | P7 | Passed | Second tenant fixture, true IDOR smokes, authenticated read-only RLS, direct sales/viewer REST write denial, and tracked-file secret scan passed. |
+| Post-P5.5 Phase 8 - Release checkpoint | P8 | Passed | Documentation, roadmap, Supabase setup, domain/runtime/QA notes, and sanitized non-Docker validation results are consolidated around the verified Supabase Cloud path. |
 
 ## Repository State
 
 - Workspace path: `C:\Users\ultra\OneDrive\Masaustu\furniture\MobilyaOS_Codex_Product_Pack`.
 - Package identity: `MANIFEST.json` declares `MobilyaOS Codex Product Pack` version `1.1.0`.
-- Current repository started as an unpacked product/specification pack and now contains a P2 application foundation.
-- `git status` failed because `MobilyaOS_Codex_Product_Pack` is not currently a Git working tree.
+- Current repository started as an unpacked product/specification pack and now contains the Supabase-backed post-P5.5 build-train checkpoint.
+- Git is available; local checkpoint commits were created through Phase 8.
 - Remote probe for `https://github.com/buyukfuat52/furniture.git` timed out during P0; remote state was not verified.
 - Implementation directories now contain P2 skeleton source for `apps/web`, `services/core`, and `services/compute`.
 - Root `Makefile`, `package.json`, `package-lock.json`, `docker-compose.yml`, OpenAPI/AsyncAPI files, migrations, and application source files now exist.
@@ -47,7 +50,7 @@ Created: 2026-07-15
 - Supabase local CLI is not being used.
 - Manual dashboard login is required to create or select the `mobilyaos-dev` project and retrieve credentials.
 - No Supabase password, 2FA code, service role key, database password, or database URL was requested or printed.
-- `.env.local` was created as a local empty template and is ignored by Git.
+- `.env.local` exists locally in the repository root, is ignored by Git, and latest sanitized checks reported required values configured without printing values.
 
 ## P0 Verification Log
 
@@ -248,7 +251,7 @@ Primary bounded contexts:
 | High | Edge-band formula used float multiplier and lacked per-edge provenance. | Replace float math with integer basis points and persist waste/setup fields. | Fixed in core code and tests added; Go tests blocked by missing Go. |
 | High | Quote document was not tied to cost snapshot metadata and leaked internal cost categories. | Add cost snapshot ID/hash/formula/size metadata and remove internal category table from customer HTML. | Fixed in core code and tests added; Go tests blocked by missing Go. |
 | Medium | Tool whitelist can drift from prompt registry. | Add future registry/schema consistency validation. | Open. |
-| Medium | Idempotency is presence-only. | Add durable idempotency store and replay tests. | Open. |
+| Medium | Idempotency is presence-only. | Implement durable idempotency storage and replay tests. | Closed later for current draft mutation routes in Post-P5.5 Phase 1; transactionally combining idempotency, domain write, and audit append remains roadmap work. |
 
 ## P4 Second Review Pass
 
@@ -650,7 +653,7 @@ P5.7 remaining risks:
 - The mutation boundary is preparation-only; Supabase-backed customer/project/quote writes are not active.
 - Production auth still requires revocation, rotation, device tracking, rate limiting, CSRF policy, and audit hardening.
 - Runtime agent/tool-gateway execution remains deferred until server-side policy and audit tools exist.
-- Multi-tenant negative testing needs a second tenant fixture.
+- Multi-tenant negative testing was added later in Phase 7 with a second tenant fixture; keep expanding role-specific branches.
 - Go, Make, and Docker runtime gates remain unavailable or out of scope for this non-Docker phase.
 - Contract tests remain placeholders.
 
@@ -738,9 +741,9 @@ P5.8 security status:
 
 P5.8 remaining risks:
 
-- Idempotency is in-process only and will not survive server restarts or multi-instance deployments.
+- In-process idempotency was replaced later by durable Supabase-backed records for current draft mutation routes.
 - Admin write proof was not separately live-smoked; sales writer proof and viewer denial were verified.
-- Cross-tenant negative testing still needs a second tenant fixture.
+- Cross-tenant negative testing was added later in Phase 7 with a second tenant fixture.
 - Deterministic quote configuration/BOM/cost/document/fork/diff persistence remains deferred.
 - Runtime agent tool execution remains deferred.
 - Go, Make, and Docker runtime gates remain unavailable or out of scope locally.
@@ -828,7 +831,7 @@ Phase 0/P5.5 security completion findings:
 | Critical | None found. | Closed. |
 | High | QA found missing no-session read-route coverage. | Fixed in mutation smoke and retested. |
 | High | QA found incomplete idempotency/audit replay coverage. | Fixed in mutation smoke and retested. |
-| Medium | True cross-tenant live tests need a second tenant fixture. | Open for Phase 7. |
+| Medium | True cross-tenant live tests need a second tenant fixture. | Closed in Phase 7 with seeded second tenant rows and live route/RLS negative tests. |
 | Medium | Static marker checks are useful tripwires but not full integration tests. | Open; route tests should continue to expand. |
 
 Phase 1 durable idempotency behavior:
@@ -861,7 +864,7 @@ Phase 1 command log:
 | `npm run build --workspaces --if-present` | Passed | Workspace build passed. |
 | `py -3.12 -m ruff check .` in `services/compute` | Passed | Compute lint passed. |
 | `py -3.12 -m mypy app` in `services/compute` | Passed | Compute typecheck passed. |
-| `py -3.12 -m pytest` in `services/compute` | Passed | 13 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | The checkpoint-era compute suite passed; current Phase 8 count is 39 passed. One known FastAPI/Starlette TestClient deprecation warning remains. |
 | `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
 | Safe secret scan | Passed | No value-shaped secrets or connection strings found outside ignored `.env.local`. Literal denylist labels remain in tests/docs as expected. |
 
@@ -1081,7 +1084,7 @@ Phase 4 command log:
 Remaining Phase 4 risks:
 
 - Idempotency reservation, domain write, and audit append are still separate REST/database operations rather than one SQL transaction.
-- True second-tenant live negative tests still need a seeded second tenant fixture.
+- True second-tenant live negative tests were added later in Phase 7 with seeded second tenant rows.
 - Configuration draft JSON has DB guard coverage for shape and forbidden keys, but typed command RPCs would provide a stronger long-term boundary.
 - Edge schema still has legacy `front` edge naming from older demo paths; physical edge normalization remains future domain cleanup.
 - No authoritative calculation engine or persisted BOM/cost snapshot is implemented from these configuration drafts yet.
@@ -1301,3 +1304,56 @@ Remaining Phase 7 risks:
 - Production auth still needs session revocation, rotation, device tracking, and operational monitoring.
 - RLS now intentionally blocks direct public-key writes; future direct Supabase client mutations must go through server commands or role-aware audited RPCs.
 - Contracts package tests remain placeholders.
+
+## Post-P5.5 Build Train - Phase 8 Release Checkpoint
+
+Current result: complete. Phase 8 consolidates README, status, roadmap, Supabase setup, domain invariants, runtime-agent gateway notes, and QA checklist around the verified Supabase Cloud path.
+
+Checkpoint summary:
+
+- Supabase Cloud is the active local development database path on this machine.
+- Docker Desktop, Go, and GNU Make remain unavailable locally and are not counted as passed.
+- Server-side Next routes provide authenticated Supabase demo reads, low-risk draft mutations, and a read-only agent chat route.
+- Deterministic authoritative BOM/cost/PDF/production persistence remains deferred beyond configuration draft input.
+- Authenticated Supabase public-key access is read-only for app data; writes must go through server routes.
+- True second-tenant route and RLS negative tests passed in Phase 7.
+- Tracked-file secret scanning is now reusable through `scripts/secret_scan.py` and `npm run secret-scan`.
+
+Phase 8 documentation files updated:
+
+- `README.md`
+- `STATUS.md`
+- `ROADMAP.md`
+- `docs/implementation/STATUS.md`
+- `docs/implementation/SUPABASE_CLOUD_SETUP.md`
+- `docs/implementation/DOMAIN_INVARIANTS.md`
+- `docs/implementation/RUNTIME_AGENT_TOOL_GATEWAY.md`
+- `docs/implementation/QA_SESSION_BOUNDARY_CHECKLIST.md`
+
+Phase 8 validation:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | Required Supabase values configured and database URL structures valid; no secret values printed. |
+| `py -3.12 -m py_compile scripts\supabase_common.py scripts\check_supabase_env.py scripts\apply_supabase_migrations.py scripts\seed_supabase.py scripts\verify_supabase_connection.py scripts\secret_scan.py` | Passed | Helper scripts compile. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Supabase Cloud migrations applied. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Primary and second tenant demo fixtures seeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Tables, tenant columns, RLS, storage, tenant fixtures, cross-tenant denial, direct public-key write denial, and DB guards passed. |
+| `npm run test -w apps/web` | Passed | Server boundary/static checks passed. |
+| `npm run typecheck -w apps/web` | Passed | TypeScript passed. |
+| `npm run build -w apps/web` | Passed | Production build passed. |
+| `npm run test:session -w apps/web` | Passed | Login/session/logout/demo-data/read-only agent/prompt-injection/selector IDOR smoke passed. |
+| `npm run test:mutations -w apps/web` | Passed | Draft mutation, RBAC, idempotency, audit, and true second-tenant IDOR smoke passed. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Ruff passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Mypy passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 39 passed; one known FastAPI/Starlette TestClient deprecation warning remains. |
+| `npm run test --workspaces --if-present` | Passed | Web passed; contracts remains placeholder coverage. |
+| `npm run typecheck --workspaces --if-present` | Passed | Web passed; contracts remains placeholder coverage. |
+| `npm run build --workspaces --if-present` | Passed | Web passed; contracts remains placeholder coverage. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| `py -3.12 scripts/secret_scan.py` | Passed | Tracked-file secret scan passed. |
+| `npm run secret-scan` | Passed | NPM wrapper for tracked-file secret scan passed. |
+| `git diff --check` | Passed | No whitespace errors after the final doc patch; Git reported standard CRLF conversion warnings only. |
+| `go version` | Blocked | Go is not on PATH. |
+| `make --version` | Blocked | GNU Make is not on PATH. |
+| `docker version --format ...` | Blocked | Docker Desktop engine pipe is unavailable; Docker runtime validation is not accepted coverage. |

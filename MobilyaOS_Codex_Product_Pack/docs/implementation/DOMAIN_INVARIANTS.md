@@ -1,6 +1,6 @@
 # Domain Invariants
 
-MobilyaOS P5.4/P5.5 is in a Supabase-backed demo/session phase. The application may still keep selected demo behaviors lightweight, but the domain boundary must already assume that tenant, session, role, quote, costing, and approval decisions are server-side responsibilities.
+MobilyaOS is in a Supabase-backed post-P5.5 demo/session phase. The application may still keep selected demo behaviors lightweight, but the domain boundary must already assume that tenant, session, role, quote, costing, and approval decisions are server-side responsibilities.
 
 ## Tenant, Session, User, and Role Invariants
 
@@ -29,12 +29,15 @@ Client code may collect user intent, render previews, cache drafts, and submit c
 
 ## Current Customer, Project, and Quote Mutation Scope
 
-Allowed during the P5.4/P5.5 Supabase-backed demo/session sprint:
+Allowed during the current Supabase-backed build-train checkpoint:
 
 - Establish authenticated tenant context through a durable local-demo session.
 - Read seeded Supabase demo company, customer, project, quote, BOM, cost, document, approval, revision, and audit data through server-side tenant scope.
-- Accept the first Supabase-backed mutation commands only for creating customers, creating projects, creating quote drafts, and appending audit entries.
+- Accept the first Supabase-backed mutation commands only for creating customers, creating projects, creating quote drafts, creating/updating quote configuration drafts, and appending audit entries.
 - Read and list quote revisions through tenant-scoped backend routes.
+- Read current project/revision/configuration context through the read-only web agent chat route.
+- Verify tenant isolation with a second seeded tenant fixture and true cross-tenant IDOR probes.
+- Keep authenticated Supabase public-key access read-only for app data; mutations must use server routes or future audited RPCs.
 - Keep browser-collected project or quote intent as non-authoritative until accepted by backend/domain validation.
 - Preserve deterministic recalculation requirements for any future accepted mutation.
 
@@ -67,16 +70,16 @@ Route-specific invariants:
 Role invariants for these routes:
 
 - `viewer` is read-only. A viewer may read tenant-authorized data and quote revisions, but must not create customers, projects, quote drafts, audit entries through user commands, sends, approvals, PDFs, or production packages.
-- `sales` may create customers, projects, and quote drafts for the resolved company when the route-specific validation passes.
-- `admin` may create customers, projects, and quote drafts for the resolved company when the route-specific validation passes.
+- `sales` may create customers, projects, quote drafts, and create/update quote configuration drafts for the resolved company when the route-specific validation passes.
+- `admin` may create customers, projects, quote drafts, and create/update quote configuration drafts for the resolved company when the route-specific validation passes.
 - Risky quote actions remain deferred for all roles until explicit domain gates exist: send, approval, final PDF generation, production package creation, and downstream operational release.
 
 Idempotency expectations:
 
 - Mutation idempotency is scoped by resolved company, app user or trusted session, route/action, and caller-provided idempotency key.
-- Replaying the same scoped idempotency key must not create duplicate customer, project, quote draft, or audit side effects.
+- Replaying the same scoped idempotency key must not create duplicate customer, project, quote draft, quote configuration draft, or audit side effects.
 - Reusing the same key for a different route/action, company, user/session, or materially different payload is invalid or treated as a separate scope according to backend policy.
-- Current Supabase-backed draft mutations use durable idempotency records scoped by company, app user, action, and hashed key.
+- Current Supabase-backed draft mutations, including configuration draft create/update, use durable idempotency records scoped by company, app user, action, and hashed key.
 - Mutation routes require an idempotency key; missing keys are rejected before writes.
 - Raw idempotency keys are not stored. Replay stores only sanitized response JSON and status code.
 - Idempotency storage must not trust browser actor or company fields; it uses the same server-resolved context as authorization and audit.
@@ -127,9 +130,11 @@ Current Supabase-backed scope:
 - Authenticated session context.
 - Tenant-scoped seeded demo reads for customers, projects, quotes, snapshots, documents, approvals, quote revisions, and audit entries.
 - First tenant-scoped create routes for customers, projects, and quote drafts.
+- Tenant-scoped create/update routes for quote configuration draft input with `not_calculated` status.
 - Backend-owned audit append for accepted route actions.
-- Backend/database policy enforcement for tenant-scoped reads and first scoped mutations wired into the current demo flow.
+- Backend/database policy enforcement for tenant-scoped reads, authenticated direct-write denial, and first scoped mutations wired into the current demo flow.
 - A local-demo browser session intended to survive reloads until expiry or logout.
+- Second tenant fixture rows used for live tenant isolation checks.
 
 Remaining in-memory or mock scope:
 

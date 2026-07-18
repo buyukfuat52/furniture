@@ -134,9 +134,9 @@ The web app now has a server-side Supabase session and read boundary:
 - The session cookie contains only minimal encrypted local-demo claims and expires automatically.
 - The server loads root `.env` and `.env.local` automatically even when Next.js is started from `apps/web`.
 - The UI's "Load demo data" action now reads from Supabase-backed API routes only after login.
-- The UI can create customer, project, quote draft, and quote configuration draft records after login.
+- The UI can create customer, project, quote draft, and create/update quote configuration draft records after login.
 - The UI chat panel reads project/revision/configuration status through `/api/supabase/agent-chat`; it does not call compute directly or send browser-owned company, role, user, cost snapshot, or diff authority.
-- `viewer` is read-only; `sales` and `admin` can create customer, project, quote draft, and quote configuration draft records.
+- `viewer` is read-only; `sales` and `admin` can create customer, project, quote draft, and create/update quote configuration draft records.
 - Successful mutations append server-side audit entries.
 - Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key.
 - Quote configuration drafts store only validated draft input: integer millimetre dimensions, explicit piece quantity, bounded option counts, SKUs, notes, validation status, and `not_calculated` calculation status. They do not create BOM, edge banding, labor, cost, tax, totals, PDFs, approval, send, or production package rows.
@@ -198,7 +198,7 @@ Blocked on this machine:
 - Deterministic wardrobe BOM, edge-banding, labor x quantity, and cost snapshot logic exists in the Go core source.
 - Web app builds, renders the vertical-slice workflow, and reads seeded demo tenant data from Supabase through server-side routes.
 - Demo login verifies Supabase Auth credentials server-side, maps them to seeded app users, creates an encrypted HTTP-only session cookie, exposes a sanitized session endpoint, and supports logout.
-- Supabase-backed draft mutations now work for customer creation, draft project creation, quote draft shell creation, quote revision list/read, and audit append.
+- Supabase-backed draft mutations now work for customer creation, draft project creation, quote draft shell creation, quote revision list/read, quote configuration draft create/update, and audit append.
 - Server-only mutation policy keeps `viewer` read-only and permits `sales`/`admin` only for the low-risk draft mutations.
 - The web chat UI has a read-only Supabase-backed route that can summarize current projects, quote revisions, audit state, and configuration draft status without authoritative calculations or mutations.
 - Compute/agent service passes tests and enforces bearer auth, role derivation, prompt-injection blocking, tool allowlists, and quote-send denial/approval gating.

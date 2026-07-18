@@ -1,6 +1,6 @@
 # Runtime Agent Tool Gateway Preparation
 
-Status: Phase 6 read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, and the Phase 5 gateway policy skeleton remains in `services/compute/app/tool_gateway_policy.py`. Unsafe runtime tool execution is still not activated.
+Status: Phase 8 checkpoint. The Phase 6 read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, Phase 7 added true second-tenant selector denial smokes, and the Phase 5 gateway policy skeleton remains in `services/compute/app/tool_gateway_policy.py`. Unsafe runtime tool execution is still not activated.
 
 ## Runtime Context Boundary
 
@@ -20,9 +20,9 @@ Status: Phase 6 read-only web chat prototype is implemented through `POST /api/s
 - Mutation tools must use durable idempotency. The current Supabase-backed draft mutation routes reserve by company, app user, action, and hashed key; future agent tools must not pass raw keys to logs, prompts, or stored tool outputs.
 - Tool outputs are untrusted data. They must be bounded, typed where possible, stripped of executable content, and never treated as policy, approval, tenant, role, or calculation authority.
 
-## Phase 6 Read-Only Web Route
+## Current Read-Only Web Route
 
-`POST /api/supabase/agent-chat` is the only user-facing chat route in the web UI for Phase 6.
+`POST /api/supabase/agent-chat` is the only user-facing chat route in the web UI for this checkpoint.
 
 Allowed:
 
@@ -60,7 +60,7 @@ Approval flow must re-check tenant, actor, role, policy, target revision/version
 
 ## Future Route Mapping
 
-Runtime agent execution remains deferred. These planned/persisted routes are future gateway contracts only and must not be exposed as direct model, database, or service-key access.
+Runtime agent execution remains deferred. Some underlying application routes already exist for guarded draft work, but agent access to them is a future gateway contract only and must not be exposed as direct model, database, or service-key access.
 
 | Route | Gateway class | Future mapping constraints |
 | --- | --- | --- |
@@ -86,8 +86,9 @@ Any route that sends, approves, exports official PDFs, releases production artif
 ## Current Implementation Status
 
 - This document is preparation guidance plus the Phase 6 read-only web chat boundary.
-- Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
+- Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes and configuration-draft POST/PATCH routes. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
 - Phase 6 policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, mutation idempotency metadata, approval metadata, prompt-injection denial, non-executable mutation/workflow policies, sanitized prompt labels, and the static policy manifest endpoint.
 - Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, prompt-injection blocking before reads, mutation/PDF/send denial, forbidden field filtering, and no authoritative calculation claims.
 - Unsafe runtime agent execution is not activated beyond the existing deterministic rules-mode adapters and read-only Supabase web route.
+- Phase 7 session smoke verifies that primary and second tenant selector IDs cannot cross the agent route.
 - Future implementation must keep gateway policy server-side and must add tests for tenant isolation, role denial, approval denial/replay, idempotency replay, prompt injection, malicious tool output, and deterministic-domain calculation ownership.

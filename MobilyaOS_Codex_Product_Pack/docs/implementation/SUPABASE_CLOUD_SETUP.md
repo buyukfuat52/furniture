@@ -76,7 +76,7 @@ The current web wiring reads seeded Supabase data, validates the local-demo sess
 - `GET/POST/PATCH /api/supabase/quote-revisions/[quoteRevisionId]/configuration-draft`
 - `POST /api/supabase/agent-chat`
 
-`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, and draft quote configuration inputs. Quote drafts/configuration drafts always remain draft/non-calculated and do not create authoritative BOM/cost totals, PDFs, approval, send events, or production packages.
+`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, and create/update draft quote configuration inputs. Quote drafts/configuration drafts always remain draft/non-calculated and do not create authoritative BOM/cost totals, PDFs, approval, send events, or production packages.
 
 Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, cost, or calculation values are not authority. Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key. Raw idempotency keys are not stored.
 

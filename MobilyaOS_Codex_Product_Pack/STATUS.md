@@ -1,6 +1,6 @@
 # MobilyaOS Status
 
-Current status: Post-P5.5 build train Phase 7 has passed targeted security hardening checks. Supabase Cloud validation, local-demo session routing, Supabase-backed customer/project/quote draft/configuration draft routes, delegated P5.5 security completion, durable Supabase-backed idempotency, read-only project/revision timeline/status policy surfaces, non-authoritative calculation-boundary scaffolding, quote configuration draft persistence guards, runtime agent tool-gateway policy skeleton, read-only Supabase-backed web agent chat, second-tenant negative tests, and read-only authenticated RLS are verified.
+Current status: Post-P5.5 build train Phase 8 release checkpoint is complete locally. Supabase Cloud validation, local-demo session routing, Supabase-backed customer/project/quote draft/configuration draft routes, delegated P5.5 security completion, durable Supabase-backed idempotency, read-only project/revision timeline/status policy surfaces, non-authoritative calculation-boundary scaffolding, quote configuration draft persistence guards, runtime agent tool-gateway policy skeleton, read-only Supabase-backed web agent chat, second-tenant negative tests, read-only authenticated RLS, tracked-file secret scan, and release documentation are verified.
 
 Docker Desktop is not available on this machine, so the local Docker Compose path is not active. Supabase Cloud migrations, RLS policies, Storage bucket setup SQL, env validation, migration, seed, and verify scripts are prepared and verified live.
 

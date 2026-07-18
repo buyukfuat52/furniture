@@ -54,7 +54,7 @@ The next phase should focus on turning the current Supabase-backed draft flow in
 1. Wire core repositories to Supabase PostgreSQL with tenant predicates.
 2. Persist deterministic quote configuration, BOM, edge banding, labor, and cost snapshots through backend/domain services.
 3. Replace web product calculate/document/fork/diff mutations with persisted routes.
-4. Add durable idempotency and approval workflow tables.
+4. Transactionally integrate existing durable idempotency with domain write/audit append, and add approval workflow tables.
 5. Generate HTML and PDF quote artifacts from the same frozen cost snapshot.
 6. Expand the read-only web agent route into authorized application queries through the gateway policy layer with persisted tool invocation records.
 7. Add Playwright E2E, Go integration tests, session/mutation security tests, and cloud verification to CI.
