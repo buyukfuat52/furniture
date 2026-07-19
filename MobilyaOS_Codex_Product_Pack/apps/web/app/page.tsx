@@ -19,6 +19,7 @@ import {
   SupabaseQuoteConfigurationDraftResponse,
   SupabaseQuoteDocument,
   SupabaseQuoteDocumentPreview,
+  SupabaseQuoteDeliveryAcknowledgement,
   SupabaseQuoteForkResponse,
   SupabaseQuoteProviderStatus,
   SupabaseQuoteRevisionDetail,
@@ -72,6 +73,7 @@ export default function HomePage() {
   const [cloudDeliveryOutbox, setCloudDeliveryOutbox] = useState<SupabaseQuoteDeliveryOutbox[]>([]);
   const [cloudProviderStatus, setCloudProviderStatus] = useState<SupabaseQuoteProviderStatus | null>(null);
   const [cloudDeliveryAttempts, setCloudDeliveryAttempts] = useState<SupabaseQuoteDeliveryAttempt[]>([]);
+  const [cloudDeliveryAcknowledgements, setCloudDeliveryAcknowledgements] = useState<SupabaseQuoteDeliveryAcknowledgement[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [chatInput, setChatInput] = useState("Bu projenin maliyet snapshot sonucunu acikla");
   const [chatResult, setChatResult] = useState<AgentChatResponse | null>(null);
@@ -305,7 +307,8 @@ export default function HomePage() {
         loadSupabaseSendGateStatus(quoteRevisionId, false),
         loadSupabaseDeliveryOutbox(quoteRevisionId, false),
         loadSupabaseProviderStatus(quoteRevisionId, false),
-        loadSupabaseDeliveryAttempts(quoteRevisionId, false)
+        loadSupabaseDeliveryAttempts(quoteRevisionId, false),
+        loadSupabaseDeliveryAcknowledgements(quoteRevisionId, false)
       ]);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -444,6 +447,25 @@ export default function HomePage() {
       setCloudDeliveryAttempts(result.delivery_attempts);
     } catch {
       setCloudDeliveryAttempts([]);
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseDeliveryAcknowledgements(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ delivery_acknowledgements: SupabaseQuoteDeliveryAcknowledgement[] }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/delivery-acknowledgements`
+      );
+      setCloudDeliveryAcknowledgements(result.delivery_acknowledgements);
+    } catch {
+      setCloudDeliveryAcknowledgements([]);
     } finally {
       if (setBusy) {
         setCloudBusy(false);
@@ -766,6 +788,7 @@ export default function HomePage() {
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
+      await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -792,6 +815,7 @@ export default function HomePage() {
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
+      await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -818,6 +842,7 @@ export default function HomePage() {
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
+      await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -844,6 +869,7 @@ export default function HomePage() {
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
+      await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -865,10 +891,39 @@ export default function HomePage() {
         {}
       );
       setCloudDeliveryAttempts([result.delivery_attempt]);
-      setSeedSummary(`Provider denemesi bloke kaydedildi: ${result.delivery_attempt.status}`);
+      setSeedSummary(`Sandbox provider denemesi kaydedildi: ${result.delivery_attempt.status}`);
       await loadSupabaseDeliveryAttempts(revisionId, false);
+      await loadSupabaseDeliveryAcknowledgements(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function acknowledgeSupabaseSandboxDeliveryAttempt() {
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    const attemptId = cloudDeliveryAttempts.find((attempt) => attempt.status === "sandbox_delivery_attempted")?.id;
+    if (!revisionId || !attemptId) {
+      setError("Sandbox ack icin guncel sandbox teslimat denemesi gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<{ delivery_acknowledgement: SupabaseQuoteDeliveryAcknowledgement }>(
+        `/api/supabase/delivery-attempts/${attemptId}/sandbox-acknowledgement`,
+        {}
+      );
+      setCloudDeliveryAcknowledgements([result.delivery_acknowledgement]);
+      setSeedSummary(`Sandbox ack dogrulandi: ${result.delivery_acknowledgement.acknowledgement_status}`);
+      await loadSupabaseDeliveryAttempts(revisionId, false);
+      await loadSupabaseDeliveryAcknowledgements(revisionId, false);
+      await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseSendGateStatus(revisionId, false);
+      await loadSupabaseQuoteRevisionDetail(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -1094,7 +1149,9 @@ export default function HomePage() {
             configurationDraft={cloudConfigurationDraft}
             documentPreview={cloudDocumentPreview}
             documents={cloudDocuments}
+            deliveryAcknowledgements={cloudDeliveryAcknowledgements}
             deliveryAttempts={cloudDeliveryAttempts}
+            onAcknowledgeSandboxDelivery={acknowledgeSupabaseSandboxDeliveryAttempt}
             onCalculateQuoteSnapshot={calculateSupabaseQuoteSnapshot}
             onForkRevision={forkSupabaseQuoteRevision}
             onGenerateQuoteArtifact={generateSupabaseQuoteArtifact}
@@ -1388,8 +1445,10 @@ function SupabaseTimelinePanel({
   configurationDraft,
   documentPreview,
   documents,
+  deliveryAcknowledgements,
   deliveryAttempts,
   deliveryOutbox,
+  onAcknowledgeSandboxDelivery,
   onCalculateQuoteSnapshot,
   onForkRevision,
   onGenerateQuoteArtifact,
@@ -1418,8 +1477,10 @@ function SupabaseTimelinePanel({
   configurationDraft: SupabaseQuoteConfigurationDraftResponse | null;
   documentPreview: SupabaseQuoteDocumentPreview | null;
   documents: SupabaseQuoteDocument[];
+  deliveryAcknowledgements: SupabaseQuoteDeliveryAcknowledgement[];
   deliveryAttempts: SupabaseQuoteDeliveryAttempt[];
   deliveryOutbox: SupabaseQuoteDeliveryOutbox[];
+  onAcknowledgeSandboxDelivery: () => void;
   onCalculateQuoteSnapshot: () => void;
   onForkRevision: () => void;
   onGenerateQuoteArtifact: () => void;
@@ -1537,8 +1598,10 @@ function SupabaseTimelinePanel({
               canPrepareApproval={canPrepareApproval}
               documentPreview={documentPreview}
               documents={documents}
+              deliveryAcknowledgements={deliveryAcknowledgements}
               deliveryAttempts={deliveryAttempts}
               deliveryOutbox={deliveryOutbox}
+              onAcknowledgeSandboxDelivery={onAcknowledgeSandboxDelivery}
               onForkRevision={onForkRevision}
               onGenerateQuoteArtifact={onGenerateQuoteArtifact}
               onGenerateQuoteDocument={onGenerateQuoteDocument}
@@ -1583,10 +1646,12 @@ function SupabaseQuoteLifecyclePanel({
   artifacts,
   busy,
   canPrepareApproval,
+  deliveryAcknowledgements,
   deliveryAttempts,
   deliveryOutbox,
   documentPreview,
   documents,
+  onAcknowledgeSandboxDelivery,
   onForkRevision,
   onGenerateQuoteArtifact,
   onGenerateQuoteDocument,
@@ -1608,10 +1673,12 @@ function SupabaseQuoteLifecyclePanel({
   artifacts: SupabaseQuoteArtifact[];
   busy: boolean;
   canPrepareApproval: boolean;
+  deliveryAcknowledgements: SupabaseQuoteDeliveryAcknowledgement[];
   deliveryAttempts: SupabaseQuoteDeliveryAttempt[];
   deliveryOutbox: SupabaseQuoteDeliveryOutbox[];
   documentPreview: SupabaseQuoteDocumentPreview | null;
   documents: SupabaseQuoteDocument[];
+  onAcknowledgeSandboxDelivery: () => void;
   onForkRevision: () => void;
   onGenerateQuoteArtifact: () => void;
   onGenerateQuoteDocument: () => void;
@@ -1636,12 +1703,14 @@ function SupabaseQuoteLifecyclePanel({
   const latestPdfArtifact = artifacts.find((artifact) => artifact.artifact_type === "quote_pdf") ?? null;
   const latestDeliveryOutbox = deliveryOutbox[0] ?? null;
   const latestDeliveryAttempt = deliveryAttempts[0] ?? null;
+  const latestDeliveryAcknowledgement = deliveryAcknowledgements[0] ?? null;
   const canPreview = Boolean(latestDocument);
   const canStoreArtifact = approvalGate?.status === "approved" && revisionDetail.quote_revision.status === "approved";
   const canGeneratePdf = canStoreArtifact && Boolean(latestHtmlArtifact);
   const canPrepareSendIntent = Boolean(sendGate?.eligible_to_prepare_send);
   const canPrepareDelivery = Boolean(sendGate?.eligible_to_prepare_delivery);
   const canRecordDeliveryAttempt = Boolean(sendGate?.eligible_to_record_delivery_attempt && latestDeliveryOutbox);
+  const canAcknowledgeSandboxDelivery = Boolean(latestDeliveryAttempt?.status === "sandbox_delivery_attempted" && !latestDeliveryAcknowledgement);
   const documentPreviewUrl = documentPreview ? `/api/supabase/documents/${documentPreview.id}/preview` : "";
   return (
     <div className="lifecyclePanel">
@@ -1662,6 +1731,8 @@ function SupabaseQuoteLifecyclePanel({
         <SummaryCard title="Gonderim kapisi" value={sendGate?.status ?? "not_ready"} />
         <SummaryCard title="Provider" value={providerStatus?.provider_status ?? "provider_missing"} />
         <SummaryCard title="Deneme ledger" value={`${deliveryAttempts.length} kayit`} />
+        <SummaryCard title="Sandbox ack" value={latestDeliveryAcknowledgement?.acknowledgement_status ?? "not_verified"} />
+        <SummaryCard title="Teklif sent" value={sendGate?.quote_status_changed_by_sandbox ? "sent" : "approved/sandbox"} />
       </div>
 
       <div className="buttonRow">
@@ -1694,6 +1765,9 @@ function SupabaseQuoteLifecyclePanel({
         </button>
         <button disabled={busy || !canRecordDeliveryAttempt} onClick={onRecordDeliveryAttempt} type="button">
           Teslimat denemesi kaydet
+        </button>
+        <button disabled={busy || !canAcknowledgeSandboxDelivery} onClick={onAcknowledgeSandboxDelivery} type="button">
+          Sandbox ack dogrula
         </button>
         <button disabled type="button">Dis e-posta gonderimi kapali</button>
         <button disabled type="button">Uretim paketi</button>
@@ -1821,11 +1895,14 @@ function SupabaseQuoteLifecyclePanel({
             calisan gonderim: {String(sendGate.quote_send_triggered)} /
             son niyet: {sendGate.latest_send_intent_status} /
             outbox: {sendGate.latest_delivery_outbox_status} /
-            deneme: {sendGate.latest_delivery_attempt_status}
+            deneme: {sendGate.latest_delivery_attempt_status} /
+            ack: {sendGate.latest_delivery_acknowledgement_status}
           </p>
           <p className="smallNote">
             Provider dogrulandi: {String(sendGate.provider_acknowledgement_verified)} /
-            sent gecisi: {String(sendGate.sent_transition_enabled)}
+            sandbox dogrulandi: {String(sendGate.sandbox_delivery_verified)} /
+            sent gecisi: {String(sendGate.sent_transition_enabled)} /
+            quote status: {sendGate.quote_status_after_sandbox}
           </p>
           <p className="smallNote">Artefakt durumu: {sendGate.artifact_status}</p>
           <p className="smallNote">Blokajlar: {sendGate.blocking_reasons.join(", ") || "yok"}</p>
@@ -1853,11 +1930,13 @@ function SupabaseQuoteLifecyclePanel({
           <p>
             Adapter: {providerStatus.provider_adapter} /
             config: {providerStatus.provider_config_version} /
+            sandbox: {String(providerStatus.sandbox_delivery_enabled)} /
             gercek gonderim: {String(providerStatus.real_delivery_enabled)}
           </p>
           <p className="smallNote">
             Ack gerekli: {String(providerStatus.provider_acknowledgement_required)} /
-            ack dogrulandi: {String(providerStatus.provider_acknowledgement_verified)} /
+            sandbox ack: {String(providerStatus.sandbox_acknowledgement_verified)} /
+            real ack: {String(providerStatus.provider_acknowledgement_verified)} /
             sent gecisi: {String(providerStatus.sent_transition_enabled)}
           </p>
         </div>
@@ -1888,7 +1967,23 @@ function SupabaseQuoteLifecyclePanel({
           <p className="smallNote">
             Dis gonderim: {String(latestDeliveryAttempt.external_delivery_attempted)} /
             ack: {String(latestDeliveryAttempt.provider_acknowledged)} /
+            sandbox verified: {String(latestDeliveryAttempt.sandbox_delivery_verified)} /
             teklif sent: {String(latestDeliveryAttempt.quote_sent)}
+          </p>
+        </div>
+      ) : null}
+      {latestDeliveryAcknowledgement ? (
+        <div className="approvalBox">
+          <strong>Sandbox ack: {latestDeliveryAcknowledgement.acknowledgement_status}</strong>
+          <p>
+            Adapter: {latestDeliveryAcknowledgement.provider_adapter} /
+            sandbox verified: {String(latestDeliveryAcknowledgement.sandbox_delivery_verified)} /
+            real email: {String(latestDeliveryAcknowledgement.real_email_sent)}
+          </p>
+          <p className="smallNote">
+            Quote status: {latestDeliveryAcknowledgement.quote_status_after} /
+            status changed: {String(latestDeliveryAcknowledgement.quote_status_changed)} /
+            production: {String(latestDeliveryAcknowledgement.production_package_triggered)}
           </p>
         </div>
       ) : null}

@@ -39,6 +39,7 @@ REQUIRED_TABLES = [
     "quote_send_intents",
     "quote_delivery_outbox",
     "quote_delivery_attempts",
+    "quote_delivery_acknowledgements",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -64,6 +65,7 @@ TENANT_TABLES = [
     "quote_send_intents",
     "quote_delivery_outbox",
     "quote_delivery_attempts",
+    "quote_delivery_acknowledgements",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -355,6 +357,14 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             DEMO_REVISION_ID,
             "quote_revision_id",
         )
+        direct_quote_delivery_acknowledgements = sensitive_table_rows(
+            env,
+            access_token,
+            "quote_delivery_acknowledgements",
+            "id,acknowledgement_hash,metadata_json",
+            DEMO_REVISION_ID,
+            "quote_revision_id",
+        )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Authenticated RLS smoke: failed ({exc.__class__.__name__})")
         return False
@@ -391,6 +401,8 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             and len(direct_quote_delivery_outbox) == 0
             and isinstance(direct_quote_delivery_attempts, list)
             and len(direct_quote_delivery_attempts) == 0
+            and isinstance(direct_quote_delivery_acknowledgements, list)
+            and len(direct_quote_delivery_acknowledgements) == 0
         )
         print(f"Authenticated direct sensitive table read: {'ok' if direct_sensitive_read_blocked else 'failed'}")
         direct_storage_read_blocked = expect_storage_list_no_direct_visibility(
@@ -578,7 +590,45 @@ def verify_p11_database_guards(cur: Any) -> bool:
         ),
         "Delivery attempt DB guard",
     )
-    return pdf_artifact_guard and delivery_outbox_guard and delivery_attempt_guard
+    delivery_acknowledgement_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_delivery_acknowledgements (
+          company_id, quote_revision_id, quote_send_intent_id, quote_delivery_outbox_id,
+          quote_delivery_attempt_id, quote_pdf_artifact_id, generated_document_id,
+          quote_revision_version, document_hash, snapshot_hash, pdf_artifact_hash,
+          acknowledgement_status, provider_adapter, provider_config_version, adapter_version,
+          acknowledgement_version, acknowledgement_hash, sandbox_delivery_verified,
+          quote_status_changed, quote_status_after, real_email_sent,
+          production_package_triggered, acknowledged_by, metadata_json
+        )
+        values (
+          %s, %s, %s, %s, %s, %s, %s,
+          1, %s, %s, %s,
+          'sandbox_acknowledged', 'sandbox_provider_adapter_v1',
+          'sandbox-provider-config-v1.0.0', 'sandbox-provider-adapter-v1.0.0',
+          'sandbox-acknowledgement-v1.0.0', %s, true,
+          true, 'sent', true, true, %s,
+          '{"acknowledgement": {"raw_payload": "forged"}}'::jsonb
+        )
+        """,
+        (
+            DEMO_COMPANY_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            "a" * 64,
+            "b" * 64,
+            "c" * 64,
+            "d" * 64,
+            DEMO_APPROVED_REVISION_ID,
+        ),
+        "Sandbox acknowledgement DB guard",
+    )
+    return pdf_artifact_guard and delivery_outbox_guard and delivery_attempt_guard and delivery_acknowledgement_guard
 
 
 def verify_approval_consumption_rpc(cur: Any) -> bool:
@@ -628,6 +678,8 @@ def verify_p11_rpc_grants(cur: Any) -> bool:
         "persist_quote_pdf_artifact_with_idempotency",
         "prepare_quote_delivery_outbox_with_idempotency",
         "record_quote_delivery_attempt_with_idempotency",
+        "record_sandbox_quote_delivery_attempt_with_idempotency",
+        "record_sandbox_delivery_acknowledgement_with_idempotency",
         "mark_quote_revision_sent_with_provider_acknowledgement",
     ]
     ok = True
@@ -705,22 +757,35 @@ def verify_p11_schema_guards(cur: Any) -> bool:
             "!~*",
         ],
         "quote_delivery_attempts": [
-            "delivery_attempted",
-            "delivery_failed",
-            "sent",
-            "provider_status = 'provider_missing'::text",
-            "provider_adapter = 'disabled_provider_adapter_v1'::text",
-            "provider_config_version = 'provider-config-boundary-v1.0.0'::text",
-            "adapter_version = 'disabled-provider-adapter-v1.0.0'::text",
+            "sandbox_delivery_attempted",
+            "sandbox_acknowledged",
+            "sandbox_provider_available",
+            "sandbox_provider_adapter_v1",
+            "sandbox-provider-config-v1.0.0",
+            "sandbox-provider-adapter-v1.0.0",
             "provider_message_id IS NULL",
-            "provider_acknowledged = false",
             "email_provider_configured = false",
             "external_delivery_attempted = false",
             "quote_sent = false",
             "sent_at IS NULL",
             "production_package_triggered = false",
             "raw_provider_payload_stored = false",
+            "provider_acknowledged = false",
+            "provider_acknowledged = true",
             "'attempt'::text",
+            "!~*",
+        ],
+        "quote_delivery_acknowledgements": [
+            "acknowledgement_status = 'sandbox_acknowledged'::text",
+            "provider_adapter = 'sandbox_provider_adapter_v1'::text",
+            "provider_config_version = 'sandbox-provider-config-v1.0.0'::text",
+            "adapter_version = 'sandbox-provider-adapter-v1.0.0'::text",
+            "sandbox_delivery_verified = true",
+            "quote_status_changed = false",
+            "quote_status_after = 'approved'::text",
+            "real_email_sent = false",
+            "production_package_triggered = false",
+            "'acknowledgement'::text",
             "!~*",
         ],
     }
@@ -735,6 +800,18 @@ def verify_p11_schema_guards(cur: Any) -> bool:
     unique_ok = cur.fetchone()[0] == 1
     print(f"P12 send-intent uniqueness DB guard: {'ok' if unique_ok else 'failed'}")
     ok = ok and unique_ok
+    cur.execute(
+        """
+        select count(*)
+        from pg_constraint
+        where conrelid = 'public.quote_delivery_acknowledgements'::regclass
+          and contype = 'u'
+          and conkey is not null
+        """
+    )
+    ack_unique_ok = cur.fetchone()[0] >= 2
+    print(f"P13 sandbox acknowledgement uniqueness DB guards: {'ok' if ack_unique_ok else 'failed'}")
+    ok = ok and ack_unique_ok
     for table, markers in expected_constraints.items():
         cur.execute(
             """
@@ -750,7 +827,7 @@ def verify_p11_schema_guards(cur: Any) -> bool:
         )
         defs = "\n".join(row[0] for row in cur.fetchall())
         table_ok = all(marker in defs for marker in markers)
-        print(f"P11/P12 {table} DB guards: {'ok' if table_ok else 'failed'}")
+        print(f"P11/P12/P13 {table} DB guards: {'ok' if table_ok else 'failed'}")
         ok = ok and table_ok
     return ok
 

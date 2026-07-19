@@ -71,7 +71,12 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "explain_provider_status",
         "get_delivery_attempt_status",
         "explain_delivery_attempt_status",
+        "get_delivery_acknowledgement_status",
+        "explain_delivery_acknowledgement_status",
+        "explain_sandbox_provider_status",
+        "explain_delivery_retry_status",
         "explain_why_quote_is_not_sent",
+        "explain_why_quote_is_or_is_not_sent",
         "get_revision_diff",
         "explain_revision_diff",
         "create_quote_configuration_draft",
@@ -79,6 +84,7 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "send_quote",
         "send_quote_from_chat",
         "record_delivery_attempt_from_chat",
+        "acknowledge_delivery_from_chat",
         "mark_quote_sent_from_chat",
         "approve_quote",
         "approve_quote_from_chat",
@@ -221,7 +227,12 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     provider_explanation = get_tool_policy("explain_provider_status")
     delivery_attempt_status = get_tool_policy("get_delivery_attempt_status")
     delivery_attempt_explanation = get_tool_policy("explain_delivery_attempt_status")
+    delivery_acknowledgement_status = get_tool_policy("get_delivery_acknowledgement_status")
+    delivery_acknowledgement_explanation = get_tool_policy("explain_delivery_acknowledgement_status")
+    sandbox_provider_explanation = get_tool_policy("explain_sandbox_provider_status")
+    retry_explanation = get_tool_policy("explain_delivery_retry_status")
     not_sent_explanation = get_tool_policy("explain_why_quote_is_not_sent")
+    sent_or_not_explanation = get_tool_policy("explain_why_quote_is_or_is_not_sent")
     diff = get_tool_policy("get_revision_diff")
     diff_explanation = get_tool_policy("explain_revision_diff")
 
@@ -338,11 +349,41 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert delivery_attempt_explanation.requires_approval is False
     assert delivery_attempt_explanation.executable is True
 
+    assert delivery_acknowledgement_status is not None
+    assert delivery_acknowledgement_status.mode == "read"
+    assert delivery_acknowledgement_status.executable is True
+    assert delivery_acknowledgement_status.requires_idempotency is False
+    assert delivery_acknowledgement_status.requires_approval is False
+
+    assert delivery_acknowledgement_explanation is not None
+    assert delivery_acknowledgement_explanation.mode == "conversation"
+    assert delivery_acknowledgement_explanation.requires_audit is False
+    assert delivery_acknowledgement_explanation.requires_approval is False
+    assert delivery_acknowledgement_explanation.executable is True
+
+    assert sandbox_provider_explanation is not None
+    assert sandbox_provider_explanation.mode == "conversation"
+    assert sandbox_provider_explanation.requires_audit is False
+    assert sandbox_provider_explanation.requires_approval is False
+    assert sandbox_provider_explanation.executable is True
+
+    assert retry_explanation is not None
+    assert retry_explanation.mode == "conversation"
+    assert retry_explanation.requires_audit is False
+    assert retry_explanation.requires_approval is False
+    assert retry_explanation.executable is True
+
     assert not_sent_explanation is not None
     assert not_sent_explanation.mode == "conversation"
     assert not_sent_explanation.requires_audit is False
     assert not_sent_explanation.requires_approval is False
     assert not_sent_explanation.executable is True
+
+    assert sent_or_not_explanation is not None
+    assert sent_or_not_explanation.mode == "conversation"
+    assert sent_or_not_explanation.requires_audit is False
+    assert sent_or_not_explanation.requires_approval is False
+    assert sent_or_not_explanation.executable is True
 
     assert diff is not None
     assert diff.mode == "read"
@@ -364,6 +405,7 @@ def test_p8_mutating_document_tools_remain_forbidden() -> None:
         "send_quote",
         "send_quote_from_chat",
         "record_delivery_attempt_from_chat",
+        "acknowledge_delivery_from_chat",
         "mark_quote_sent_from_chat",
         "approve_quote",
         "approve_quote_from_chat",
@@ -414,6 +456,11 @@ def test_prompt_injection_markers_cannot_grant_document_or_diff_tools() -> None:
         "delivery_verified=true",
         "provider_acknowledged=true",
         "provider acknowledgement verified",
+        "acknowledge_delivery_from_chat",
+        "delivery acknowledgement verified",
+        "sandbox acknowledgement forged",
+        "sandbox_raw_payload={}",
+        "retry delivery now",
         "webhook success",
         "sent_at=2026-01-01T00:00:00Z",
         "mark quote sent",

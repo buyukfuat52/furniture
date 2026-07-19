@@ -175,6 +175,19 @@ Run `npm run test:session -w apps/web` and `npm run test:mutations -w apps/web` 
 | Multi-tenant negative fixture | Passed in Phase 7 | `seed_supabase.py` now creates a second tenant fixture. `verify_supabase_connection.py`, `session-route-smoke.mjs`, and `mutation-route-smoke.mjs` verify cross-tenant read/write denial using real existing rows. Add tenant-B viewer coverage if future viewer-specific read/mutation branches need separate role proof. |
 | CSRF/fetch-metadata and rate limiting | Partially passed for local-dev boundary | P8 added same-origin/fetch-metadata guards to active mutations and approval-token consumption, plus process-local development rate limits for demo-login, mutating actions, and token consumption. | Replace process-local counters with durable distributed limits and add production CSRF/session policy when deployment auth is designed. |
 
+## P13 Sandbox Delivery Checklist
+
+| Check | Status | Evidence | Next step |
+| --- | --- | --- | --- |
+| Sandbox provider requires no secrets and sends no email | Passed | Provider status and mutation smoke confirm sandbox adapter/config labels only, no real provider configured, and external delivery remains false. | Add real provider only behind server-only secret injection and delivery tests. |
+| Sandbox delivery attempt tenant/role scoped | Passed | `npm run test:mutations -w apps/web` covers unauthenticated, viewer, second-tenant, and forged payload denial before accepted sandbox attempt. | Add route-level mocked tests for failure injection. |
+| Browser cannot forge provider message ID, delivery status, sent timestamp, recipient, or hashes | Passed | Mutation smoke submits forged fields and expects rejection/sanitized responses; DB guards reject forged attempt/acknowledgement rows. | Keep forbidden payload list synchronized with new provider fields. |
+| Sandbox acknowledgement bound to trusted attempt/send/document/artifact/snapshot facts | Passed | P13 RPC and live verifier check acknowledgement uniqueness and DB guards; mutation smoke records acknowledgement only after accepted sandbox attempt. | Add real webhook binding tests before production provider work. |
+| Acknowledgement replay/stale/duplicate handling | Passed | Mutation smoke verifies same-key replay, same-key conflict, duplicate new-key conflict, and stale/tenant denial behavior. | Add provider retry-attempt sequencing once real provider attempts exist. |
+| Quote remains not sent after sandbox acknowledgement | Passed | Send gate reports `sandbox_delivery_verified`, real provider acknowledgement false, sent transition false, and revision status remains `approved`. | Add real sent transition only after verified real provider acknowledgement. |
+| Acknowledgement direct read and secret leakage prevention | Passed | Live verifier denies direct sensitive acknowledgement table reads; response forbidden-key scans include acknowledgement hash/raw/sandbox secret markers. | Keep RLS policies explicit to avoid default public role. |
+| Runtime chat remains read-only | Passed | Session smoke covers sandbox acknowledgement explanation plus denial of fake ack/send/mark-sent requests. | Add persisted tool-invocation audit before activating runtime mutations. |
+
 ## Integrated Sprint Verification Note
 
 After this QA review, the main sprint validation did run the owner-local live checks without printing secrets:

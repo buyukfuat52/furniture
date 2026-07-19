@@ -223,7 +223,7 @@ paths:
   /supabase/quote-revisions/{revision_id}/send-gate:
     get:
       summary: Read quote send-gate status
-      description: Returns server-derived send eligibility and blocker metadata for a tenant-scoped quote revision. P11 reports HTML/PDF artifact binding, send-intent preparation, provider-deferred delivery outbox state, and keeps external delivery, quote-sent transition, and production package generation unavailable.
+      description: Returns server-derived send eligibility and blocker metadata for a tenant-scoped quote revision. P13 may report sandbox_delivery_verified after a server-owned sandbox acknowledgement, while real external delivery, quote-sent transition, and production package generation remain unavailable.
       security:
         - bearerAuth: []
       parameters:
@@ -446,7 +446,7 @@ paths:
   /supabase/quote-revisions/{revision_id}/delivery-outbox:
     get:
       summary: List provider-safe delivery outbox records
-      description: Returns sanitized tenant-scoped delivery outbox records. P11 uses a disabled provider adapter, so records show provider-deferred status and never expose provider message IDs, provider responses, recipient email, or secrets.
+      description: Returns sanitized tenant-scoped delivery outbox records. P13 keeps the delivery outbox provider-deferred with a disabled real-provider adapter and never exposes provider message IDs, provider responses, recipient email, or secrets.
       security:
         - bearerAuth: []
       parameters:
@@ -504,7 +504,7 @@ paths:
   /supabase/quote-revisions/{revision_id}/provider-status:
     get:
       summary: Read provider configuration boundary status
-      description: Returns sanitized tenant-scoped provider boundary status. Values indicate whether provider configuration signals exist, but external delivery and quote-sent transition remain disabled until a verified provider acknowledgement workflow is implemented.
+      description: Returns sanitized tenant-scoped provider boundary status. P13 exposes a no-secret sandbox provider adapter and sandbox acknowledgement booleans only. Real external delivery and quote-sent transition remain disabled until a verified real provider acknowledgement workflow is implemented.
       security:
         - bearerAuth: []
       parameters:
@@ -531,7 +531,7 @@ paths:
   /supabase/quote-revisions/{revision_id}/delivery-attempts:
     get:
       summary: List quote delivery attempt ledger records
-      description: Returns sanitized append-only delivery attempt records. P12 records blocked/deferred attempts only and never exposes provider message IDs, raw provider payloads, recipient email, sent timestamps, or secrets.
+      description: Returns sanitized append-only delivery attempt records. P13 can record sandbox delivery attempts and acknowledged sandbox attempts, but never exposes provider message IDs, raw provider payloads, acknowledgement hashes, recipient email, sent timestamps, or secrets.
       security:
         - bearerAuth: []
       parameters:
@@ -558,8 +558,8 @@ paths:
         "404":
           description: Tenant-scoped quote revision was not found.
     post:
-      summary: Record a provider-blocked delivery attempt
-      description: Records or reuses a safe delivery attempt ledger row after approved revision, delivery outbox, send intent, PDF artifact, frozen document, and approval-gate binding. It does not call a provider, does not mark the quote sent, and does not trigger production.
+      summary: Record a sandbox delivery attempt
+      description: Records or reuses a no-secret sandbox provider delivery attempt after approved revision, delivery outbox, send intent, PDF artifact, frozen document, and approval-gate binding. It does not send real email, does not mark the quote sent, and does not trigger production.
       security:
         - bearerAuth: []
       parameters:
@@ -571,7 +571,7 @@ paths:
             type: string
       responses:
         "201":
-          description: Sanitized blocked delivery attempt.
+          description: Sanitized sandbox delivery attempt.
           content:
             application/json:
               schema:
@@ -584,6 +584,67 @@ paths:
           description: Caller role cannot record delivery attempts.
         "409":
           description: Provider boundary, outbox, send-intent, PDF artifact, or approval binding is not ready.
+        "422":
+          description: Request body shape was rejected.
+  /supabase/quote-revisions/{revision_id}/delivery-acknowledgements:
+    get:
+      summary: List sandbox delivery acknowledgements
+      description: Returns sanitized tenant-scoped sandbox acknowledgement records. Responses omit acknowledgement hashes, raw provider payloads, provider secrets, recipient data, storage paths, signed URLs, and sent timestamps.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized delivery acknowledgement list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [delivery_acknowledgements]
+                properties:
+                  delivery_acknowledgements:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/QuoteDeliveryAcknowledgement"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
+  /supabase/delivery-attempts/{delivery_attempt_id}/sandbox-acknowledgement:
+    post:
+      summary: Record server-owned sandbox delivery acknowledgement
+      description: Records a durable sandbox acknowledgement for the current tenant-scoped sandbox delivery attempt. The browser may provide only an idempotency key; acknowledgement state, hashes, provider metadata, recipient, sent_at, and quote status are derived server-side.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: delivery_attempt_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Sanitized sandbox delivery acknowledgement.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [delivery_acknowledgement]
+                properties:
+                  delivery_acknowledgement:
+                    $ref: "#/components/schemas/QuoteDeliveryAcknowledgement"
+        "403":
+          description: Caller role cannot acknowledge sandbox delivery.
+        "404":
+          description: Tenant-scoped delivery attempt was not found.
+        "409":
+          description: Sandbox acknowledgement was replayed, stale, duplicate, or not bound to the current attempt.
         "422":
           description: Request body shape was rejected.
   /revisions/{revision_id}/fork:
@@ -839,11 +900,17 @@ components:
         - latest_send_intent_status
         - latest_delivery_outbox_status
         - latest_delivery_attempt_status
+        - latest_delivery_acknowledgement_status
         - provider_status
         - provider_configured
         - real_delivery_enabled
+        - sandbox_delivery_enabled
+        - sandbox_delivery_verified
         - sent_transition_enabled
         - provider_acknowledgement_verified
+        - sandbox_acknowledgement_verified
+        - quote_status_changed_by_sandbox
+        - quote_status_after_sandbox
         - quote_send_triggered
         - production_package_triggered
         - artifact_status
@@ -857,7 +924,7 @@ components:
           type: string
         status:
           type: string
-          enum: [send_blocked, send_deferred, send_prepared, provider_deferred]
+          enum: [send_blocked, send_deferred, send_prepared, provider_deferred, sandbox_delivery_verified]
         eligible_to_send:
           type: boolean
           const: false
@@ -890,21 +957,36 @@ components:
           enum: [none, provider_deferred, delivery_blocked]
         latest_delivery_attempt_status:
           type: string
-          enum: [none, provider_deferred, blocked_provider_missing]
+          enum: [none, provider_deferred, blocked_provider_missing, sandbox_delivery_attempted, sandbox_acknowledged]
+        latest_delivery_acknowledgement_status:
+          type: string
+          enum: [none, sandbox_acknowledged]
         provider_status:
           type: string
-          enum: [provider_missing, provider_configured_unverified]
+          enum: [provider_missing, provider_configured_unverified, sandbox_provider_available]
         provider_configured:
           type: boolean
         real_delivery_enabled:
           type: boolean
           const: false
+        sandbox_delivery_enabled:
+          type: boolean
+        sandbox_delivery_verified:
+          type: boolean
         sent_transition_enabled:
           type: boolean
           const: false
         provider_acknowledgement_verified:
           type: boolean
           const: false
+        sandbox_acknowledgement_verified:
+          type: boolean
+        quote_status_changed_by_sandbox:
+          type: boolean
+          const: false
+        quote_status_after_sandbox:
+          type: string
+          const: approved
         quote_send_triggered:
           type: boolean
           const: false
@@ -1141,9 +1223,12 @@ components:
         - provider_configured
         - email_provider_configured
         - real_delivery_enabled
+        - sandbox_delivery_enabled
+        - sandbox_delivery_verified
         - sent_transition_enabled
         - provider_acknowledgement_required
         - provider_acknowledgement_verified
+        - sandbox_acknowledgement_verified
         - provider_secret_returned
         - provider_raw_payload_returned
         - provider_message_id_available
@@ -1162,10 +1247,10 @@ components:
           const: true
         provider_status:
           type: string
-          enum: [provider_missing, provider_configured_unverified]
+          enum: [provider_missing, provider_configured_unverified, sandbox_provider_available]
         provider_adapter:
           type: string
-          enum: [disabled_provider_adapter_v1]
+          enum: [disabled_provider_adapter_v1, sandbox_provider_adapter_v1]
         provider_configured:
           type: boolean
         email_provider_configured:
@@ -1174,6 +1259,10 @@ components:
         real_delivery_enabled:
           type: boolean
           const: false
+        sandbox_delivery_enabled:
+          type: boolean
+        sandbox_delivery_verified:
+          type: boolean
         sent_transition_enabled:
           type: boolean
           const: false
@@ -1183,6 +1272,8 @@ components:
         provider_acknowledgement_verified:
           type: boolean
           const: false
+        sandbox_acknowledgement_verified:
+          type: boolean
         provider_secret_returned:
           type: boolean
           const: false
@@ -1198,7 +1289,7 @@ components:
           type: string
         blocked_reason:
           type: string
-          enum: [provider_missing, provider_not_verified]
+          enum: [provider_missing, provider_not_verified, real_provider_deferred]
         deferred_actions:
           type: array
           items:
@@ -1221,6 +1312,9 @@ components:
         - external_delivery_attempted
         - quote_sent
         - provider_acknowledged
+        - sandbox_delivery_verified
+        - quote_status_changed
+        - real_email_sent
         - production_package_triggered
         - attempt_version
         - provider_config_version
@@ -1247,13 +1341,13 @@ components:
           format: uuid
         status:
           type: string
-          enum: [provider_deferred, blocked_provider_missing]
+          enum: [provider_deferred, blocked_provider_missing, sandbox_delivery_attempted, sandbox_acknowledged]
         provider_status:
           type: string
-          enum: [provider_missing, provider_configured_unverified]
+          enum: [provider_missing, provider_configured_unverified, sandbox_provider_available]
         provider_adapter:
           type: string
-          enum: [disabled_provider_adapter_v1]
+          enum: [disabled_provider_adapter_v1, sandbox_provider_adapter_v1]
         recipient_source:
           type: string
           enum: [project_customer, missing_customer_email]
@@ -1270,15 +1364,120 @@ components:
           const: false
         provider_acknowledged:
           type: boolean
+        sandbox_delivery_verified:
+          type: boolean
+        quote_status_changed:
+          type: boolean
+          const: false
+        real_email_sent:
+          type: boolean
           const: false
         production_package_triggered:
           type: boolean
           const: false
         attempt_version:
           type: string
+          enum: [quote-delivery-attempt-v1.0.0, sandbox-delivery-attempt-v1.0.0]
         provider_config_version:
           type: string
+          enum: [provider-config-boundary-v1.0.0, sandbox-provider-config-v1.0.0]
         adapter_version:
+          type: string
+          enum: [disabled-provider-adapter-v1.0.0, sandbox-provider-adapter-v1.0.0]
+        created_at:
+          type: string
+        deferred_actions:
+          type: array
+          items:
+            type: string
+    QuoteDeliveryAcknowledgement:
+      type: object
+      required:
+        - id
+        - revision_id
+        - send_intent_id
+        - delivery_outbox_id
+        - delivery_attempt_id
+        - pdf_artifact_id
+        - generated_document_id
+        - quote_revision_version
+        - document_hash
+        - snapshot_hash
+        - pdf_artifact_hash
+        - acknowledgement_status
+        - provider_adapter
+        - provider_config_version
+        - adapter_version
+        - acknowledgement_version
+        - sandbox_delivery_verified
+        - quote_status_changed
+        - quote_status_after
+        - real_email_sent
+        - production_package_triggered
+        - acknowledged_at
+        - created_at
+        - deferred_actions
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        send_intent_id:
+          type: string
+          format: uuid
+        delivery_outbox_id:
+          type: string
+          format: uuid
+        delivery_attempt_id:
+          type: string
+          format: uuid
+        pdf_artifact_id:
+          type: string
+          format: uuid
+        generated_document_id:
+          type: string
+          format: uuid
+        quote_revision_version:
+          type: integer
+        document_hash:
+          type: string
+        snapshot_hash:
+          type: string
+        pdf_artifact_hash:
+          type: string
+        acknowledgement_status:
+          type: string
+          const: sandbox_acknowledged
+        provider_adapter:
+          type: string
+          const: sandbox_provider_adapter_v1
+        provider_config_version:
+          type: string
+          const: sandbox-provider-config-v1.0.0
+        adapter_version:
+          type: string
+          const: sandbox-provider-adapter-v1.0.0
+        acknowledgement_version:
+          type: string
+          const: sandbox-acknowledgement-v1.0.0
+        sandbox_delivery_verified:
+          type: boolean
+          const: true
+        quote_status_changed:
+          type: boolean
+          const: false
+        quote_status_after:
+          type: string
+          const: approved
+        real_email_sent:
+          type: boolean
+          const: false
+        production_package_triggered:
+          type: boolean
+          const: false
+        acknowledged_at:
           type: string
         created_at:
           type: string

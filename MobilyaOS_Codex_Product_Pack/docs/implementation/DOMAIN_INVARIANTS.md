@@ -170,3 +170,13 @@ Remaining in-memory or mock scope:
 - Demo-only fixtures used for product exploration and sprint validation.
 
 Mock data may support the demo experience, but it must be labeled and handled as non-authoritative. When a domain concern has both mock and Supabase-backed representations, the Supabase-backed backend/domain result wins.
+
+## P13 Sandbox Delivery Invariants
+
+- A sandbox provider adapter is not a real delivery provider. It must not send email, contact external provider infrastructure, require provider secrets, expose provider message IDs, or create production state.
+- A sandbox delivery attempt is valid only when bound server-side to the approved revision, revision version, approved approval gate, frozen document, current stored PDF artifact, send intent, delivery outbox, company, actor, and idempotency reservation.
+- A sandbox delivery acknowledgement is valid only when generated and persisted by the server boundary from trusted attempt/document/artifact/snapshot/provider facts. Browser-submitted acknowledgement status, provider status, message IDs, recipient data, sent timestamps, storage locators, document hashes, artifact hashes, totals, or quote status are never authoritative.
+- Acknowledgement replay must not duplicate side effects. Same scoped idempotency replay may return the same sanitized response; changed payloads, stale attempts, cross-tenant targets, and already-acknowledged attempts with a different idempotency reservation must be rejected.
+- P13 sandbox acknowledgement must not mutate an approved revision to `sent`. The domain-safe state is `approved` plus separate `sandbox_delivery_verified` metadata until a real provider acknowledgement workflow exists.
+- A real sent transition requires real external delivery evidence, verified provider acknowledgement or webhook provenance, server-owned recipient/customer intent, version/hash bindings, audit, and idempotency in one guarded backend command.
+- Runtime agents may explain persisted sandbox delivery facts only. They cannot send, acknowledge, retry delivery, mark sent, create production packages, or calculate authoritative costs/totals.

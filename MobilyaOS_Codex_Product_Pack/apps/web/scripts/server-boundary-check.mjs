@@ -25,14 +25,17 @@ const forbidden = [
   "delivery_status",
   "delivery_verified",
   "provider_acknowledgement",
+  "acknowledgement_hash",
   "raw_provider_payload",
+  "sandbox_raw_payload",
+  "sandbox_ack_secret",
   "sent_at",
   "webhook_secret"
 ];
 
 const riskyRouteMethods = ["PUT", "PATCH", "DELETE"];
 const riskyQuoteRouteMethods = ["POST", ...riskyRouteMethods];
-const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|delivery_status|delivery_verified|provider_acknowledged|provider_acknowledgement|raw_provider_payload|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|provider_message_id|provider_response|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
+const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|delivery_status|delivery_verified|provider_acknowledged|provider_acknowledgement|acknowledgement_hash|raw_provider_payload|sandbox_raw_payload|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|provider_message_id|provider_response|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
 
 function walk(dir) {
   const entries = [];
@@ -373,6 +376,29 @@ for (const marker of [
   requireMarker(p12MigrationText, marker, `P12 migration is missing provider/attempt marker ${marker}`);
 }
 
+const p13MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0014_sandbox_provider_acknowledgements.sql"), "utf8");
+for (const marker of [
+  "quote_delivery_acknowledgements",
+  "tenant quote_delivery_acknowledgements no direct read",
+  "sandbox_provider_adapter_v1",
+  "sandbox_delivery_attempted",
+  "sandbox_acknowledged",
+  "sandbox_delivery_verified = true",
+  "quote_status_changed = false",
+  "quote_status_after = 'approved'",
+  "real_email_sent = false",
+  "production_package_triggered = false",
+  "record_sandbox_quote_delivery_attempt_with_idempotency",
+  "record_sandbox_delivery_acknowledgement_with_idempotency",
+  "quote_sandbox_delivery_attempt_recorded",
+  "quote_sandbox_delivery_acknowledged",
+  "revoke all on function public.record_sandbox_quote_delivery_attempt_with_idempotency",
+  "revoke all on function public.record_sandbox_delivery_acknowledgement_with_idempotency",
+  "to service_role"
+]) {
+  requireMarker(p13MigrationText, marker, `P13 migration is missing sandbox acknowledgement marker ${marker}`);
+}
+
 const mutationRouteChecks = [
   ["app/api/supabase/customers/route.ts", ["GET", "POST"], ["withMutationSession", "create_customer", "appendAuditEntry", "customer_created"]],
   ["app/api/supabase/projects/route.ts", ["GET", "POST"], ["withMutationSession", "create_project", "appendAuditEntry", "project_created"]],
@@ -398,6 +424,8 @@ const mutationRouteChecks = [
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-outbox/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_delivery_outbox", "prepare_quote_delivery_outbox", "listQuoteDeliveryOutbox", "prepareQuoteDeliveryOutbox", "reserveIdempotency", "quote_delivery_outbox_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/provider-status/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_provider_status", "getQuoteProviderStatusForRevision"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-attempts/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_delivery_attempt", "record_quote_delivery_attempt", "listQuoteDeliveryAttempts", "recordQuoteDeliveryAttempt", "reserveIdempotency", "quote_delivery_attempt_recorded", "rejectBrowserAuthority"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-acknowledgements/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_delivery_acknowledgement", "listQuoteDeliveryAcknowledgements"]],
+  ["app/api/supabase/delivery-attempts/[deliveryAttemptId]/sandbox-acknowledgement/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "acknowledge_sandbox_delivery", "acknowledgeSandboxDeliveryAttempt", "reserveIdempotency", "quote_sandbox_delivery_acknowledged", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/approval-tokens/consume/route.ts", ["POST"], ["requireSameOriginMutation", "allowedBodyKeys", "requireApprovalTokenConsumeRateLimit", "consumeApprovalToken", "token_secret_returned", "quote_status_changed", "quote_send_triggered", "production_package_triggered"]],
   ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "listQuoteArtifacts", "listQuoteDeliveryOutbox", "listQuoteDeliveryAttempts", "getQuoteProviderStatusForRevision", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments", "get_pdf_artifact_status", "get_delivery_status", "get_provider_status", "get_delivery_attempt_status", "explain_why_quote_is_not_sent"]]
@@ -422,9 +450,10 @@ for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const p10PostRoute = route.includes("/artifacts/route.ts") || route.includes("/send-intents/route.ts");
   const p11PostRoute = route.includes("/artifacts/pdf/route.ts") || route.includes("/delivery-outbox/route.ts");
   const p12PostRoute = route.includes("/delivery-attempts/route.ts");
+  const p13PostRoute = route.includes("/sandbox-acknowledgement/route.ts");
   const riskyMethods = route.includes("calculate")
     ? ["GET", "PUT", "PATCH", "DELETE"]
-    : p7PostRoute || p10PostRoute || p11PostRoute || p12PostRoute
+    : p7PostRoute || p10PostRoute || p11PostRoute || p12PostRoute || p13PostRoute
       ? ["PUT", "PATCH", "DELETE"]
     : route.includes("snapshot")
       ? riskyQuoteRouteMethods
@@ -606,6 +635,9 @@ for (const marker of [
   "real_delivery_enabled: false",
   "sent_transition_enabled: false",
   "provider_acknowledgement_verified: false",
+  "sandbox_delivery_enabled: true",
+  "sandbox_acknowledgement_verified: false",
+  "sandbox_provider_adapter_v1",
   "disabled_provider_adapter_v1"
 ]) {
   requireMarker(providerConfigText, marker, `provider config boundary is missing ${marker}`);
@@ -617,9 +649,16 @@ requireMarker(recordQuoteDeliveryAttemptBlock, "getQuoteProviderStatus()", "reco
 requireMarker(recordQuoteDeliveryAttemptBlock, "providerStatus.real_delivery_enabled", "recordQuoteDeliveryAttempt must gate real provider delivery");
 requireMarker(recordQuoteDeliveryAttemptBlock, "providerStatus.sent_transition_enabled", "recordQuoteDeliveryAttempt must gate sent transition");
 requireMarker(recordQuoteDeliveryAttemptBlock, "getLatestQuoteDeliveryOutbox(context, revision.id)", "recordQuoteDeliveryAttempt must bind the latest tenant outbox server-side");
-requireMarker(recordQuoteDeliveryAttemptBlock, "rpc/record_quote_delivery_attempt_with_idempotency", "recordQuoteDeliveryAttempt must use the atomic delivery-attempt RPC");
+requireMarker(recordQuoteDeliveryAttemptBlock, "rpc/record_sandbox_quote_delivery_attempt_with_idempotency", "recordQuoteDeliveryAttempt must use the atomic sandbox delivery-attempt RPC");
 requireMarker(recordQuoteDeliveryAttemptBlock, "p_email_provider_configured: false", "recordQuoteDeliveryAttempt must keep provider delivery disabled");
 requireNoRegex(recordQuoteDeliveryAttemptBlock, /\binput\.(status|recipient|recipient_email|email_provider_configured|external_delivery_attempted|quote_sent|provider_status|provider_message_id|provider_acknowledged|delivery_status|delivery_verified|sent_at|raw_provider_payload)\b/i, "recordQuoteDeliveryAttempt must not trust browser delivery/provider fields");
+
+const acknowledgeSandboxDeliveryAttemptBlock = sourceBlock(repositoryText, "acknowledgeSandboxDeliveryAttempt");
+requireMarker(acknowledgeSandboxDeliveryAttemptBlock, "getQuoteDeliveryAttemptById(context, deliveryAttemptId)", "acknowledgeSandboxDeliveryAttempt must resolve attempt server-side");
+requireMarker(acknowledgeSandboxDeliveryAttemptBlock, "buildSandboxAcknowledgementHash", "acknowledgeSandboxDeliveryAttempt must derive ack hash server-side");
+requireMarker(acknowledgeSandboxDeliveryAttemptBlock, "rpc/record_sandbox_delivery_acknowledgement_with_idempotency", "acknowledgeSandboxDeliveryAttempt must use the atomic acknowledgement RPC");
+requireMarker(acknowledgeSandboxDeliveryAttemptBlock, "sandboxProviderAdapter", "acknowledgeSandboxDeliveryAttempt must bind sandbox adapter version");
+requireNoRegex(acknowledgeSandboxDeliveryAttemptBlock, /\binput\.(status|recipient|recipient_email|email_provider_configured|external_delivery_attempted|quote_sent|provider_status|provider_message_id|provider_acknowledged|delivery_status|delivery_verified|sent_at|raw_provider_payload|acknowledgement_hash)\b/i, "acknowledgeSandboxDeliveryAttempt must not trust browser acknowledgement/provider fields");
 
 const quoteStatusPolicyBlock = sourceBlock(repositoryText, "quoteStatusPolicy");
 requireMarker(quoteStatusPolicyBlock, "direct_status_update_allowed: false", "quote status policy must forbid browser direct status writes");

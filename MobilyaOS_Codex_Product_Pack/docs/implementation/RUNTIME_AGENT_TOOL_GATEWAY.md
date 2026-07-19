@@ -131,3 +131,31 @@ Any route that sends, approves, exports official PDFs, releases production artif
 - Phase 7 session smoke verifies that primary and second tenant selector IDs cannot cross the agent route.
 - Future implementation must keep gateway policy server-side and must add tests for tenant isolation, role denial, approval-token consumption denial/replay/stale binding, idempotency replay, prompt injection, malicious tool output, and deterministic-domain calculation ownership.
 - Phase 12 tests now cover malicious prompt-injection wording for provider acknowledgement, webhook success, sent timestamps, and mark-sent attempts; explicit forbidden chat-side approval-consumption/approval/send/delivery/artifact/PDF/calculation/provider-ack/mark-sent tools; read-only artifact/PDF/send-preparation/delivery/provider/delivery-attempt explanations; and no model-side cost, delivery, or quote mutation authority.
+
+## P13 Sandbox Delivery Tool Boundary
+
+Implemented/prepared read-only tools:
+
+- `get_delivery_acknowledgement_status`
+- `explain_delivery_acknowledgement_status`
+- `explain_sandbox_provider_status`
+- `explain_delivery_retry_status`
+- `explain_why_quote_is_or_is_not_sent`
+
+These tools may explain only persisted, server-fetched sandbox provider, delivery-attempt, acknowledgement, retry/replay, send-gate, and not-sent facts. They must not expose acknowledgement hashes, raw payloads, provider internals, storage paths, signed URLs, token material, recipient values, service credentials, database URLs, or internal repository details.
+
+Still forbidden/deferred:
+
+- `send_quote_from_chat`
+- `mark_quote_sent_from_chat`
+- `acknowledge_delivery_from_chat`
+- `record_delivery_attempt_from_chat`
+- `approve_quote_from_chat`
+- `consume_approval_token_from_chat`
+- `generate_pdf_from_chat`
+- `generate_artifact_from_chat`
+- `generate_production_package`
+- `mutate_quote_from_chat`
+- `calculate_authoritative_totals_from_chat`
+
+P13 session and compute tests cover malicious prompts asking the assistant to fake sandbox acknowledgement, replay acknowledgement, mark a quote sent, assert provider acknowledgement, bypass policy, call webhook-like actions, or calculate/send from chat. The accepted behavior is explanation or denial only.

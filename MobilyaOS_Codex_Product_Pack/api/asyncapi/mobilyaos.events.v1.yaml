@@ -23,6 +23,16 @@ channels:
     messages:
       quoteDeliveryAttemptBlocked:
         $ref: "#/components/messages/QuoteDeliveryAttemptBlocked"
+  quoteSandboxDeliveryAttemptRecorded:
+    address: quote.delivery_attempt.sandbox_recorded.v1
+    messages:
+      quoteSandboxDeliveryAttemptRecorded:
+        $ref: "#/components/messages/QuoteSandboxDeliveryAttemptRecorded"
+  quoteSandboxDeliveryAcknowledged:
+    address: quote.delivery_acknowledgement.sandbox_acknowledged.v1
+    messages:
+      quoteSandboxDeliveryAcknowledged:
+        $ref: "#/components/messages/QuoteSandboxDeliveryAcknowledged"
   quoteSent:
     address: quote.sent.v1
     messages:
@@ -37,6 +47,14 @@ operations:
     action: send
     channel:
       $ref: "#/channels/quoteDeliveryAttemptBlocked"
+  publishQuoteSandboxDeliveryAttemptRecorded:
+    action: send
+    channel:
+      $ref: "#/channels/quoteSandboxDeliveryAttemptRecorded"
+  publishQuoteSandboxDeliveryAcknowledged:
+    action: send
+    channel:
+      $ref: "#/channels/quoteSandboxDeliveryAcknowledged"
 components:
   messages:
     ProjectCreated:
@@ -56,9 +74,19 @@ components:
       summary: Provider boundary blocked an external quote delivery attempt; no quote-sent transition or production package is triggered.
       payload:
         $ref: "#/components/schemas/CloudEvent"
+    QuoteSandboxDeliveryAttemptRecorded:
+      name: quote.delivery_attempt.sandbox_recorded.v1
+      summary: No-secret sandbox provider delivery attempt recorded; no real email, quote-sent transition, or production package is triggered.
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
+    QuoteSandboxDeliveryAcknowledged:
+      name: quote.delivery_acknowledgement.sandbox_acknowledged.v1
+      summary: Server-owned sandbox acknowledgement recorded for a delivery attempt; quote status remains approved and real quote-sent transition remains deferred.
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
     QuoteSent:
       name: quote.sent.v1
-      summary: Deferred until a provider acknowledgement workflow can atomically verify attempt success and transition approved quote revisions to sent.
+      summary: Deferred until a real provider acknowledgement workflow can atomically verify external delivery and transition approved quote revisions to sent.
       payload:
         $ref: "#/components/schemas/CloudEvent"
   schemas:

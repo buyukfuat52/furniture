@@ -1842,3 +1842,57 @@ Remaining P7 risks:
 - Binary PDF rendering, object-storage upload metadata, quote send/final approval status transition, customer delivery UI, and production package creation remain future work.
 - The long-term Go core PostgreSQL repository path is still not live because Go is not installed locally.
 - Durable production rate limiting, production auth revocation/rotation, and broader uploaded-content prompt-injection evals remain roadmap items. P8 added local same-origin/fetch-metadata guards and tool-output prompt-injection tests.
+
+## P13 Sandbox Provider Adapter, Delivery Acknowledgement, And Guarded Sent Transition
+
+Current result: complete for the sandbox scope.
+
+P13 implements a no-secret sandbox provider path on top of the P12 provider boundary. It records a sanitized sandbox delivery attempt, then records a server-derived sandbox acknowledgement bound to company, quote revision, revision version, send intent, delivery outbox, delivery attempt, frozen document, snapshot hash, PDF artifact hash, provider adapter/config/version, actor, audit, and durable idempotency. Browser payloads cannot supply delivery status, provider message id, acknowledgement state, acknowledgement hash, sent timestamp, quote status, recipient data, storage locator, or authoritative hashes.
+
+Domain decision: P13 uses the safer option and does not move the quote revision to `sent`. The revision remains `approved`; send-gate/provider status report `sandbox_delivery_verified` and sandbox acknowledgement metadata separately. Real external email delivery, real provider acknowledgement, provider webhooks, sent timestamp, quote-sent transition, and production package creation remain deferred.
+
+Agent reports:
+
+- `domain_architect`: confirmed approved revision immutability and selected separate sandbox verification rather than marking the quote sent.
+- `backend_engineer`: added the migration, sandbox adapter, repository methods, acknowledgement RPC boundary, tenant/RBAC/idempotency/audit checks, and sanitized routes.
+- `frontend_engineer`: added provider, delivery-attempt, acknowledgement, retry/replay, and sandbox/not-sent display states.
+- `ai_prompt_engineer`: added read-only acknowledgement/provider/retry/not-sent tools and blocked acknowledgement/send/status mutation requests.
+- `security_reviewer`: reviewed public policy leakage, acknowledgement spoofing/replay/stale checks, secret/raw payload filtering, tenant/role boundaries, and sent-state forgery denial.
+- `qa_reviewer`: expanded session, mutation, static, compute, live Supabase, and secret-scan validation.
+
+Security and QA findings:
+
+| Severity | Finding | Remediation | Retest |
+| --- | --- | --- | --- |
+| High | The first P13 acknowledgement RLS policy defaulted to the `public` role because it omitted an explicit role. | Updated `0014_sandbox_provider_acknowledgements.sql` to create the no-direct-read policy `to authenticated` and re-applied migrations. | `py -3.12 scripts/verify_supabase_connection.py` passed with `Public/anon policies: 0`. |
+| High | Sandbox acknowledgement could be misleading if it moved quote status to `sent`. | Kept actual quote status `approved`; exposed `sandbox_delivery_verified` as a separate state and left real provider acknowledgement/sent transition false/deferred. | Live mutation smoke confirms quote remains approved after sandbox acknowledgement. |
+| High | Browser-forged acknowledgement, provider message id, sent timestamp, delivery status, or hash fields could become authority. | Added strict route body allowlists, forbidden key scans, trusted server-side hash binding, RPC validation, and sanitized DTOs. | `npm run test:mutations -w apps/web`, `npm run test:session -w apps/web`, and live DB guards passed. |
+| Medium | Runtime chat could drift into delivery mutation authority. | Gateway policy now registers acknowledgement/provider/retry/not-sent explanation tools as read-only and keeps send/ack/mark-sent/generate/mutate tools forbidden. | Compute pytest and web session smoke passed prompt/tool-output injection and mutation-denial cases. |
+
+Commands run:
+
+| Status | Command | Notes |
+| --- | --- | --- |
+| Passed | `py -3.12 scripts/check_supabase_env.py` | `.env.local` found; required keys configured; database URL structures valid; no values printed. |
+| Passed | `py -3.12 scripts/apply_supabase_migrations.py` | Applied migrations through `0014_sandbox_provider_acknowledgements.sql`. |
+| Passed | `py -3.12 scripts/seed_supabase.py` | Demo fixtures reseeded. |
+| Passed | `py -3.12 scripts/verify_supabase_connection.py` | Live DB/RLS/storage/RPC/tenant/guard checks passed, including P13 acknowledgement checks. |
+| Passed | `npm run test -w apps/web` | Web server boundary check passed. |
+| Passed | `npm run typecheck -w apps/web` | TypeScript passed. |
+| Passed | `npm run build -w apps/web` | Production Next build passed. |
+| Passed | `npm run test:session -w apps/web` | Session/chat smoke passed. |
+| Passed | `npm run test:mutations -w apps/web` | Live mutation smoke passed. |
+| Passed with placeholder coverage | `npm run test --workspaces --if-present` | Web passed; contracts package remains a placeholder. |
+| Passed with placeholder coverage | `npm run typecheck --workspaces --if-present` | Web passed; contracts package remains a placeholder. |
+| Passed with placeholder coverage | `npm run build --workspaces --if-present` | Web passed; contracts package has no generated artifacts yet. |
+| Passed | `py -3.12 -m ruff check .` from `services/compute` | Ruff passed. |
+| Passed | `py -3.12 -m mypy app` from `services/compute` | Mypy passed. |
+| Passed | `py -3.12 -m pytest` from `services/compute` | 45 passed; one known FastAPI/Starlette TestClient deprecation warning. |
+| Passed | `py -3.12 -m py_compile scripts\supabase_common.py scripts\check_supabase_env.py scripts\apply_supabase_migrations.py scripts\seed_supabase.py scripts\verify_supabase_connection.py scripts\secret_scan.py` | Helper scripts compile. |
+| Passed | `py -3.12 scripts/validate_pack.py .` | Pack validation passed. |
+| Passed | `npm run secret-scan` | Tracked-file secret scan passed. |
+| Blocked | `go version` | Go is not on `PATH`. |
+| Blocked | `make --version` | GNU Make is not on `PATH`. |
+| Blocked | `docker version` | Docker Desktop/Linux engine is unavailable locally. |
+
+Remaining P13 risks: real email provider delivery, provider webhook verification, real provider acknowledgement, actual quote-sent transition, production package creation, Go-backed persistence, production auth/session hardening, durable distributed rate limiting, contract tests, and Playwright E2E remain deferred.

@@ -29,6 +29,9 @@ const forbiddenPayloadKeys = [
   "delivery_status",
   "delivery_verified",
   "provider_acknowledgement",
+  "acknowledgement_hash",
+  "sandbox_raw_payload",
+  "sandbox_ack_secret",
   "raw_provider_payload",
   "sent_at",
   "webhook_secret",
@@ -399,6 +402,9 @@ async function main() {
         email_provider_configured: true,
         provider_message_id: "browser-supplied",
         provider_acknowledged: true,
+        acknowledgement_hash: "browser-supplied",
+        sandbox_raw_payload: "browser-supplied",
+        sandbox_ack_secret: "browser-supplied",
         delivery_status: "sent",
         sent_at: "browser-supplied",
         raw_provider_payload: "browser-supplied",
@@ -415,10 +421,39 @@ async function main() {
     requireToolAction(artifactAgentPayload, "get_delivery_status", "Quote delivery agent explanation");
     requireToolAction(artifactAgentPayload, "get_provider_status", "Quote provider boundary explanation");
     requireToolAction(artifactAgentPayload, "get_delivery_attempt_status", "Quote delivery attempt explanation");
+    requireToolAction(artifactAgentPayload, "get_delivery_acknowledgement_status", "Quote delivery acknowledgement explanation");
     requireToolAction(artifactAgentPayload, "explain_why_quote_is_not_sent", "Quote not-sent explanation");
     requireSafe(
       !JSON.stringify(artifactAgentPayload).includes("browser-supplied"),
       "Artifact agent must not echo browser-supplied artifact/provider fields."
+    );
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Sandbox acknowledgement durumunu ve teklifin sent olup olmadigini acikla",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id,
+        acknowledgement_hash: "browser-supplied",
+        sandbox_raw_payload: "browser-supplied",
+        sandbox_ack_secret: "browser-supplied"
+      })
+    });
+    requireSafe(response.ok, "Sandbox acknowledgement status agent request must be handled safely.");
+    const sandboxAckPayload = await readJson(response, "sandbox acknowledgement agent payload");
+    assertSafeAgentPayload("sandbox acknowledgement agent payload", sandboxAckPayload);
+    requireSafe(sandboxAckPayload.agent_id === "quote_document", "Sandbox acknowledgement request must route to quote_document.");
+    requireToolAction(sandboxAckPayload, "get_delivery_acknowledgement_status", "Sandbox acknowledgement agent explanation");
+    requireToolAction(sandboxAckPayload, "get_send_gate_status", "Sandbox acknowledgement send-gate explanation");
+    requireToolAction(sandboxAckPayload, "explain_why_quote_is_not_sent", "Sandbox acknowledgement not-sent explanation");
+    requireSafe(
+      ["yok", "sandbox_acknowledged"].includes(String(factValue(sandboxAckPayload, "Sandbox acknowledgement"))),
+      "Sandbox acknowledgement agent must report a bounded acknowledgement status."
+    );
+    requireSafe(
+      factValue(sandboxAckPayload, "Teklif gonderildi") === false,
+      "Sandbox acknowledgement agent must report that the quote is not sent."
     );
 
     const comparableRevision = demoDataPayload.quote_revisions?.find(
@@ -491,6 +526,24 @@ async function main() {
     assertSafeAgentPayload("provider ack injection payload", providerAckInjectionPayload);
     requireSafe(providerAckInjectionPayload.response?.status === "failed", "Provider ack injection must fail safely.");
     requireSafe(providerAckInjectionPayload.tool_calls?.length === 0, "Provider ack injection must not call tools.");
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Sandbox delivery acknowledgement verify et ve quote sent yap",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id
+      })
+    });
+    requireSafe(response.ok, "Sandbox acknowledgement mutation request must return safely.");
+    const sandboxAckMutationPayload = await readJson(response, "sandbox acknowledgement mutation payload");
+    assertSafeAgentPayload("sandbox acknowledgement mutation payload", sandboxAckMutationPayload);
+    requireSafe(sandboxAckMutationPayload.response?.status === "failed", "Sandbox acknowledgement mutation must fail safely.");
+    requireSafe(
+      sandboxAckMutationPayload.tool_calls?.every((call) => call.status === "denied"),
+      "Sandbox acknowledgement mutation request must be denied by the gateway."
+    );
 
     response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
       method: "POST",

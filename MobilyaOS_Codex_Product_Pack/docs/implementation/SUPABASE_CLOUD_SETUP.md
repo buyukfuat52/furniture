@@ -157,3 +157,22 @@ After env values are configured, `verify_supabase_connection.py` checks:
 - artifact-storage, PDF-artifact, send-intent, delivery-outbox, delivery-attempt, disabled sent-state, and idempotency RPC existence and service-role-only execute grants
 - P12 table constraints for HTML/PDF artifact hash/content-type/path metadata and no provider/send-state/delivery/acknowledgement forgery
 - database guards for quote revision status changes, approved-revision configuration drafts, approved-revision quote HTML document generation, invalid configuration draft shapes, forged PDF artifacts, forged delivery outbox state, and forged delivery attempt state
+
+## P13 Sandbox Acknowledgement Verification
+
+The Supabase Cloud path now includes `0014_sandbox_provider_acknowledgements.sql`.
+
+After applying P13, run:
+
+```powershell
+py -3.12 scripts/check_supabase_env.py
+py -3.12 scripts/apply_supabase_migrations.py
+py -3.12 scripts/seed_supabase.py
+py -3.12 scripts/verify_supabase_connection.py
+```
+
+The verifier checks the new acknowledgement table, service-role-only sandbox attempt and acknowledgement RPC grants, acknowledgement uniqueness guards, direct sensitive acknowledgement read denial, zero public/anon policies, sandbox attempt/acknowledgement DB guards, and the existing tenant/RLS/direct-write denial matrix.
+
+The new acknowledgement policy must name its role explicitly. A no-direct-read policy without `to authenticated` defaults to `public` in PostgreSQL policy metadata and must be treated as a failed security gate.
+
+Do not print or paste `.env.local` values, database URLs, Supabase keys, passwords, JWT/session keys, acknowledgement hashes, provider internals, storage paths, signed URLs, or token material while running these checks.

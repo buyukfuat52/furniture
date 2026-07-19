@@ -276,8 +276,18 @@ Large-scale backend/frontend application coding must not start until:
 
 ## Next Phase Plan
 
-1. Add a real provider adapter behind the P12 boundary using server-only injected secrets, fake/sandbox provider tests, outbound payload redaction, durable retry policy, and provider acknowledgement verification before enabling any external delivery.
-2. Implement the guarded sent-state transition only after a verified provider acknowledgement is persisted and atomically bound to the approved revision, artifact, send intent, delivery outbox, delivery attempt, actor/customer intent, audit, and idempotency scope.
+1. Add a real provider adapter behind the P13 boundary using server-only injected secrets, outbound payload redaction, durable retry policy, real provider acknowledgement verification, and webhook replay protection before enabling any external delivery.
+2. Implement the guarded real sent-state transition only after a verified real provider acknowledgement is persisted and atomically bound to the approved revision, artifact, send intent, delivery outbox, delivery attempt, actor/customer intent, audit, and idempotency scope.
 3. Add provider webhook consumption as a separate no-secret, idempotent, tenant-scoped boundary with replay/forgery tests before trusting webhook state.
-4. Move the P6-P12 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
+4. Move the P6-P13 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
 5. Add durable distributed CSRF/rate limiting, production session revocation/rotation, persisted tool invocation audit records, provider delivery observability, and CI-hosted Supabase verification.
+
+## P13 Decisions
+
+- The sandbox provider adapter is explicit, no-secret, non-production, and has no external network or email side effect.
+- Sandbox delivery attempts can be recorded only after the approved revision, approval gate, frozen document, stored PDF artifact, send intent, delivery outbox, revision version, tenant scope, writer role, and durable idempotency gates pass.
+- Sandbox acknowledgements are server-derived and bound to the delivery attempt, send intent, delivery outbox, quote revision version, document hash, snapshot hash, PDF artifact hash, provider adapter/config/version, company, actor, and idempotency record.
+- Acknowledgement replay is idempotent only for the same scoped request; duplicate or stale acknowledgement attempts with different idempotency material are rejected.
+- P13 intentionally does not set `quote_revisions.status = 'sent'`. A sandbox acknowledgement proves only sandbox delivery verification, so the quote remains `approved` and `sandbox_delivery_verified` is reported as separate metadata.
+- Real email delivery, provider webhooks, verified real provider acknowledgement, real sent-state transition, and production package generation remain deferred.
+- Runtime agent/chat remains read-only. It may explain sandbox provider, delivery-attempt, delivery-acknowledgement, retry/replay, and not-sent facts, but it cannot send quotes, acknowledge delivery, mark quotes sent, generate PDFs, approve quotes, consume tokens, or calculate authoritative totals.

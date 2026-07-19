@@ -84,10 +84,46 @@ Remaining application gaps:
 - The Supabase-backed deterministic wardrobe BOM/cost/document/fork/diff lifecycle is implemented for one narrow slice only.
 - Idempotency is now durable for the current Supabase-backed draft, snapshot, document, fork, and approval-gate routes. The P6/P7 RPC-backed lifecycle routes persist domain state, audit, and idempotency completion in database commands after the idempotency reservation; earlier draft routes still use separate REST write/audit steps.
 - Supabase quote status policy is descriptive/read-only for browsers and direct table writes. The only P9 active status transition is draft-to-approved inside the service-role approval-token consumption RPC after all version/hash/expiry/replay gates pass. Approved/sent revisions remain immutable, and database triggers reject direct quote revision status changes and new quote HTML documents for non-draft revisions.
-- Compute calculation contracts remain scaffolding only. The P6/P7/P9/P10/P11/P12 Next.js/Supabase routes produce the first authoritative persisted wardrobe BOM/cost snapshot, frozen HTML quote, fork, diff, customer approval finalization, stored HTML/PDF artifacts, send-intent preparation, provider-deferred delivery outbox, provider configuration boundary, blocked delivery attempt ledger, and send-gate status slice; broader products, tax policy, external quote send, sent transition, nesting, and production quantities remain deferred.
+- Compute calculation contracts remain scaffolding only. The P6/P7/P9/P10/P11/P12/P13 Next.js/Supabase routes produce the first authoritative persisted wardrobe BOM/cost snapshot, frozen HTML quote, fork, diff, customer approval finalization, stored HTML/PDF artifacts, send-intent preparation, provider-deferred delivery outbox, provider configuration boundary, sandbox delivery attempt ledger, sandbox acknowledgement state, and send-gate status slice; broader products, tax policy, real external quote send, sent transition, nesting, and production quantities remain deferred.
 - Go core remains in-memory and could not be test-run locally because Go is not on `PATH`.
 - Demo web session is local-development only and does not yet include production revocation, rotation, device management, or rate limiting.
 - CSRF/fetch-metadata and rate limiting remain documented hardening work; Phase 7 did not implement these runtime controls.
 - The web chat UI now uses a same-origin server route backed by Supabase session scope for read-only project/revision/configuration/snapshot/document/diff explanations. Compute agent adapters still use deterministic demo data for direct compute tests, and unsafe runtime tool execution is not activated.
+
+## P13 Sandbox Provider Adapter, Delivery Acknowledgement, And Guarded Sent Boundary
+
+Current result: complete for the sandbox scope. P13 adds a no-secret sandbox provider adapter path, a durable tenant-scoped sandbox delivery acknowledgement model, replay/stale/duplicate guards, sanitized acknowledgement reads, updated send-gate/provider status, and read-only chat explanations for sandbox acknowledgement state.
+
+The safer sent-state option was selected: verified sandbox acknowledgement does not set `quote_revisions.status = 'sent'`. The approved revision remains `approved`; the application reports `sandbox_delivery_verified` separately while real provider acknowledgement, real external delivery, sent timestamp, quote-send transition, and production package creation remain false/deferred.
+
+Live verification passed after correcting the new acknowledgement RLS policy to target `authenticated` explicitly. The verifier now reports zero public/anon policies and validates the P13 acknowledgement table, RPC grants, uniqueness, direct sensitive-read denial, sandbox acknowledgement DB guards, tenant isolation, and direct write denial checks.
+
+P13 command results:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required keys configured; database URL structures valid; no values printed. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0014_sandbox_provider_acknowledgements.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo tenant fixtures reseeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live DB/RLS/storage/RPC/guard checks passed, including P13 acknowledgement guards. |
+| `npm run test -w apps/web` | Passed | Server boundary/static checks passed. |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript passed. |
+| `npm run build -w apps/web` | Passed | Next production build includes the P13 routes. |
+| `npm run test:session -w apps/web` | Passed | Read-only chat/session smoke passed with sandbox acknowledgement explanation and mutation denial. |
+| `npm run test:mutations -w apps/web` | Passed | Live mutation smoke passed sandbox attempt, acknowledgement, replay/conflict, tenant/role denial, audit, and not-sent checks. |
+| `npm run test --workspaces --if-present` | Passed with placeholder coverage | Web static check passed; contracts package still reports a placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed with placeholder coverage | Web typecheck passed; contracts package still reports a placeholder. |
+| `npm run build --workspaces --if-present` | Passed with placeholder coverage | Web build passed; contracts package has no generated artifacts yet. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Ruff passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Mypy passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 45 passed, 1 known FastAPI/Starlette TestClient deprecation warning. |
+| `py -3.12 -m py_compile ...` | Passed | Supabase and secret-scan helper scripts compile. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| `npm run secret-scan` | Passed | Tracked-file secret scan passed; `.env.local` is not tracked. |
+| `go version` | Blocked | Go is not on `PATH`. |
+| `make --version` | Blocked | GNU Make is not on `PATH`. |
+| `docker version` | Blocked | Docker Desktop/Linux engine is unavailable locally. |
+
+Remaining P13 risks: real provider delivery, real provider acknowledgement/webhooks, real `sent` transition, production package generation, Go-backed persistence, production auth/session hardening, durable distributed rate limiting, and real contract tests remain deferred.
 
 Detailed phase history lives in `docs/implementation/STATUS.md`.

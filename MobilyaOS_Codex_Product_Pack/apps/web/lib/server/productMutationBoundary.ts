@@ -28,6 +28,8 @@ export type PlannedMutationKind =
   | "read_provider_status"
   | "read_quote_delivery_attempt"
   | "record_quote_delivery_attempt"
+  | "read_quote_delivery_acknowledgement"
+  | "acknowledge_sandbox_delivery"
   | "read_quote_revision"
   | "list_project_quote_revisions"
   | "append_audit_entry"
@@ -58,6 +60,7 @@ const activeMutationKinds = new Set<PlannedMutationKind>([
   "prepare_quote_send_intent",
   "prepare_quote_delivery_outbox",
   "record_quote_delivery_attempt",
+  "acknowledge_sandbox_delivery",
   "fork_quote_revision"
 ]);
 
@@ -89,7 +92,8 @@ export function planProductMutationBoundary(
     kind === "read_quote_send_intent" ||
     kind === "read_quote_delivery_outbox" ||
     kind === "read_provider_status" ||
-    kind === "read_quote_delivery_attempt"
+    kind === "read_quote_delivery_attempt" ||
+    kind === "read_quote_delivery_acknowledgement"
   ) {
     return {
       kind,
@@ -105,8 +109,8 @@ export function planProductMutationBoundary(
       allowed: writerRoles.has(scope.role),
       status: writerRoles.has(scope.role) ? "allowed_mutation" : "denied",
       reason: writerRoles.has(scope.role)
-        ? "Reviewed draft/artifact/PDF/outbox/delivery-attempt/send-intent mutation may proceed through tenant-scoped repository methods."
-        : "Viewer and non-writer roles cannot create customer, project, quote draft, quote configuration draft, quote calculation snapshot, frozen document, stored artifact, PDF artifact, delivery outbox, delivery-attempt, send-intent, or fork records."
+        ? "Reviewed draft/artifact/PDF/outbox/delivery-attempt/sandbox-acknowledgement/send-intent mutation may proceed through tenant-scoped repository methods."
+        : "Viewer and non-writer roles cannot create customer, project, quote draft, quote configuration draft, quote calculation snapshot, frozen document, stored artifact, PDF artifact, delivery outbox, delivery-attempt, sandbox acknowledgement, send-intent, or fork records."
     };
   }
 
