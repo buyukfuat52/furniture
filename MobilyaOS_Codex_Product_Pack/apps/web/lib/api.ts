@@ -300,6 +300,7 @@ export type SupabaseSendGateStatus = {
   eligible_to_send: false;
   eligible_to_prepare_send: boolean;
   eligible_to_prepare_delivery: boolean;
+  eligible_to_record_delivery_attempt: boolean;
   approved_revision: boolean;
   frozen_document_bound: boolean;
   document_hash_bound: boolean;
@@ -309,7 +310,12 @@ export type SupabaseSendGateStatus = {
   email_provider_configured: false;
   latest_send_intent_status: "none" | "send_prepared" | "send_deferred" | "send_blocked";
   latest_delivery_outbox_status: "none" | "provider_deferred" | "delivery_blocked";
-  provider_status: "provider_missing";
+  latest_delivery_attempt_status: "none" | "provider_deferred" | "blocked_provider_missing";
+  provider_status: "provider_missing" | "provider_configured_unverified";
+  provider_configured: boolean;
+  real_delivery_enabled: false;
+  sent_transition_enabled: false;
+  provider_acknowledgement_verified: false;
   quote_send_triggered: false;
   production_package_triggered: false;
   artifact_status: "html_storage_missing" | "html_stored_pdf_deferred" | "html_and_pdf_stored";
@@ -351,6 +357,51 @@ export type SupabaseQuoteDeliveryOutbox = {
   production_package_triggered: false;
   delivery_version: string;
   provider_adapter: "disabled_provider_adapter_v1";
+  created_at: string;
+  deferred_actions: string[];
+};
+
+export type SupabaseQuoteProviderStatus = {
+  revision_id: string;
+  quote_status: string;
+  tenant_scoped: true;
+  provider_status: "provider_missing" | "provider_configured_unverified";
+  provider_adapter: "disabled_provider_adapter_v1";
+  provider_configured: boolean;
+  email_provider_configured: false;
+  real_delivery_enabled: false;
+  sent_transition_enabled: false;
+  provider_acknowledgement_required: true;
+  provider_acknowledgement_verified: false;
+  provider_secret_returned: false;
+  provider_raw_payload_returned: false;
+  provider_message_id_available: false;
+  provider_config_version: "provider-config-boundary-v1.0.0";
+  adapter_version: "disabled-provider-adapter-v1.0.0";
+  blocked_reason: "provider_missing" | "provider_not_verified";
+  deferred_actions: string[];
+};
+
+export type SupabaseQuoteDeliveryAttempt = {
+  id: string;
+  revision_id: string;
+  send_intent_id: string;
+  delivery_outbox_id: string;
+  pdf_artifact_id: string;
+  generated_document_id: string;
+  status: "provider_deferred" | "blocked_provider_missing";
+  provider_status: "provider_missing" | "provider_configured_unverified";
+  provider_adapter: "disabled_provider_adapter_v1";
+  recipient_source: "project_customer" | "missing_customer_email";
+  recipient_available: boolean;
+  email_provider_configured: false;
+  external_delivery_attempted: false;
+  quote_sent: false;
+  provider_acknowledged: false;
+  production_package_triggered: false;
+  attempt_version: "quote-delivery-attempt-v1.0.0";
+  provider_config_version: "provider-config-boundary-v1.0.0";
+  adapter_version: "disabled-provider-adapter-v1.0.0";
   created_at: string;
   deferred_actions: string[];
 };

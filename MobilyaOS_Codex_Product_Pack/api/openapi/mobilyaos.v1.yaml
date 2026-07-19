@@ -501,6 +501,91 @@ paths:
           description: Approved revision, send intent, or PDF artifact binding is not ready.
         "422":
           description: Request body shape was rejected.
+  /supabase/quote-revisions/{revision_id}/provider-status:
+    get:
+      summary: Read provider configuration boundary status
+      description: Returns sanitized tenant-scoped provider boundary status. Values indicate whether provider configuration signals exist, but external delivery and quote-sent transition remain disabled until a verified provider acknowledgement workflow is implemented.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized provider status.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [provider_status]
+                properties:
+                  provider_status:
+                    $ref: "#/components/schemas/QuoteProviderStatus"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
+  /supabase/quote-revisions/{revision_id}/delivery-attempts:
+    get:
+      summary: List quote delivery attempt ledger records
+      description: Returns sanitized append-only delivery attempt records. P12 records blocked/deferred attempts only and never exposes provider message IDs, raw provider payloads, recipient email, sent timestamps, or secrets.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized delivery attempt list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [delivery_attempts]
+                properties:
+                  delivery_attempts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/QuoteDeliveryAttempt"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
+    post:
+      summary: Record a provider-blocked delivery attempt
+      description: Records or reuses a safe delivery attempt ledger row after approved revision, delivery outbox, send intent, PDF artifact, frozen document, and approval-gate binding. It does not call a provider, does not mark the quote sent, and does not trigger production.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Sanitized blocked delivery attempt.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [delivery_attempt]
+                properties:
+                  delivery_attempt:
+                    $ref: "#/components/schemas/QuoteDeliveryAttempt"
+        "403":
+          description: Caller role cannot record delivery attempts.
+        "409":
+          description: Provider boundary, outbox, send-intent, PDF artifact, or approval binding is not ready.
+        "422":
+          description: Request body shape was rejected.
   /revisions/{revision_id}/fork:
     post:
       summary: Fork a quote revision and apply deterministic config patch
@@ -743,6 +828,7 @@ components:
         - eligible_to_send
         - eligible_to_prepare_send
         - eligible_to_prepare_delivery
+        - eligible_to_record_delivery_attempt
         - approved_revision
         - frozen_document_bound
         - document_hash_bound
@@ -752,7 +838,12 @@ components:
         - email_provider_configured
         - latest_send_intent_status
         - latest_delivery_outbox_status
+        - latest_delivery_attempt_status
         - provider_status
+        - provider_configured
+        - real_delivery_enabled
+        - sent_transition_enabled
+        - provider_acknowledgement_verified
         - quote_send_triggered
         - production_package_triggered
         - artifact_status
@@ -773,6 +864,8 @@ components:
         eligible_to_prepare_send:
           type: boolean
         eligible_to_prepare_delivery:
+          type: boolean
+        eligible_to_record_delivery_attempt:
           type: boolean
         approved_revision:
           type: boolean
@@ -795,9 +888,23 @@ components:
         latest_delivery_outbox_status:
           type: string
           enum: [none, provider_deferred, delivery_blocked]
+        latest_delivery_attempt_status:
+          type: string
+          enum: [none, provider_deferred, blocked_provider_missing]
         provider_status:
           type: string
-          enum: [provider_missing]
+          enum: [provider_missing, provider_configured_unverified]
+        provider_configured:
+          type: boolean
+        real_delivery_enabled:
+          type: boolean
+          const: false
+        sent_transition_enabled:
+          type: boolean
+          const: false
+        provider_acknowledgement_verified:
+          type: boolean
+          const: false
         quote_send_triggered:
           type: boolean
           const: false
@@ -1017,6 +1124,162 @@ components:
         provider_adapter:
           type: string
           enum: [disabled_provider_adapter_v1]
+        created_at:
+          type: string
+        deferred_actions:
+          type: array
+          items:
+            type: string
+    QuoteProviderStatus:
+      type: object
+      required:
+        - revision_id
+        - quote_status
+        - tenant_scoped
+        - provider_status
+        - provider_adapter
+        - provider_configured
+        - email_provider_configured
+        - real_delivery_enabled
+        - sent_transition_enabled
+        - provider_acknowledgement_required
+        - provider_acknowledgement_verified
+        - provider_secret_returned
+        - provider_raw_payload_returned
+        - provider_message_id_available
+        - provider_config_version
+        - adapter_version
+        - blocked_reason
+        - deferred_actions
+      properties:
+        revision_id:
+          type: string
+          format: uuid
+        quote_status:
+          type: string
+        tenant_scoped:
+          type: boolean
+          const: true
+        provider_status:
+          type: string
+          enum: [provider_missing, provider_configured_unverified]
+        provider_adapter:
+          type: string
+          enum: [disabled_provider_adapter_v1]
+        provider_configured:
+          type: boolean
+        email_provider_configured:
+          type: boolean
+          const: false
+        real_delivery_enabled:
+          type: boolean
+          const: false
+        sent_transition_enabled:
+          type: boolean
+          const: false
+        provider_acknowledgement_required:
+          type: boolean
+          const: true
+        provider_acknowledgement_verified:
+          type: boolean
+          const: false
+        provider_secret_returned:
+          type: boolean
+          const: false
+        provider_raw_payload_returned:
+          type: boolean
+          const: false
+        provider_message_id_available:
+          type: boolean
+          const: false
+        provider_config_version:
+          type: string
+        adapter_version:
+          type: string
+        blocked_reason:
+          type: string
+          enum: [provider_missing, provider_not_verified]
+        deferred_actions:
+          type: array
+          items:
+            type: string
+    QuoteDeliveryAttempt:
+      type: object
+      required:
+        - id
+        - revision_id
+        - send_intent_id
+        - delivery_outbox_id
+        - pdf_artifact_id
+        - generated_document_id
+        - status
+        - provider_status
+        - provider_adapter
+        - recipient_source
+        - recipient_available
+        - email_provider_configured
+        - external_delivery_attempted
+        - quote_sent
+        - provider_acknowledged
+        - production_package_triggered
+        - attempt_version
+        - provider_config_version
+        - adapter_version
+        - deferred_actions
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        send_intent_id:
+          type: string
+          format: uuid
+        delivery_outbox_id:
+          type: string
+          format: uuid
+        pdf_artifact_id:
+          type: string
+          format: uuid
+        generated_document_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [provider_deferred, blocked_provider_missing]
+        provider_status:
+          type: string
+          enum: [provider_missing, provider_configured_unverified]
+        provider_adapter:
+          type: string
+          enum: [disabled_provider_adapter_v1]
+        recipient_source:
+          type: string
+          enum: [project_customer, missing_customer_email]
+        recipient_available:
+          type: boolean
+        email_provider_configured:
+          type: boolean
+          const: false
+        external_delivery_attempted:
+          type: boolean
+          const: false
+        quote_sent:
+          type: boolean
+          const: false
+        provider_acknowledged:
+          type: boolean
+          const: false
+        production_package_triggered:
+          type: boolean
+          const: false
+        attempt_version:
+          type: string
+        provider_config_version:
+          type: string
+        adapter_version:
+          type: string
         created_at:
           type: string
         deferred_actions:

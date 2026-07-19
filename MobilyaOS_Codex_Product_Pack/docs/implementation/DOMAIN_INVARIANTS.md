@@ -79,6 +79,8 @@ Route-specific invariants:
 - Read/download quote artifact: metadata reads and downloads are tenant-scoped server routes. Download must fetch HTML or PDF bytes with server credentials, verify SHA-256 before returning content, use no-store/nosniff/sandboxed headers, and never expose object-storage locators or signed URL internals.
 - Prepare send intent: `sales` or `admin` only. Requires approved revision, approved approval gate, frozen document binding, stored HTML artifact binding, current revision version, and durable idempotency. Recipient availability is derived server-side. Until a safe email provider exists, the command must keep external delivery disabled, quote status unchanged, and production package creation disabled.
 - Prepare delivery outbox: `sales` or `admin` only. Requires approved revision, approved approval gate, frozen document binding, stored PDF artifact binding, safe send-intent binding, current revision version, and durable idempotency. In P11 the only configured adapter is `disabled_provider_adapter_v1`; it must keep provider message id null, external delivery disabled, quote status unchanged, and production package creation disabled.
+- Read provider configuration status: reports only sanitized server-owned provider boundary state for the authenticated tenant/revision context. It may say whether provider signals are configured or missing and which disabled adapter/version is active, but it must never expose provider secrets, raw provider payloads, message IDs, recipients, connection details, or delivery authority.
+- Record delivery attempt: `sales` or `admin` only. Requires approved revision, approved approval gate, frozen document binding, stored PDF artifact binding, safe non-blocked send intent, prepared delivery outbox, current revision version, and durable idempotency. In P12 it records only a blocked provider-missing attempt in an append-only tenant ledger. It must keep provider acknowledgement false, provider message ID null, raw provider payload absent, external delivery disabled, quote status unchanged, sent timestamp null, and production package creation disabled.
 - Read/list quote revisions: returns only revisions visible to the resolved company and user role. Revision reads are non-mutating and must not recalculate, approve, send, finalize, or promote a quote.
 - Append audit: records audit entries using trusted server-derived company, app user, session, timestamp, route/action, and request provenance. Browser-provided actor, company, tenant, user, role, timestamp, and session identifiers are never authoritative.
 
@@ -101,7 +103,7 @@ Idempotency expectations:
 
 ## Deterministic Domain Responsibilities
 
-BOM, cost, tax, margin, edge banding, labor, quote totals, frozen documents, stored artifacts, PDF artifacts, revision fork/diff, approval-gate preparation, approval-token finalization, send-gate status, send-intent preparation, and provider-deferred delivery outbox preparation remain deterministic backend/domain responsibilities. P6/P7/P8/P9/P10/P11 implement one narrow wardrobe persisted quote lifecycle; everything outside that slice remains deferred to future deterministic backend/domain services.
+BOM, cost, tax, margin, edge banding, labor, quote totals, frozen documents, stored artifacts, PDF artifacts, revision fork/diff, approval-gate preparation, approval-token finalization, send-gate status, send-intent preparation, provider-deferred delivery outbox preparation, provider configuration status, and delivery-attempt ledgering remain deterministic backend/domain responsibilities. P6/P7/P8/P9/P10/P11/P12 implement one narrow wardrobe persisted quote lifecycle; everything outside that slice remains deferred to future deterministic backend/domain services.
 
 LLM output and frontend calculations may be used only as suggestions, previews, or input collection aids. They must not become the source of truth for:
 
@@ -129,7 +131,7 @@ Required constraints for future status transitions:
 - Direct browser writes of `approved`, `sent`, `accepted`, `rejected`, or any other quote status are invalid. There is no PATCH/POST status route in the current Supabase surface.
 - Status changes are commands validated by the backend/domain layer, not direct browser writes.
 - In P9, a quote can move from draft to approved only through the service-role approval-token consumption RPC after all token, revision-version, snapshot, document, and current-provenance bindings match.
-- A quote can move from approved to sent only after deterministic totals are current, approved HTML/PDF artifacts are bound, a safe provider is configured, human/customer delivery intent is captured, provider delivery is verified, and the backend confirms send eligibility.
+- A quote can move from approved to sent only after deterministic totals are current, approved HTML/PDF artifacts are bound, a safe provider is configured and version-bound, human/customer delivery intent is captured, an append-only delivery attempt has a verified provider acknowledgement, and the backend confirms send eligibility in the same guarded transition.
 - A PDF can be generated only when generated from the approved quote snapshot and linked to that immutable quote version. P11 stored PDF artifacts do not imply external delivery, quote-sent state, or production release.
 - A production package can be created only from an approved or otherwise explicitly production-authorized quote snapshot.
 - Rejection, cancellation, expiry, or revision must prevent stale send/PDF/production actions from using superseded totals or artifacts.
@@ -150,7 +152,9 @@ Current Supabase-backed scope:
 - Tenant-scoped private object-storage-backed HTML/PDF artifact storage and controlled download after approved revision/document/snapshot binding.
 - Tenant-scoped audited send-intent preparation that keeps email delivery, quote sent state, and production-package creation deferred.
 - Tenant-scoped provider-deferred delivery outbox preparation that keeps email delivery, quote sent state, and production-package creation deferred.
-- Tenant-scoped read-only send-gate status that reports HTML/PDF artifact, send-intent, and delivery-outbox state while keeping email delivery and production-package creation deferred.
+- Tenant-scoped provider configuration status that exposes only configured/missing style booleans and disabled adapter/version labels.
+- Tenant-scoped append-only blocked delivery-attempt ledgering that proves the workflow stopped before real external delivery or sent-state transition.
+- Tenant-scoped read-only send-gate status that reports HTML/PDF artifact, send-intent, delivery-outbox, provider, and delivery-attempt state while keeping email delivery and production-package creation deferred.
 - Backend-owned audit append for accepted route actions.
 - Backend/database policy enforcement for tenant-scoped reads, authenticated direct-write denial, and first scoped mutations wired into the current demo flow.
 - A local-demo browser session intended to survive reloads until expiry or logout.
@@ -159,7 +163,7 @@ Current Supabase-backed scope:
 Remaining in-memory or mock scope:
 
 - Any flow not yet wired to Supabase persistence.
-- External quote send, quote-sent transition, production package, and downstream operational mutations in the current web flow.
+- External quote send, verified provider acknowledgement, quote-sent transition, production package, and downstream operational mutations in the current web flow.
 - Any customer, project, quote, revision, or audit behavior outside the first scoped routes defined above.
 - Placeholder catalogs, pricing tables, live quote send records, production package records, and downstream operational integrations.
 - Client previews that help users understand pending changes before backend/domain acceptance.

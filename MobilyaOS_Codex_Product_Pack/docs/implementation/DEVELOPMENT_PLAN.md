@@ -207,6 +207,23 @@ Large-scale backend/frontend application coding must not start until:
 - Runtime agent/chat policy can explain stored artifact and send-preparation status through read-only tools. Artifact generation, PDF generation, external quote send, approval-token consumption, authoritative calculation, and production package creation remain forbidden from chat.
 - P10 security/QA corrective tasks closed high-risk gaps for browser-forged artifact/send fields, storage locator leakage, tool whitelist drift, prompt injection wording, tenant/RBAC denial, idempotency replay/conflict, audit evidence, and artifact/PDF-to-cost snapshot compatibility for the current HTML artifact.
 
+## P11 Decisions
+
+- Deterministic binary PDF artifacts are generated server-side from trusted persisted approved revision, approved approval gate, frozen document, stored HTML artifact, and current cost snapshot bindings only.
+- PDF bytes are stored in the private `quote-documents` bucket with server-derived paths and SHA-256 verification on controlled download.
+- Delivery outbox preparation remains provider-deferred and uses `disabled_provider_adapter_v1`. It does not contact an email provider, expose recipient/provider internals, mark quotes sent, or create production state.
+- Runtime agent/chat policy can explain PDF and delivery-outbox facts only through read-only tools.
+
+## P12 Decisions
+
+- Provider configuration is a server-only boundary. Application DTOs may report configured/missing style booleans and version labels only; provider secrets, raw provider payloads, connection details, recipients, and message IDs are never returned.
+- Delivery attempts are append-only tenant ledger rows recorded only after approved revision, approved approval gate, frozen document, stored PDF artifact, safe send intent, delivery outbox, current revision version, and idempotency gates pass.
+- The current adapter remains disabled. P12 records only `blocked_provider_missing` delivery attempts and keeps `provider_acknowledged`, external delivery, quote sent, sent timestamp, and production package state false/null.
+- Quote sent transition is represented by a service-role-only fail-closed RPC until a verified provider acknowledgement workflow exists. No route or agent can mark a quote sent in P12.
+- Send-intent preparation now has a database-level unique guard and reuse behavior to avoid duplicate intent/audit noise.
+- Docker build context is hardened with `.dockerignore`, and the web image now starts with `next start` for production runtime semantics.
+- Runtime agent/chat policy can explain provider status, delivery attempt status, and why a quote is not sent. It cannot record attempts from chat, assert provider acknowledgement, set sent timestamps, send quotes, or trigger production.
+
 ## P5 Supabase Cloud Decisions
 
 - Docker Desktop is not the active local runtime on this machine.
@@ -259,8 +276,8 @@ Large-scale backend/frontend application coding must not start until:
 
 ## Next Phase Plan
 
-1. Add deterministic binary PDF generation from the exact frozen HTML/cost snapshot inputs and compare PDF totals to the cost snapshot in tests.
-2. Add a deterministic binary-PDF artifact beside the verified stored HTML artifact without exposing bucket/path locators to browser DTOs.
-3. Promote the P10 send-intent gate into a tested explicit quote-send workflow with provider configuration, idempotency, audit, delivery proof, and no-secret outbound logs.
-4. Move the P6/P7 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
-5. Add CSRF/fetch-metadata controls, rate limiting, production session revocation/rotation, and persisted tool invocation audit records.
+1. Add a real provider adapter behind the P12 boundary using server-only injected secrets, fake/sandbox provider tests, outbound payload redaction, durable retry policy, and provider acknowledgement verification before enabling any external delivery.
+2. Implement the guarded sent-state transition only after a verified provider acknowledgement is persisted and atomically bound to the approved revision, artifact, send intent, delivery outbox, delivery attempt, actor/customer intent, audit, and idempotency scope.
+3. Add provider webhook consumption as a separate no-secret, idempotent, tenant-scoped boundary with replay/forgery tests before trusting webhook state.
+4. Move the P6-P12 server-boundary calculation and lifecycle logic into the long-term backend/domain service once Go/PostgreSQL repository tooling is available.
+5. Add durable distributed CSRF/rate limiting, production session revocation/rotation, persisted tool invocation audit records, provider delivery observability, and CI-hosted Supabase verification.

@@ -23,12 +23,16 @@ const forbidden = [
   "provider_message_id",
   "provider_response",
   "delivery_status",
-  "delivery_verified"
+  "delivery_verified",
+  "provider_acknowledgement",
+  "raw_provider_payload",
+  "sent_at",
+  "webhook_secret"
 ];
 
 const riskyRouteMethods = ["PUT", "PATCH", "DELETE"];
 const riskyQuoteRouteMethods = ["POST", ...riskyRouteMethods];
-const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|delivery_status|delivery_verified|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|provider_message_id|provider_response|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
+const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|delivery_status|delivery_verified|provider_acknowledged|provider_acknowledgement|raw_provider_payload|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|provider_message_id|provider_response|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
 
 function walk(dir) {
   const entries = [];
@@ -200,6 +204,9 @@ requireMarker(mutationBoundaryText, "generate_quote_artifact", "server mutation 
 requireMarker(mutationBoundaryText, "generate_quote_pdf_artifact", "server mutation boundary must register generate_quote_pdf_artifact");
 requireMarker(mutationBoundaryText, "prepare_quote_send_intent", "server mutation boundary must register prepare_quote_send_intent");
 requireMarker(mutationBoundaryText, "prepare_quote_delivery_outbox", "server mutation boundary must register prepare_quote_delivery_outbox");
+requireMarker(mutationBoundaryText, "read_provider_status", "server mutation boundary must register read_provider_status as read-only");
+requireMarker(mutationBoundaryText, "read_quote_delivery_attempt", "server mutation boundary must register read_quote_delivery_attempt as read-only");
+requireMarker(mutationBoundaryText, "record_quote_delivery_attempt", "server mutation boundary must register record_quote_delivery_attempt");
 requireMarker(mutationBoundaryText, "read_quote_artifact", "server mutation boundary must register read_quote_artifact as read-only");
 requireMarker(mutationBoundaryText, "read_quote_delivery_outbox", "server mutation boundary must register read_quote_delivery_outbox as read-only");
 const activeMutationMatch = mutationBoundaryText.match(/activeMutationKinds[\s\S]*?\(\[([\s\S]*?)\]\)/);
@@ -344,6 +351,28 @@ for (const marker of [
   requireMarker(p11MigrationText, marker, `P11 migration is missing PDF/delivery marker ${marker}`);
 }
 
+const p12MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0013_provider_boundary_delivery_attempts.sql"), "utf8");
+for (const marker of [
+  "quote_send_intents_unique_prepared_p12",
+  "quote_delivery_attempts",
+  "tenant quote_delivery_attempts no direct read",
+  "record_quote_delivery_attempt_with_idempotency",
+  "mark_quote_revision_sent_with_provider_acknowledgement",
+  "provider_acknowledged = false",
+  "sent_at is null",
+  "raw_provider_payload_stored = false",
+  "provider_message_id is null",
+  "external_delivery_attempted = false",
+  "quote_sent = false",
+  "quote_delivery_attempt_blocked",
+  "quote sent transition requires verified provider acknowledgement workflow",
+  "revoke all on function public.record_quote_delivery_attempt_with_idempotency",
+  "revoke all on function public.mark_quote_revision_sent_with_provider_acknowledgement",
+  "to service_role"
+]) {
+  requireMarker(p12MigrationText, marker, `P12 migration is missing provider/attempt marker ${marker}`);
+}
+
 const mutationRouteChecks = [
   ["app/api/supabase/customers/route.ts", ["GET", "POST"], ["withMutationSession", "create_customer", "appendAuditEntry", "customer_created"]],
   ["app/api/supabase/projects/route.ts", ["GET", "POST"], ["withMutationSession", "create_project", "appendAuditEntry", "project_created"]],
@@ -367,9 +396,11 @@ const mutationRouteChecks = [
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/send-gate/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_send_gate_status", "getQuoteSendGateStatus"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/send-intents/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_send_intent", "prepare_quote_send_intent", "listQuoteSendIntents", "prepareQuoteSendIntent", "reserveIdempotency", "quote_send_intent_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-outbox/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_delivery_outbox", "prepare_quote_delivery_outbox", "listQuoteDeliveryOutbox", "prepareQuoteDeliveryOutbox", "reserveIdempotency", "quote_delivery_outbox_prepared", "rejectBrowserAuthority"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/provider-status/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_provider_status", "getQuoteProviderStatusForRevision"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-attempts/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_delivery_attempt", "record_quote_delivery_attempt", "listQuoteDeliveryAttempts", "recordQuoteDeliveryAttempt", "reserveIdempotency", "quote_delivery_attempt_recorded", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/approval-tokens/consume/route.ts", ["POST"], ["requireSameOriginMutation", "allowedBodyKeys", "requireApprovalTokenConsumeRateLimit", "consumeApprovalToken", "token_secret_returned", "quote_status_changed", "quote_send_triggered", "production_package_triggered"]],
-  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "listQuoteArtifacts", "listQuoteDeliveryOutbox", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments", "get_pdf_artifact_status", "get_delivery_status"]]
+  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "listQuoteArtifacts", "listQuoteDeliveryOutbox", "listQuoteDeliveryAttempts", "getQuoteProviderStatusForRevision", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments", "get_pdf_artifact_status", "get_delivery_status", "get_provider_status", "get_delivery_attempt_status", "explain_why_quote_is_not_sent"]]
 ];
 for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const text = readFileSync(join(root, route), "utf8");
@@ -390,9 +421,10 @@ for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const p7PostRoute = route.includes("/documents/route.ts") || route.includes("/fork/route.ts") || route.includes("/approval-token/route.ts");
   const p10PostRoute = route.includes("/artifacts/route.ts") || route.includes("/send-intents/route.ts");
   const p11PostRoute = route.includes("/artifacts/pdf/route.ts") || route.includes("/delivery-outbox/route.ts");
+  const p12PostRoute = route.includes("/delivery-attempts/route.ts");
   const riskyMethods = route.includes("calculate")
     ? ["GET", "PUT", "PATCH", "DELETE"]
-    : p7PostRoute || p10PostRoute || p11PostRoute
+    : p7PostRoute || p10PostRoute || p11PostRoute || p12PostRoute
       ? ["PUT", "PATCH", "DELETE"]
     : route.includes("snapshot")
       ? riskyQuoteRouteMethods
@@ -516,6 +548,11 @@ requireMarker(getQuoteSendGateStatusBlock, "quote_send_triggered: false", "getQu
 requireMarker(getQuoteSendGateStatusBlock, "production_package_triggered: false", "getQuoteSendGateStatus must not create production package");
 requireMarker(getQuoteSendGateStatusBlock, "artifact_bound", "getQuoteSendGateStatus must include artifact binding state");
 requireMarker(getQuoteSendGateStatusBlock, "eligible_to_prepare_send", "getQuoteSendGateStatus must expose send-preparation readiness separately from send execution");
+requireMarker(getQuoteSendGateStatusBlock, "eligible_to_record_delivery_attempt", "getQuoteSendGateStatus must expose delivery-attempt readiness separately from send execution");
+requireMarker(getQuoteSendGateStatusBlock, "provider_acknowledgement_verified: false", "getQuoteSendGateStatus must not imply provider acknowledgement");
+requireMarker(getQuoteSendGateStatusBlock, "sent_transition_enabled: false", "getQuoteSendGateStatus must keep sent transition disabled");
+requireMarker(getQuoteSendGateStatusBlock, "candidate.status !== \"send_blocked\"", "getQuoteSendGateStatus must not treat blocked send intent as delivery-ready");
+requireMarker(getQuoteSendGateStatusBlock, "candidate.recipient_available", "getQuoteSendGateStatus must require a recipient-ready send intent for delivery readiness");
 
 const generateStoredQuoteArtifactBlock = sourceBlock(repositoryText, "generateStoredQuoteArtifact");
 requireMarker(generateStoredQuoteArtifactBlock, 'revision.status !== "approved"', "generateStoredQuoteArtifact must require approved revisions");
@@ -557,7 +594,32 @@ requireMarker(prepareQuoteDeliveryOutboxBlock, "artifact_type === \"quote_pdf\""
 requireMarker(prepareQuoteDeliveryOutboxBlock, "listQuoteSendIntents(context, revision.id)", "prepareQuoteDeliveryOutbox must require a server-read send intent");
 requireMarker(prepareQuoteDeliveryOutboxBlock, "rpc/prepare_quote_delivery_outbox_with_idempotency", "prepareQuoteDeliveryOutbox must use the atomic delivery outbox RPC");
 requireMarker(prepareQuoteDeliveryOutboxBlock, "p_email_provider_configured: false", "prepareQuoteDeliveryOutbox must keep email provider disabled");
+requireMarker(prepareQuoteDeliveryOutboxBlock, "candidate.status !== \"send_blocked\"", "prepareQuoteDeliveryOutbox must reject blocked send intents before RPC");
+requireMarker(prepareQuoteDeliveryOutboxBlock, "candidate.recipient_available", "prepareQuoteDeliveryOutbox must require recipient availability before outbox preparation");
 requireNoRegex(prepareQuoteDeliveryOutboxBlock, /\binput\.(status|recipient|recipient_email|email_provider_configured|external_delivery_attempted|quote_sent|provider_status|provider_message_id|delivery_status|delivery_verified)\b/i, "prepareQuoteDeliveryOutbox must not trust browser delivery fields");
+
+const providerConfigText = readFileSync(join(root, "lib/server/providerConfig.ts"), "utf8");
+for (const marker of [
+  "provider_secret_returned: false",
+  "provider_raw_payload_returned: false",
+  "provider_message_id_available: false",
+  "real_delivery_enabled: false",
+  "sent_transition_enabled: false",
+  "provider_acknowledgement_verified: false",
+  "disabled_provider_adapter_v1"
+]) {
+  requireMarker(providerConfigText, marker, `provider config boundary is missing ${marker}`);
+}
+requireNoRegex(providerConfigText, /console\.(log|error|warn)|return process\.env/i, "provider config boundary must not print or return provider env values");
+
+const recordQuoteDeliveryAttemptBlock = sourceBlock(repositoryText, "recordQuoteDeliveryAttempt");
+requireMarker(recordQuoteDeliveryAttemptBlock, "getQuoteProviderStatus()", "recordQuoteDeliveryAttempt must derive provider config server-side");
+requireMarker(recordQuoteDeliveryAttemptBlock, "providerStatus.real_delivery_enabled", "recordQuoteDeliveryAttempt must gate real provider delivery");
+requireMarker(recordQuoteDeliveryAttemptBlock, "providerStatus.sent_transition_enabled", "recordQuoteDeliveryAttempt must gate sent transition");
+requireMarker(recordQuoteDeliveryAttemptBlock, "getLatestQuoteDeliveryOutbox(context, revision.id)", "recordQuoteDeliveryAttempt must bind the latest tenant outbox server-side");
+requireMarker(recordQuoteDeliveryAttemptBlock, "rpc/record_quote_delivery_attempt_with_idempotency", "recordQuoteDeliveryAttempt must use the atomic delivery-attempt RPC");
+requireMarker(recordQuoteDeliveryAttemptBlock, "p_email_provider_configured: false", "recordQuoteDeliveryAttempt must keep provider delivery disabled");
+requireNoRegex(recordQuoteDeliveryAttemptBlock, /\binput\.(status|recipient|recipient_email|email_provider_configured|external_delivery_attempted|quote_sent|provider_status|provider_message_id|provider_acknowledged|delivery_status|delivery_verified|sent_at|raw_provider_payload)\b/i, "recordQuoteDeliveryAttempt must not trust browser delivery/provider fields");
 
 const quoteStatusPolicyBlock = sourceBlock(repositoryText, "quoteStatusPolicy");
 requireMarker(quoteStatusPolicyBlock, "direct_status_update_allowed: false", "quote status policy must forbid browser direct status writes");

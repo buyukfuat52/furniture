@@ -51,7 +51,11 @@ const forbiddenPayloadKeys = [
   "provider_message_id",
   "provider_response",
   "delivery_status",
-  "delivery_verified"
+  "delivery_verified",
+  "provider_acknowledgement",
+  "raw_provider_payload",
+  "sent_at",
+  "webhook_secret"
 ];
 const forbiddenResponseFields = [
   "company_id",
@@ -74,6 +78,10 @@ const forbiddenResponseFields = [
   "provider_response",
   "delivery_status",
   "delivery_verified",
+  "provider_acknowledgement",
+  "raw_provider_payload",
+  "sent_at",
+  "webhook_secret",
   "recipient_email"
 ];
 const forgedPayloadMarkers = {
@@ -98,6 +106,11 @@ const forgedPayloadMarkers = {
   provider_response: "browser-supplied",
   delivery_status: "browser-supplied",
   delivery_verified: true,
+  provider_acknowledged: true,
+  provider_acknowledgement: "browser-supplied",
+  raw_provider_payload: "browser-supplied",
+  sent_at: "2026-01-01T00:00:00Z",
+  webhook_secret: "browser-supplied",
   artifact_html: "browser-supplied",
   database_password: "browser-supplied",
   SUPABASE_SERVICE_ROLE_KEY: "browser-supplied",
@@ -734,6 +747,10 @@ function assertSendGate(payload, expected, label) {
   requireSafe(sendGate.quote_send_triggered === false, `${label} must not send a quote.`);
   requireSafe(sendGate.production_package_triggered === false, `${label} must not trigger production package.`);
   requireSafe(sendGate.email_provider_configured === false, `${label} must report no configured email provider.`);
+  requireSafe(sendGate.real_delivery_enabled === false, `${label} real provider delivery must stay disabled.`);
+  requireSafe(sendGate.sent_transition_enabled === false, `${label} sent transition must stay disabled.`);
+  requireSafe(sendGate.provider_acknowledgement_verified === false, `${label} provider acknowledgement must not be verified.`);
+  requireSafe(typeof sendGate.eligible_to_record_delivery_attempt === "boolean", `${label} must report delivery-attempt readiness.`);
   if (expected.artifactStatus) {
     requireSafe(sendGate.artifact_status === expected.artifactStatus, `${label} artifact status must be ${expected.artifactStatus}.`);
   } else {
@@ -743,7 +760,8 @@ function assertSendGate(payload, expected, label) {
     );
   }
   requireSafe(["none", "provider_deferred", "delivery_blocked"].includes(sendGate.latest_delivery_outbox_status), `${label} delivery outbox status must be bounded.`);
-  requireSafe(sendGate.provider_status === "provider_missing", `${label} provider status must stay provider_missing.`);
+  requireSafe(["none", "provider_deferred", "blocked_provider_missing"].includes(sendGate.latest_delivery_attempt_status), `${label} delivery attempt status must be bounded.`);
+  requireSafe(["provider_missing", "provider_configured_unverified"].includes(sendGate.provider_status), `${label} provider status must be bounded.`);
   requireSafe(Array.isArray(sendGate.blocking_reasons), `${label} must include blocking reasons.`);
   assertNoForbiddenResponseFields(label, payload);
 }
@@ -840,6 +858,52 @@ function assertDeliveryOutbox(payload, expected, label) {
   requireSafe(outbox.delivery_version === "quote-delivery-outbox-v1.0.0", `${label} delivery version must be deterministic.`);
   requireSafe(Array.isArray(outbox.deferred_actions), `${label} must include deferred actions.`);
   requireSafe(outbox.deferred_actions.includes("quote_send_external_delivery"), `${label} must keep external delivery deferred.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
+function assertProviderStatus(payload, expected, label) {
+  const status = payload.provider_status;
+  requireSafe(status?.revision_id === expected.quoteRevisionId, `${label} must bind quote revision.`);
+  requireSafe(status.quote_status === expected.quoteStatus, `${label} quote status must match.`);
+  requireSafe(["provider_missing", "provider_configured_unverified"].includes(status.provider_status), `${label} provider status must be bounded.`);
+  requireSafe(status.provider_adapter === "disabled_provider_adapter_v1", `${label} provider adapter must be disabled.`);
+  requireSafe(status.email_provider_configured === false, `${label} email provider must stay disabled.`);
+  requireSafe(status.real_delivery_enabled === false, `${label} real delivery must stay disabled.`);
+  requireSafe(status.sent_transition_enabled === false, `${label} sent transition must stay disabled.`);
+  requireSafe(status.provider_acknowledgement_required === true, `${label} must require provider acknowledgement.`);
+  requireSafe(status.provider_acknowledgement_verified === false, `${label} provider acknowledgement must not be verified.`);
+  requireSafe(status.provider_secret_returned === false, `${label} provider secret must not be returned.`);
+  requireSafe(status.provider_raw_payload_returned === false, `${label} raw provider payload must not be returned.`);
+  requireSafe(status.provider_message_id_available === false, `${label} provider message id must not be available.`);
+  requireSafe(status.provider_config_version === "provider-config-boundary-v1.0.0", `${label} provider config version must match.`);
+  requireSafe(status.adapter_version === "disabled-provider-adapter-v1.0.0", `${label} adapter version must match.`);
+  requireSafe(Array.isArray(status.deferred_actions), `${label} must include deferred actions.`);
+  requireSafe(status.deferred_actions.includes("quote_sent_transition"), `${label} must keep sent transition deferred.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
+function assertDeliveryAttempt(payload, expected, label) {
+  const attempt = payload.delivery_attempt;
+  requireSafe(Boolean(attempt?.id), `${label} must include a delivery attempt id.`);
+  requireSafe(attempt.revision_id === expected.quoteRevisionId, `${label} must bind quote revision.`);
+  requireSafe(attempt.send_intent_id === expected.sendIntentId, `${label} must bind send intent.`);
+  requireSafe(attempt.delivery_outbox_id === expected.deliveryOutboxId, `${label} must bind delivery outbox.`);
+  requireSafe(attempt.pdf_artifact_id === expected.pdfArtifactId, `${label} must bind PDF artifact.`);
+  requireSafe(attempt.generated_document_id === expected.documentId, `${label} must bind generated document.`);
+  requireSafe(attempt.status === "blocked_provider_missing", `${label} must record a blocked provider attempt.`);
+  requireSafe(attempt.provider_status === "provider_missing", `${label} provider status must be missing.`);
+  requireSafe(attempt.provider_adapter === "disabled_provider_adapter_v1", `${label} adapter must be disabled.`);
+  requireSafe(["project_customer", "missing_customer_email"].includes(attempt.recipient_source), `${label} recipient source must be server-derived.`);
+  requireSafe(attempt.email_provider_configured === false, `${label} email provider must remain unconfigured.`);
+  requireSafe(attempt.external_delivery_attempted === false, `${label} must not attempt external delivery.`);
+  requireSafe(attempt.provider_acknowledged === false, `${label} must not verify provider acknowledgement.`);
+  requireSafe(attempt.quote_sent === false, `${label} must not mark quote sent.`);
+  requireSafe(attempt.production_package_triggered === false, `${label} must not trigger production package.`);
+  requireSafe(attempt.attempt_version === "quote-delivery-attempt-v1.0.0", `${label} attempt version must match.`);
+  requireSafe(attempt.provider_config_version === "provider-config-boundary-v1.0.0", `${label} provider config version must match.`);
+  requireSafe(attempt.adapter_version === "disabled-provider-adapter-v1.0.0", `${label} adapter version must match.`);
+  requireSafe(Array.isArray(attempt.deferred_actions), `${label} must include deferred actions.`);
+  requireSafe(attempt.deferred_actions.includes("quote_sent_transition"), `${label} must keep sent transition deferred.`);
   assertNoForbiddenResponseFields(label, payload);
 }
 
@@ -940,6 +1004,11 @@ async function main() {
         key: "delivery-outbox",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-outbox`,
         body: { ...forgedPayloadMarkers, status: "sent", quote_sent: true, delivery_verified: true }
+      },
+      {
+        key: "delivery-attempt",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-attempts`,
+        body: { ...forgedPayloadMarkers, status: "sent", quote_sent: true, provider_acknowledged: true, sent_at: "browser-supplied" }
       }
     ];
 
@@ -1008,6 +1077,14 @@ async function main() {
       {
         label: "unauthenticated quote delivery outbox list",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-outbox`
+      },
+      {
+        label: "unauthenticated quote provider status",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/provider-status`
+      },
+      {
+        label: "unauthenticated quote delivery attempts list",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-attempts`
       },
       {
         label: "unauthenticated quote artifact detail",
@@ -1205,6 +1282,14 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/delivery-outbox`
       },
       {
+        label: "second tenant reads primary provider status",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/provider-status`
+      },
+      {
+        label: "second tenant reads primary delivery attempts",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/delivery-attempts`
+      },
+      {
         label: "second tenant reads primary revision diff",
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/diff?against=${demoApprovedQuoteRevisionId}`
       },
@@ -1256,6 +1341,16 @@ async function main() {
       {
         label: "primary tenant reads second delivery outbox",
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/delivery-outbox`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second provider status",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/provider-status`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second delivery attempts",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/delivery-attempts`,
         cookie: salesCookie
       },
       {
@@ -1332,6 +1427,12 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/delivery-outbox`,
         method: "POST",
         body: {}
+      },
+      {
+        label: "second tenant delivery attempt primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/delivery-attempts`,
+        method: "POST",
+        body: {}
       }
     ];
     for (const probe of secondTenantWriteProbes) {
@@ -1406,6 +1507,12 @@ async function main() {
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/delivery-outbox`,
         method: "POST",
         body: {}
+      },
+      {
+        label: "primary tenant delivery attempt second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/delivery-attempts`,
+        method: "POST",
+        body: {}
       }
     ];
     for (const probe of primaryToSecondTenantWriteProbes) {
@@ -1434,6 +1541,7 @@ async function main() {
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_pdf_artifact_generated");
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_send_intent_prepared");
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_delivery_outbox_prepared");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_delivery_attempt_blocked");
 
     const idorProbes = [
       {
@@ -1484,6 +1592,22 @@ async function main() {
         label: "missing quote snapshot read",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/snapshot`,
         method: "GET"
+      },
+      {
+        label: "missing quote provider status read",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/provider-status`,
+        method: "GET"
+      },
+      {
+        label: "missing quote delivery attempts read",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-attempts`,
+        method: "GET"
+      },
+      {
+        label: "missing quote delivery attempt write",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-attempts`,
+        method: "POST",
+        body: {}
       },
       {
         label: "missing quote calculate",
@@ -2785,6 +2909,8 @@ async function main() {
         quote_sent: true,
         external_delivery_attempted: true,
         email_provider_configured: true,
+        provider_acknowledged: true,
+        sent_at: "2026-01-01T00:00:00Z",
         recipient_source: "browser",
         quote_artifact_id: fakeArtifactId
       })
@@ -2897,8 +3023,11 @@ async function main() {
         email_provider_configured: true,
         provider_status: "provider_configured",
         provider_message_id: "browser-supplied",
+        provider_acknowledged: true,
         delivery_status: "sent",
         delivery_verified: true,
+        sent_at: "2026-01-01T00:00:00Z",
+        raw_provider_payload: "browser-supplied",
         recipient_email: "browser@example.invalid"
       })
     }, "forged delivery outbox body");
@@ -2960,6 +3089,117 @@ async function main() {
     const auditAfterDeliveryOutbox = countAuditActions(result.payload.audit_entries);
     requireAuditDelta(auditBeforeDeliveryOutbox, auditAfterDeliveryOutbox, "quote_delivery_outbox_prepared", 1);
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/provider-status`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote provider status");
+    requireSafe(result.response.ok, "Quote provider status must be readable.");
+    assertProviderStatus(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved"
+    }, "quote provider status");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: salesCookie,
+        "x-idempotency-key": `delivery-attempt-cross-site-${suffix}`,
+        Origin: "https://cross-site.invalid",
+        "Sec-Fetch-Site": "cross-site"
+      },
+      body: JSON.stringify({})
+    }, "cross-site delivery attempt");
+    requireSafe(result.response.status === 403, "Cross-site delivery attempt must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-delivery-attempt-${suffix}` },
+      body: JSON.stringify({})
+    }, "viewer delivery attempt");
+    requireSafe(result.response.status === 403, "Viewer delivery attempt must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `forged-delivery-attempt-${suffix}` },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        status: "sent",
+        quote_sent: true,
+        external_delivery_attempted: true,
+        email_provider_configured: true,
+        provider_status: "provider_configured",
+        provider_message_id: "browser-supplied",
+        provider_acknowledged: true,
+        delivery_status: "sent",
+        delivery_verified: true,
+        sent_at: "2026-01-01T00:00:00Z",
+        raw_provider_payload: "browser-supplied",
+        webhook_secret: "browser-supplied",
+        recipient_email: "browser@example.invalid"
+      })
+    }, "forged delivery attempt body");
+    requireSafe(result.response.status === 422, "Forged delivery attempt body must return 422.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before delivery attempt");
+    requireSafe(result.response.ok, "Demo data must succeed before delivery attempt.");
+    const auditBeforeDeliveryAttempt = countAllAuditActions(result.payload.audit_entries);
+
+    const deliveryAttemptKey = `quote-delivery-attempt-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": deliveryAttemptKey },
+      body: JSON.stringify({})
+    }, "quote delivery attempt record");
+    requireSafe(result.response.status === 201, "Quote delivery attempt record must return 201.");
+    assertDeliveryAttempt(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      sendIntentId: sendIntent.id,
+      deliveryOutboxId: deliveryOutbox.id,
+      pdfArtifactId: storedPdfArtifact.id,
+      documentId: generatedDocument.id
+    }, "quote delivery attempt record");
+    const deliveryAttempt = result.payload.delivery_attempt;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": deliveryAttemptKey },
+      body: JSON.stringify({})
+    }, "quote delivery attempt idempotency replay");
+    requireSafe(result.response.status === 201, "Quote delivery attempt replay must return stored status.");
+    requireSafe(result.payload.delivery_attempt?.id === deliveryAttempt.id, "Quote delivery attempt replay must return the original attempt id.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": deliveryAttemptKey },
+      body: JSON.stringify({ idempotency_key: `conflicting-delivery-attempt-${suffix}` })
+    }, "quote delivery attempt idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote delivery attempt idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote delivery attempt list");
+    requireSafe(result.response.ok, "Quote delivery attempt list must succeed.");
+    requireSafe(
+      result.payload.delivery_attempts?.some((item) => item.id === deliveryAttempt.id),
+      "Quote delivery attempt list must include the recorded attempt."
+    );
+    assertNoForbiddenResponseFields("quote delivery attempt list", result.payload);
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after delivery attempt");
+    requireSafe(result.response.ok, "Demo data must succeed after delivery attempt.");
+    const auditAfterDeliveryAttempt = countAllAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforeDeliveryAttempt, auditAfterDeliveryAttempt, "quote_delivery_attempt_blocked", 1);
+    requireAuditDelta(auditBeforeDeliveryAttempt, auditAfterDeliveryAttempt, "quote_approved", 0);
+    requireAuditDelta(auditBeforeDeliveryAttempt, auditAfterDeliveryAttempt, "quote_sent", 0);
+
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
       method: "GET",
       headers: { Cookie: salesCookie }
@@ -2969,6 +3209,13 @@ async function main() {
       result.payload.send_gate?.latest_delivery_outbox_status === deliveryOutbox.status,
       "Send gate must report the latest delivery outbox status."
     );
+    requireSafe(
+      result.payload.send_gate?.latest_delivery_attempt_status === deliveryAttempt.status,
+      "Send gate must report the latest delivery attempt status."
+    );
+    requireSafe(result.payload.send_gate?.provider_acknowledgement_verified === false, "Send gate must not verify provider acknowledgement after a blocked attempt.");
+    requireSafe(result.payload.send_gate?.sent_transition_enabled === false, "Send gate must keep sent transition disabled after a blocked attempt.");
+    requireSafe(result.payload.send_gate?.quote_send_triggered === false, "Send gate must not send after a blocked attempt.");
     assertSendGate(result.payload, {
       quoteRevisionId: quoteRevision.id,
       quoteStatus: "approved",
@@ -3131,8 +3378,10 @@ async function main() {
     requireSafe(auditActions.has("quote_pdf_artifact_generated"), "Audit entries must include quote_pdf_artifact_generated.");
     requireSafe(auditActions.has("quote_send_intent_prepared"), "Audit entries must include quote_send_intent_prepared.");
     requireSafe(auditActions.has("quote_delivery_outbox_prepared"), "Audit entries must include quote_delivery_outbox_prepared.");
+    requireSafe(auditActions.has("quote_delivery_attempt_blocked"), "Audit entries must include quote_delivery_attempt_blocked.");
     requireSafe(auditActions.has("quote_approval_token_replayed"), "Audit entries must include quote_approval_token_replayed.");
     requireSafe(auditActions.has("quote_approval_token_expired"), "Audit entries must include quote_approval_token_expired.");
+    requireSafe(!auditActions.has("quote_sent"), "Audit entries must not include quote_sent.");
     const auditAfter = countAuditActions(result.payload.audit_entries);
     const auditAfterAll = countAllAuditActions(result.payload.audit_entries);
     requireAuditIncrease(auditBefore, auditAfter, "customer_created");
@@ -3149,6 +3398,7 @@ async function main() {
     requireAuditIncrease(auditBefore, auditAfter, "quote_pdf_artifact_generated");
     requireAuditIncrease(auditBefore, auditAfter, "quote_send_intent_prepared");
     requireAuditIncrease(auditBefore, auditAfter, "quote_delivery_outbox_prepared");
+    requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_delivery_attempt_blocked");
     requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_replayed");
     requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_expired");
 

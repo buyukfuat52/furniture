@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3000",
     "lint": "npm run typecheck",
     "typecheck": "npx tsc --noEmit",
     "test": "node scripts/server-boundary-check.mjs",

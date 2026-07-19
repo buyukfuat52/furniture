@@ -38,6 +38,7 @@ REQUIRED_TABLES = [
     "quote_artifacts",
     "quote_send_intents",
     "quote_delivery_outbox",
+    "quote_delivery_attempts",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -62,6 +63,7 @@ TENANT_TABLES = [
     "quote_artifacts",
     "quote_send_intents",
     "quote_delivery_outbox",
+    "quote_delivery_attempts",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -345,6 +347,14 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             DEMO_REVISION_ID,
             "quote_revision_id",
         )
+        direct_quote_delivery_attempts = sensitive_table_rows(
+            env,
+            access_token,
+            "quote_delivery_attempts",
+            "id,metadata_json,provider_message_id,sent_at",
+            DEMO_REVISION_ID,
+            "quote_revision_id",
+        )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Authenticated RLS smoke: failed ({exc.__class__.__name__})")
         return False
@@ -379,6 +389,8 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             and len(direct_quote_send_intents) == 0
             and isinstance(direct_quote_delivery_outbox, list)
             and len(direct_quote_delivery_outbox) == 0
+            and isinstance(direct_quote_delivery_attempts, list)
+            and len(direct_quote_delivery_attempts) == 0
         )
         print(f"Authenticated direct sensitive table read: {'ok' if direct_sensitive_read_blocked else 'failed'}")
         direct_storage_read_blocked = expect_storage_list_no_direct_visibility(
@@ -536,7 +548,37 @@ def verify_p11_database_guards(cur: Any) -> bool:
         ),
         "Delivery outbox DB guard",
     )
-    return pdf_artifact_guard and delivery_outbox_guard
+    delivery_attempt_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_delivery_attempts (
+          company_id, quote_revision_id, quote_send_intent_id, quote_delivery_outbox_id,
+          quote_pdf_artifact_id, generated_document_id, status, provider_status,
+          provider_adapter, provider_config_version, adapter_version, provider_message_id,
+          provider_acknowledged, recipient_source, recipient_available, email_provider_configured,
+          external_delivery_attempted, quote_sent, sent_at, production_package_triggered,
+          raw_provider_payload_stored, attempt_version, metadata_json
+        )
+        values (
+          %s, %s, %s, %s, %s, %s,
+          'sent', 'provider_configured_unverified',
+          'disabled_provider_adapter_v1', 'provider-config-boundary-v1.0.0',
+          'disabled-provider-adapter-v1.0.0', 'forged-provider-message',
+          true, 'project_customer', true, true, true, true, now(), true, true,
+          'guard-attempt-v1', '{"attempt": {}}'::jsonb
+        )
+        """,
+        (
+            DEMO_COMPANY_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+        ),
+        "Delivery attempt DB guard",
+    )
+    return pdf_artifact_guard and delivery_outbox_guard and delivery_attempt_guard
 
 
 def verify_approval_consumption_rpc(cur: Any) -> bool:
@@ -585,6 +627,8 @@ def verify_p11_rpc_grants(cur: Any) -> bool:
         "prepare_quote_send_intent_with_idempotency",
         "persist_quote_pdf_artifact_with_idempotency",
         "prepare_quote_delivery_outbox_with_idempotency",
+        "record_quote_delivery_attempt_with_idempotency",
+        "mark_quote_revision_sent_with_provider_acknowledgement",
     ]
     ok = True
     for function_name in expected_functions:
@@ -660,8 +704,37 @@ def verify_p11_schema_guards(cur: Any) -> bool:
             "'delivery'::text",
             "!~*",
         ],
+        "quote_delivery_attempts": [
+            "delivery_attempted",
+            "delivery_failed",
+            "sent",
+            "provider_status = 'provider_missing'::text",
+            "provider_adapter = 'disabled_provider_adapter_v1'::text",
+            "provider_config_version = 'provider-config-boundary-v1.0.0'::text",
+            "adapter_version = 'disabled-provider-adapter-v1.0.0'::text",
+            "provider_message_id IS NULL",
+            "provider_acknowledged = false",
+            "email_provider_configured = false",
+            "external_delivery_attempted = false",
+            "quote_sent = false",
+            "sent_at IS NULL",
+            "production_package_triggered = false",
+            "raw_provider_payload_stored = false",
+            "'attempt'::text",
+            "!~*",
+        ],
     }
     ok = True
+    cur.execute(
+        """
+        select count(*)
+        from pg_constraint
+        where conname = 'quote_send_intents_unique_prepared_p12'
+        """
+    )
+    unique_ok = cur.fetchone()[0] == 1
+    print(f"P12 send-intent uniqueness DB guard: {'ok' if unique_ok else 'failed'}")
+    ok = ok and unique_ok
     for table, markers in expected_constraints.items():
         cur.execute(
             """
@@ -677,7 +750,7 @@ def verify_p11_schema_guards(cur: Any) -> bool:
         )
         defs = "\n".join(row[0] for row in cur.fetchall())
         table_ok = all(marker in defs for marker in markers)
-        print(f"P11 {table} DB guards: {'ok' if table_ok else 'failed'}")
+        print(f"P11/P12 {table} DB guards: {'ok' if table_ok else 'failed'}")
         ok = ok and table_ok
     return ok
 

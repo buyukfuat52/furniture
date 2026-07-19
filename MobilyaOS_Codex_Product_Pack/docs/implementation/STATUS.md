@@ -1,7 +1,7 @@
 # MobilyaOS Implementation Status
 
 Run ID: `20260715T040315+0300`
-Current scope: P11 deterministic binary PDF artifact storage and provider-safe delivery outbox workflow on the Supabase Cloud path
+Current scope: P12 provider configuration boundary, delivery attempt ledger, and guarded sent-state design on the Supabase Cloud path
 Parent orchestrator: `parent_codex`
 Created: 2026-07-15
 
@@ -24,6 +24,58 @@ Created: 2026-07-15
 | P9 - Customer approval finalization and send gate | P9 | Passed | Guarded approval-token finalization, customer-safe approval UI, read-only send gate, approved-revision document guard, runtime-agent read-only send-gate tools, docs, live Supabase validation, web smokes, compute tests, pack validation, secret scan, and diff checks passed. |
 | P10 - Deterministic artifact storage and send intent | P10 | Passed | Deterministic approved HTML artifact storage, controlled artifact download, audited send-intent preparation, P10 Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
 | P11 - Deterministic binary PDF and provider-safe delivery workflow | P11 | Passed | Deterministic PDF artifact storage/download, provider-deferred delivery outbox, read-only PDF/delivery chat facts, P11 Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
+| P12 - Provider boundary, delivery attempt ledger, guarded sent-state | P12 | Passed | Server-only provider configuration status, append-only delivery attempt ledger, disabled sent-state RPC, P12 Supabase verifier guards, web smokes, compute tests, pack validation, Docker context hardening, and secret scan passed. |
+
+## P12 Provider Boundary, Delivery Attempt Ledger, And Guarded Sent-State
+
+Run ID: `20260719T102329+0300-p12`
+
+Sidecar assignments:
+
+- `domain_architect`: read-only review of provider configuration, quote-sent preconditions, delivery attempt semantics, production deferral, and LLM non-authority.
+- `security_reviewer`: read-only review of provider secret leakage, delivery attempt forgery, sent-state forgery, tenant/IDOR, idempotency, audit, Docker build-context leakage, and prompt/tool-output injection.
+- `qa_reviewer`: read-only review of provider/attempt route coverage, no-send behavior, idempotency/audit assertions, prompt injection, and verifier coverage.
+
+Current result: complete. P12 added a server-only provider configuration boundary, tenant-scoped append-only delivery-attempt ledger, sanitized provider status and delivery-attempt routes, read-only chat facts, compute tool-gateway policy metadata, database guards, and a disabled quote-sent RPC that fails closed until a verified provider acknowledgement workflow exists.
+
+Corrective tasks completed:
+
+- High: no provider configuration boundary. Added `apps/web/lib/server/providerConfig.ts` and sanitized `provider-status` reads. Provider env signals are detected only as presence; no values, parsed secrets, recipients, or provider payloads are returned.
+- High: no append-only delivery attempt ledger. Added `quote_delivery_attempts`, service-role-only `record_quote_delivery_attempt_with_idempotency`, sanitized route/UI reads, audit event `quote_delivery_attempt_blocked`, and live smoke coverage.
+- High: send-intent dedupe needed a database-level guard. Added a unique prepared-intent constraint and updated the send-intent RPC to reuse existing intents without duplicate audit noise.
+- High: sent-state transition needed an explicit guard. Added `mark_quote_revision_sent_with_provider_acknowledgement` as a service-role-only fail-closed RPC; quote sent remains disabled because provider acknowledgement is not implemented.
+- High: Docker build context could include local secrets. Added `.dockerignore` and changed the web container runtime to `next start` instead of `next dev`.
+- Medium: delivery readiness was too loose. Send gate and delivery outbox now require a non-blocked, recipient-available send intent bound to the generated document and PDF artifact before recording a delivery attempt.
+- Medium: runtime tool whitelist needed P12 drift protection. Added read-only provider/attempt/not-sent tools and forbidden chat-side delivery/sent mutations plus prompt-injection tests.
+
+P12 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required keys configured; URL structures valid; no secret values printed. |
+| `py -3.12 -m py_compile scripts/supabase_common.py scripts/check_supabase_env.py scripts/apply_supabase_migrations.py scripts/seed_supabase.py scripts/verify_supabase_connection.py scripts/secret_scan.py` | Passed | Supabase helper and secret-scan scripts compile. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0013_provider_boundary_delivery_attempts.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo Auth users and tenant fixtures seeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live DB/RLS/storage/tenant/RPC/guard checks passed, including P12 delivery-attempt guards. |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript passed. |
+| `npm run test -w apps/web` | Passed | Static server-boundary checks passed with P12 route/RPC/policy markers. |
+| `npm run build -w apps/web` | Passed | Next.js production build passed with P12 routes. |
+| `npm run test:session -w apps/web` | Passed | Session/chat smoke passed with provider-status, delivery-attempt, no-send explanation, and prompt-injection denial. |
+| `npm run test:mutations -w apps/web` | Passed | Live mutation smoke passed provider-status, blocked delivery attempt recording, idempotency replay/conflict, audit, tenant/RBAC, forged ack/sent/provider payload denial, and no quote-sent transition. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Ruff passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Mypy passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 45 passed; one known FastAPI/Starlette TestClient deprecation warning. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| `py -3.12 scripts/secret_scan.py` and `npm run secret-scan` | Passed | Tracked-file secret scan passed; `.env.local` is ignored. |
+| `git diff --check` | Passed | No whitespace errors; Git reported CRLF conversion warnings only. |
+| `go version`, `make --version`, Docker runtime validation | Blocked | Go, GNU Make, and Docker Desktop/Linux engine are unavailable locally; Supabase Cloud remains the active path. |
+
+Remaining P12 risks:
+
+- Real external email delivery, verified provider acknowledgements, quote-sent transition, webhook consumption, customer delivery ledger consumption, and production package generation remain deferred.
+- The provider adapter is intentionally disabled. Any future real adapter must be server-only, secret-free in logs/DTOs, idempotent, ack-verified, and covered by provider fake/sandbox tests before sent-state activation.
+- Process-local same-origin/rate-limit guards remain development hardening, not durable production controls.
+- The long-term Go repository path remains blocked locally by missing Go tooling.
 
 ## P11 Deterministic Binary PDF And Provider-Safe Delivery Plan
 

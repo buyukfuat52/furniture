@@ -17,6 +17,7 @@ import {
   quotePdfRendererVersion,
   quotePdfArtifactVersion
 } from "./pdfArtifact";
+import { getQuoteProviderStatus, type ProviderStatus, type QuoteProviderStatusRecord } from "./providerConfig";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -92,6 +93,29 @@ const quoteDeliveryOutboxSelect = [
   "production_package_triggered",
   "delivery_version",
   "provider_adapter",
+  "created_at"
+].join(",");
+const quoteDeliveryAttemptSelect = [
+  "id",
+  "company_id",
+  "quote_revision_id",
+  "quote_send_intent_id",
+  "quote_delivery_outbox_id",
+  "quote_pdf_artifact_id",
+  "generated_document_id",
+  "status",
+  "provider_status",
+  "provider_adapter",
+  "recipient_source",
+  "recipient_available",
+  "email_provider_configured",
+  "external_delivery_attempted",
+  "quote_sent",
+  "provider_acknowledged",
+  "production_package_triggered",
+  "attempt_version",
+  "provider_config_version",
+  "adapter_version",
   "created_at"
 ].join(",");
 const approvalGateSelect = [
@@ -396,6 +420,7 @@ export type QuoteSendGateStatusRecord = {
   eligible_to_send: false;
   eligible_to_prepare_send: boolean;
   eligible_to_prepare_delivery: boolean;
+  eligible_to_record_delivery_attempt: boolean;
   approved_revision: boolean;
   frozen_document_bound: boolean;
   document_hash_bound: boolean;
@@ -405,7 +430,12 @@ export type QuoteSendGateStatusRecord = {
   email_provider_configured: false;
   latest_send_intent_status: "none" | "send_prepared" | "send_deferred" | "send_blocked";
   latest_delivery_outbox_status: "none" | "provider_deferred" | "delivery_blocked";
-  provider_status: "provider_missing";
+  latest_delivery_attempt_status: "none" | "provider_deferred" | "blocked_provider_missing";
+  provider_status: ProviderStatus;
+  provider_configured: boolean;
+  real_delivery_enabled: false;
+  sent_transition_enabled: false;
+  provider_acknowledgement_verified: false;
   quote_send_triggered: false;
   production_package_triggered: false;
   artifact_status: "html_storage_missing" | "html_stored_pdf_deferred" | "html_and_pdf_stored";
@@ -449,6 +479,36 @@ export type QuoteDeliveryOutboxRecord = {
   provider_adapter: "disabled_provider_adapter_v1";
   created_at: string;
   deferred_actions: string[];
+};
+
+export type QuoteDeliveryAttemptRecord = {
+  id: string;
+  revision_id: string;
+  send_intent_id: string;
+  delivery_outbox_id: string;
+  pdf_artifact_id: string;
+  generated_document_id: string;
+  status: "provider_deferred" | "blocked_provider_missing";
+  provider_status: ProviderStatus;
+  provider_adapter: "disabled_provider_adapter_v1";
+  recipient_source: "project_customer" | "missing_customer_email";
+  recipient_available: boolean;
+  email_provider_configured: false;
+  external_delivery_attempted: false;
+  quote_sent: false;
+  provider_acknowledged: false;
+  production_package_triggered: false;
+  attempt_version: "quote-delivery-attempt-v1.0.0";
+  provider_config_version: "provider-config-boundary-v1.0.0";
+  adapter_version: "disabled-provider-adapter-v1.0.0";
+  created_at: string;
+  deferred_actions: string[];
+};
+
+export type QuoteRevisionProviderStatusRecord = QuoteProviderStatusRecord & {
+  revision_id: string;
+  quote_status: string;
+  tenant_scoped: true;
 };
 
 export type AuditEntryRecord = {
@@ -1782,8 +1842,11 @@ export async function getQuoteSendGateStatus(
     artifact.source_document_hash === document.sha256 &&
     artifact.snapshot_hash === document.snapshot_hash
   )) ?? null;
-  const latestSendIntent = await getLatestQuoteSendIntent(context, revision.id).catch(() => null);
+  const sendIntents = await listQuoteSendIntents(context, revision.id).catch(() => []);
+  const latestSendIntent = sendIntents[0] ?? null;
   const latestDeliveryOutbox = await getLatestQuoteDeliveryOutbox(context, revision.id).catch(() => null);
+  const latestDeliveryAttempt = await getLatestQuoteDeliveryAttempt(context, revision.id).catch(() => null);
+  const providerStatus = getQuoteProviderStatus();
   const documentHashBound = Boolean(document && approvalGate.document_hash && document.sha256 === approvalGate.document_hash);
   const snapshotHashBound = Boolean(document && approvalGate.snapshot_hash && document.snapshot_hash === approvalGate.snapshot_hash);
   const approvedRevision = revision.status === "approved" && approvalGate.status === "approved";
@@ -1791,15 +1854,24 @@ export async function getQuoteSendGateStatus(
   const artifactBound = Boolean(storedHtmlArtifact);
   const pdfArtifactBound = Boolean(storedPdfArtifact);
   const eligibleToPrepareSend = Boolean(approvedRevision && frozenDocumentBound && artifactBound);
-  const eligibleToPrepareDelivery = Boolean(eligibleToPrepareSend && pdfArtifactBound && latestSendIntent);
+  const deliveryReadySendIntent = sendIntents.find((candidate) => (
+    candidate.status !== "send_blocked" &&
+    candidate.recipient_available &&
+    document &&
+    candidate.generated_document_id === document.id
+  )) ?? null;
+  const eligibleToPrepareDelivery = Boolean(eligibleToPrepareSend && pdfArtifactBound && deliveryReadySendIntent);
+  const eligibleToRecordDeliveryAttempt = Boolean(eligibleToPrepareDelivery && latestDeliveryOutbox);
   const blockingReasons = [
     approvedRevision ? null : "quote_not_approved",
     frozenDocumentBound ? null : "frozen_document_not_bound",
     artifactBound ? null : "stored_artifact_not_bound",
     pdfArtifactBound ? null : "binary_pdf_missing",
-    latestSendIntent ? null : "send_intent_missing",
-    "email_provider_not_configured",
-    "external_delivery_not_configured"
+    deliveryReadySendIntent ? null : "delivery_ready_send_intent_missing",
+    latestDeliveryOutbox ? null : "delivery_outbox_missing",
+    providerStatus.provider_configured ? "email_provider_not_verified" : "email_provider_not_configured",
+    "provider_acknowledgement_missing",
+    "sent_transition_disabled"
   ].filter((reason): reason is string => Boolean(reason));
   const artifactStatus: QuoteSendGateStatusRecord["artifact_status"] = !artifactBound
     ? "html_storage_missing"
@@ -1820,6 +1892,7 @@ export async function getQuoteSendGateStatus(
     eligible_to_send: false,
     eligible_to_prepare_send: eligibleToPrepareSend,
     eligible_to_prepare_delivery: eligibleToPrepareDelivery,
+    eligible_to_record_delivery_attempt: eligibleToRecordDeliveryAttempt,
     approved_revision: approvedRevision,
     frozen_document_bound: frozenDocumentBound,
     document_hash_bound: documentHashBound,
@@ -1829,14 +1902,19 @@ export async function getQuoteSendGateStatus(
     email_provider_configured: false,
     latest_send_intent_status: latestSendIntent?.status ?? "none",
     latest_delivery_outbox_status: latestDeliveryOutbox?.status ?? "none",
-    provider_status: "provider_missing",
+    latest_delivery_attempt_status: latestDeliveryAttempt?.status ?? "none",
+    provider_status: providerStatus.provider_status,
+    provider_configured: providerStatus.provider_configured,
+    real_delivery_enabled: false,
+    sent_transition_enabled: false,
+    provider_acknowledgement_verified: false,
     quote_send_triggered: false,
     production_package_triggered: false,
     artifact_status: artifactStatus,
     blocking_reasons: blockingReasons,
     deferred_actions: pdfArtifactBound
-      ? ["quote_send_external_delivery", "production_package"]
-      : ["quote_send_external_delivery", "quote_pdf", "production_package"]
+      ? ["quote_send_external_delivery", "quote_sent_transition", "production_package"]
+      : ["quote_send_external_delivery", "quote_pdf", "quote_sent_transition", "production_package"]
   };
 }
 
@@ -1920,6 +1998,36 @@ export async function listQuoteDeliveryOutbox(
   return rows.map(quoteDeliveryOutboxFromRow);
 }
 
+export async function getQuoteProviderStatusForRevision(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteRevisionProviderStatusRecord> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  return {
+    ...getQuoteProviderStatus(),
+    revision_id: revision.id,
+    quote_status: revision.status,
+    tenant_scoped: true
+  };
+}
+
+export async function listQuoteDeliveryAttempts(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteDeliveryAttemptRecord[]> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  const rows = await supabaseRest<JsonRecord[]>(
+    `quote_delivery_attempts?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      quote_revision_id: `eq.${revision.id}`,
+      select: quoteDeliveryAttemptSelect,
+      order: "created_at.desc"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "quote_delivery_attempts");
+  return rows.map(quoteDeliveryAttemptFromRow);
+}
+
 export async function prepareQuoteDeliveryOutbox(
   context: TrustedRepositoryContext,
   quoteRevisionId: string,
@@ -1943,10 +2051,11 @@ export async function prepareQuoteDeliveryOutbox(
   }
   const sendIntent = sendIntents.find((candidate) => (
     candidate.generated_document_id === pdfArtifact.generated_document_id &&
-    candidate.status !== "send_blocked"
+    candidate.status !== "send_blocked" &&
+    candidate.recipient_available
   )) ?? sendIntents[0] ?? null;
-  if (!sendIntent) {
-    throw new Error("send intent is required before delivery outbox preparation.");
+  if (!sendIntent || sendIntent.status === "send_blocked" || !sendIntent.recipient_available) {
+    throw new Error("delivery-ready send intent is required before delivery outbox preparation.");
   }
   const response = await supabaseRestJson<{ delivery_outbox: QuoteDeliveryOutboxRecord }>(
     "rpc/prepare_quote_delivery_outbox_with_idempotency",
@@ -1967,6 +2076,46 @@ export async function prepareQuoteDeliveryOutbox(
     }
   );
   return response.delivery_outbox;
+}
+
+export async function recordQuoteDeliveryAttempt(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string,
+  reservation: IdempotencyReservation
+): Promise<QuoteDeliveryAttemptRecord> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  if (revision.status !== "approved") {
+    throw new Error("approved quote revision is required for delivery attempt recording.");
+  }
+  const providerStatus = getQuoteProviderStatus();
+  if (providerStatus.real_delivery_enabled || providerStatus.sent_transition_enabled) {
+    throw new Error("verified provider acknowledgement workflow is not active in this release.");
+  }
+  const deliveryOutbox = await getLatestQuoteDeliveryOutbox(context, revision.id);
+  if (!deliveryOutbox) {
+    throw new Error("delivery outbox is required before delivery attempt recording.");
+  }
+  const response = await supabaseRestJson<{ delivery_attempt: QuoteDeliveryAttemptRecord }>(
+    "rpc/record_quote_delivery_attempt_with_idempotency",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_company_id: context.companyId,
+        p_actor_app_user_id: context.appUserId,
+        p_revision_id: revision.id,
+        p_quote_revision_version: revision.version,
+        p_quote_delivery_outbox_id: deliveryOutbox.id,
+        p_idempotency_record_id: reservation.id,
+        p_request_hash: reservation.requestHash,
+        p_attempt_version: "quote-delivery-attempt-v1.0.0",
+        p_provider_adapter: providerStatus.provider_adapter,
+        p_provider_config_version: providerStatus.provider_config_version,
+        p_adapter_version: providerStatus.adapter_version,
+        p_email_provider_configured: false
+      })
+    }
+  );
+  return response.delivery_attempt;
 }
 
 export async function persistQuoteCalculationResult(
@@ -2481,6 +2630,24 @@ async function getLatestQuoteDeliveryOutbox(
   return rows[0] ? quoteDeliveryOutboxFromRow(rows[0]) : null;
 }
 
+async function getLatestQuoteDeliveryAttempt(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteDeliveryAttemptRecord | null> {
+  const trustedRevisionId = requireUuid(quoteRevisionId, "Quote revision id");
+  const rows = await supabaseRest<JsonRecord[]>(
+    `quote_delivery_attempts?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      quote_revision_id: `eq.${trustedRevisionId}`,
+      select: quoteDeliveryAttemptSelect,
+      order: "created_at.desc",
+      limit: "1"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "quote_delivery_attempts");
+  return rows[0] ? quoteDeliveryAttemptFromRow(rows[0]) : null;
+}
+
 function quoteSendIntentFromRow(row: JsonRecord): QuoteSendIntentRecord {
   return {
     id: asString(row.id),
@@ -2501,6 +2668,12 @@ function quoteSendIntentFromRow(row: JsonRecord): QuoteSendIntentRecord {
     created_at: asString(row.created_at),
     deferred_actions: ["quote_send_external_delivery", "production_package"]
   };
+}
+
+function boundedProviderStatus(value: unknown): ProviderStatus {
+  return asString(value) === "provider_configured_unverified"
+    ? "provider_configured_unverified"
+    : "provider_missing";
 }
 
 function quoteDeliveryOutboxFromRow(row: JsonRecord): QuoteDeliveryOutboxRecord {
@@ -2524,6 +2697,36 @@ function quoteDeliveryOutboxFromRow(row: JsonRecord): QuoteDeliveryOutboxRecord 
     provider_adapter: "disabled_provider_adapter_v1",
     created_at: asString(row.created_at),
     deferred_actions: ["quote_send_external_delivery", "production_package"]
+  };
+}
+
+function quoteDeliveryAttemptFromRow(row: JsonRecord): QuoteDeliveryAttemptRecord {
+  return {
+    id: asString(row.id),
+    revision_id: asString(row.quote_revision_id),
+    send_intent_id: asString(row.quote_send_intent_id),
+    delivery_outbox_id: asString(row.quote_delivery_outbox_id),
+    pdf_artifact_id: asString(row.quote_pdf_artifact_id),
+    generated_document_id: asString(row.generated_document_id),
+    status: asString(row.status) === "provider_deferred"
+      ? "provider_deferred"
+      : "blocked_provider_missing",
+    provider_status: boundedProviderStatus(row.provider_status),
+    provider_adapter: "disabled_provider_adapter_v1",
+    recipient_source: asString(row.recipient_source) === "project_customer"
+      ? "project_customer"
+      : "missing_customer_email",
+    recipient_available: row.recipient_available === true,
+    email_provider_configured: false,
+    external_delivery_attempted: false,
+    quote_sent: false,
+    provider_acknowledged: false,
+    production_package_triggered: false,
+    attempt_version: "quote-delivery-attempt-v1.0.0",
+    provider_config_version: "provider-config-boundary-v1.0.0",
+    adapter_version: "disabled-provider-adapter-v1.0.0",
+    created_at: asString(row.created_at),
+    deferred_actions: ["quote_send_external_delivery", "quote_sent_transition", "production_package"]
   };
 }
 

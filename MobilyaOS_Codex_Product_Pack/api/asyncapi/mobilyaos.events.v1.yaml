@@ -18,11 +18,25 @@ channels:
     messages:
       quoteApproved:
         $ref: "#/components/messages/QuoteApproved"
+  quoteDeliveryAttemptBlocked:
+    address: quote.delivery_attempt.blocked.v1
+    messages:
+      quoteDeliveryAttemptBlocked:
+        $ref: "#/components/messages/QuoteDeliveryAttemptBlocked"
+  quoteSent:
+    address: quote.sent.v1
+    messages:
+      quoteSent:
+        $ref: "#/components/messages/QuoteSent"
 operations:
   publishProjectCreated:
     action: send
     channel:
       $ref: "#/channels/projectCreated"
+  publishQuoteDeliveryAttemptBlocked:
+    action: send
+    channel:
+      $ref: "#/channels/quoteDeliveryAttemptBlocked"
 components:
   messages:
     ProjectCreated:
@@ -35,6 +49,16 @@ components:
         $ref: "#/components/schemas/CloudEvent"
     QuoteApproved:
       name: quote.approved.v1
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
+    QuoteDeliveryAttemptBlocked:
+      name: quote.delivery_attempt.blocked.v1
+      summary: Provider boundary blocked an external quote delivery attempt; no quote-sent transition or production package is triggered.
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
+    QuoteSent:
+      name: quote.sent.v1
+      summary: Deferred until a provider acknowledgement workflow can atomically verify attempt success and transition approved quote revisions to sent.
       payload:
         $ref: "#/components/schemas/CloudEvent"
   schemas:

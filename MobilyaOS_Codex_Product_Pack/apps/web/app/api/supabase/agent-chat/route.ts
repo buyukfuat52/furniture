@@ -9,7 +9,9 @@ import {
   getQuoteRevisionDiff,
   getQuoteSendGateStatus,
   getQuoteSnapshot,
+  getQuoteProviderStatusForRevision,
   listQuoteDeliveryOutbox,
+  listQuoteDeliveryAttempts,
   listQuoteArtifacts,
   listQuoteDocuments,
   listProjects,
@@ -19,7 +21,9 @@ import {
   type QuoteArtifactRecord,
   type QuoteConfigurationDraftRecord,
   type QuoteDocumentRecord,
+  type QuoteDeliveryAttemptRecord,
   type QuoteDeliveryOutboxRecord,
+  type QuoteRevisionProviderStatusRecord,
   type QuoteRevisionDetailRecord,
   type QuoteRevisionDiffResponse,
   type QuoteRevisionRecord,
@@ -116,12 +120,12 @@ function classifyMessage(message: string): { agentId: AgentId; classification: s
 
 function looksLikePromptInjection(message: string): boolean {
   const normalized = searchText(message);
-  return /ignore previous|system prompt|developer message|bypass|override|whitelist|policy|secret|token|approval token|document access token|password|service role|database url|cookie|signed url|storage path|tool output|malicious tool|call forbidden tool/i.test(normalized);
+  return /ignore previous|system prompt|developer message|bypass|override|whitelist|policy|secret|token|approval token|document access token|password|service role|database url|cookie|signed url|storage path|tool output|malicious tool|call forbidden tool|provider ack|provider acknowledgement|webhook success|sent_at|mark sent|teslim edildi/i.test(normalized);
 }
 
 function asksForMutation(message: string): boolean {
   const normalized = searchText(message);
-  return /send|gonder|approve|onayla|finalize|finalise|tamamla|consume approval|consume token|approval token.*consume|token.*tuket|onay token.*tuket|calculate|recalculate|hesapla|yeniden hesapla|generate|olustur|uret|download|indir|prepare send|send intent|gonderim niyeti|production|uretim|create|update|delete|sil|degistir|kaydet/i.test(normalized);
+  return /send|gonder|approve|onayla|finalize|finalise|tamamla|consume approval|consume token|approval token.*consume|token.*tuket|onay token.*tuket|calculate|recalculate|hesapla|yeniden hesapla|generate|olustur|uret|download|indir|prepare send|send intent|gonderim niyeti|record delivery|delivery attempt|teslimat denemesi|provider ack|webhook|mark sent|sent_at|production|uretim|create|update|delete|sil|degistir|kaydet/i.test(normalized);
 }
 
 function responseBody(input: {
@@ -330,6 +334,44 @@ function deliveryFacts(outbox: QuoteDeliveryOutboxRecord[]): Array<{ label: stri
   ];
 }
 
+function providerFacts(providerStatus: QuoteRevisionProviderStatusRecord | null): Array<{ label: string; value: unknown }> {
+  if (!providerStatus) {
+    return [
+      { label: "Provider siniri", value: "provider_missing" },
+      { label: "Sent gecisi", value: false }
+    ];
+  }
+  return [
+    { label: "Provider siniri", value: providerStatus.provider_status },
+    { label: "Provider adapter", value: providerStatus.provider_adapter },
+    { label: "Provider config versiyonu", value: providerStatus.provider_config_version },
+    { label: "Gercek provider gonderimi", value: providerStatus.real_delivery_enabled },
+    { label: "Provider ack dogrulandi", value: providerStatus.provider_acknowledgement_verified },
+    { label: "Sent gecisi", value: providerStatus.sent_transition_enabled },
+    { label: "Provider secret returned", value: providerStatus.provider_secret_returned },
+    { label: "Raw provider payload returned", value: providerStatus.provider_raw_payload_returned }
+  ];
+}
+
+function deliveryAttemptFacts(attempts: QuoteDeliveryAttemptRecord[]): Array<{ label: string; value: unknown }> {
+  const latest = attempts[0] ?? null;
+  if (!latest) {
+    return [
+      { label: "Teslimat denemesi", value: "yok" },
+      { label: "Provider ack", value: false }
+    ];
+  }
+  return [
+    { label: "Teslimat denemesi", value: latest.status },
+    { label: "Deneme provider", value: latest.provider_status },
+    { label: "Deneme adapter", value: latest.provider_adapter },
+    { label: "Dis gonderim denendi", value: latest.external_delivery_attempted },
+    { label: "Provider ack", value: latest.provider_acknowledged },
+    { label: "Quote sent", value: latest.quote_sent },
+    { label: "Uretim tetiklendi", value: latest.production_package_triggered }
+  ];
+}
+
 function artifactFacts(artifacts: QuoteArtifactRecord[]): Array<{ label: string; value: unknown }> {
   const latest = artifacts[0] ?? null;
   if (!latest) {
@@ -429,6 +471,8 @@ export async function POST(request: Request) {
     let sendGate: QuoteSendGateStatusRecord | null = null;
     let quoteArtifacts: QuoteArtifactRecord[] = [];
     let deliveryOutbox: QuoteDeliveryOutboxRecord[] = [];
+    let providerStatus: QuoteRevisionProviderStatusRecord | null = null;
+    let deliveryAttempts: QuoteDeliveryAttemptRecord[] = [];
 
     if (projectId) {
       projectDetail = await getProjectDetail(session.mutationScope, projectId);
@@ -455,6 +499,8 @@ export async function POST(request: Request) {
       sendGate = await getQuoteSendGateStatus(session.mutationScope, revisionId);
       quoteArtifacts = await listQuoteArtifacts(session.mutationScope, revisionId);
       deliveryOutbox = await listQuoteDeliveryOutbox(session.mutationScope, revisionId);
+      providerStatus = await getQuoteProviderStatusForRevision(session.mutationScope, revisionId);
+      deliveryAttempts = await listQuoteDeliveryAttempts(session.mutationScope, revisionId);
       toolCalls.push(completedTool("agent-tool-2", "get_quote_revision_detail", "Oturum sirketine ait revizyon okundu."));
       toolCalls.push(completedTool("agent-tool-3", "get_quote_configuration_draft", "Konfigurasyon taslagi salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-4", "get_quote_snapshot", "Deterministik snapshot salt okunur okundu."));
@@ -463,6 +509,9 @@ export async function POST(request: Request) {
       toolCalls.push(completedTool("agent-tool-artifact-status", "get_quote_artifact_status", "Saklanan artefakt durumu salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-pdf-artifact-status", "get_pdf_artifact_status", "PDF artefakt durumu salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-delivery-status", "get_delivery_status", "Provider-safe delivery outbox durumu salt okunur okundu."));
+      toolCalls.push(completedTool("agent-tool-provider-status", "get_provider_status", "Provider konfigurasyon siniri salt okunur okundu."));
+      toolCalls.push(completedTool("agent-tool-delivery-attempt-status", "get_delivery_attempt_status", "Teslimat deneme ledger'i salt okunur okundu."));
+      toolCalls.push(completedTool("agent-tool-not-sent-explanation", "explain_why_quote_is_not_sent", "Provider ack olmadigi icin teklifin sent olmadigi aciklandi."));
       facts.push(
         ...revisionFacts(revisionDetail),
         ...configurationFacts(configurationDraft),
@@ -470,7 +519,9 @@ export async function POST(request: Request) {
         ...approvalFacts(approvalGate),
         ...sendGateFacts(sendGate),
         ...artifactFacts(quoteArtifacts),
-        ...deliveryFacts(deliveryOutbox)
+        ...deliveryFacts(deliveryOutbox),
+        ...providerFacts(providerStatus),
+        ...deliveryAttemptFacts(deliveryAttempts)
       );
     } else {
       missingInformation.push("Supabase proje veya revizyon secimi");

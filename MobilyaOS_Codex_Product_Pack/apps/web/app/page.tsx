@@ -13,12 +13,14 @@ import {
   SupabaseDemoOverview,
   SupabaseApprovalGate,
   SupabaseQuoteDeliveryOutbox,
+  SupabaseQuoteDeliveryAttempt,
   SupabaseProjectDetail,
   SupabaseQuoteArtifact,
   SupabaseQuoteConfigurationDraftResponse,
   SupabaseQuoteDocument,
   SupabaseQuoteDocumentPreview,
   SupabaseQuoteForkResponse,
+  SupabaseQuoteProviderStatus,
   SupabaseQuoteRevisionDetail,
   SupabaseQuoteRevisionDiff,
   SupabaseQuoteSendIntent,
@@ -68,6 +70,8 @@ export default function HomePage() {
   const [cloudSendGate, setCloudSendGate] = useState<SupabaseSendGateStatus | null>(null);
   const [cloudSendIntent, setCloudSendIntent] = useState<SupabaseQuoteSendIntent | null>(null);
   const [cloudDeliveryOutbox, setCloudDeliveryOutbox] = useState<SupabaseQuoteDeliveryOutbox[]>([]);
+  const [cloudProviderStatus, setCloudProviderStatus] = useState<SupabaseQuoteProviderStatus | null>(null);
+  const [cloudDeliveryAttempts, setCloudDeliveryAttempts] = useState<SupabaseQuoteDeliveryAttempt[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [chatInput, setChatInput] = useState("Bu projenin maliyet snapshot sonucunu acikla");
   const [chatResult, setChatResult] = useState<AgentChatResponse | null>(null);
@@ -299,7 +303,9 @@ export default function HomePage() {
         loadSupabaseQuoteArtifacts(quoteRevisionId, false),
         loadSupabaseApprovalStatus(quoteRevisionId, false),
         loadSupabaseSendGateStatus(quoteRevisionId, false),
-        loadSupabaseDeliveryOutbox(quoteRevisionId, false)
+        loadSupabaseDeliveryOutbox(quoteRevisionId, false),
+        loadSupabaseProviderStatus(quoteRevisionId, false),
+        loadSupabaseDeliveryAttempts(quoteRevisionId, false)
       ]);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -400,6 +406,44 @@ export default function HomePage() {
       setCloudDeliveryOutbox(result.delivery_outbox);
     } catch {
       setCloudDeliveryOutbox([]);
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseProviderStatus(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ provider_status: SupabaseQuoteProviderStatus }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/provider-status`
+      );
+      setCloudProviderStatus(result.provider_status);
+    } catch {
+      setCloudProviderStatus(null);
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseDeliveryAttempts(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ delivery_attempts: SupabaseQuoteDeliveryAttempt[] }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/delivery-attempts`
+      );
+      setCloudDeliveryAttempts(result.delivery_attempts);
+    } catch {
+      setCloudDeliveryAttempts([]);
     } finally {
       if (setBusy) {
         setCloudBusy(false);
@@ -720,6 +764,8 @@ export default function HomePage() {
       await loadSupabaseQuoteArtifacts(revisionId, false);
       await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
+      await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseDeliveryAttempts(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -744,6 +790,8 @@ export default function HomePage() {
       await loadSupabaseQuoteArtifacts(revisionId, false);
       await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
+      await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseDeliveryAttempts(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -768,6 +816,8 @@ export default function HomePage() {
       setSeedSummary(`Gonderim niyeti kaydedildi: ${result.send_intent.status}`);
       await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
+      await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseDeliveryAttempts(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
     } finally {
@@ -791,6 +841,33 @@ export default function HomePage() {
       setCloudDeliveryOutbox([result.delivery_outbox]);
       setSeedSummary(`Provider guvenli outbox kaydi: ${result.delivery_outbox.status}`);
       await loadSupabaseDeliveryOutbox(revisionId, false);
+      await loadSupabaseSendGateStatus(revisionId, false);
+      await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseDeliveryAttempts(revisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function recordSupabaseDeliveryAttempt() {
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    if (!revisionId) {
+      setError("Teslimat denemesi icin onayli Supabase revizyonu gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<{ delivery_attempt: SupabaseQuoteDeliveryAttempt }>(
+        `/api/supabase/quote-revisions/${revisionId}/delivery-attempts`,
+        {}
+      );
+      setCloudDeliveryAttempts([result.delivery_attempt]);
+      setSeedSummary(`Provider denemesi bloke kaydedildi: ${result.delivery_attempt.status}`);
+      await loadSupabaseDeliveryAttempts(revisionId, false);
+      await loadSupabaseProviderStatus(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -1017,6 +1094,7 @@ export default function HomePage() {
             configurationDraft={cloudConfigurationDraft}
             documentPreview={cloudDocumentPreview}
             documents={cloudDocuments}
+            deliveryAttempts={cloudDeliveryAttempts}
             onCalculateQuoteSnapshot={calculateSupabaseQuoteSnapshot}
             onForkRevision={forkSupabaseQuoteRevision}
             onGenerateQuoteArtifact={generateSupabaseQuoteArtifact}
@@ -1025,7 +1103,9 @@ export default function HomePage() {
             onSaveConfigurationDraft={saveSupabaseConfigurationDraft}
             onLoadRevisionDiff={() => loadSupabaseRevisionDiff()}
             onPrepareSendIntent={prepareSupabaseQuoteSendIntent}
+            onRecordDeliveryAttempt={recordSupabaseDeliveryAttempt}
             projectDetail={cloudProjectDetail}
+            providerStatus={cloudProviderStatus}
             quoteSnapshot={cloudQuoteSnapshot}
             revisionDiff={cloudRevisionDiff}
             revisionDetail={cloudRevisionDetail}
@@ -1308,6 +1388,7 @@ function SupabaseTimelinePanel({
   configurationDraft,
   documentPreview,
   documents,
+  deliveryAttempts,
   deliveryOutbox,
   onCalculateQuoteSnapshot,
   onForkRevision,
@@ -1320,8 +1401,10 @@ function SupabaseTimelinePanel({
   onPrepareApprovalGate,
   onPrepareDeliveryOutbox,
   onPrepareSendIntent,
+  onRecordDeliveryAttempt,
   onSaveConfigurationDraft,
   projectDetail,
+  providerStatus,
   quoteSnapshot,
   revisionDiff,
   revisionDetail,
@@ -1335,6 +1418,7 @@ function SupabaseTimelinePanel({
   configurationDraft: SupabaseQuoteConfigurationDraftResponse | null;
   documentPreview: SupabaseQuoteDocumentPreview | null;
   documents: SupabaseQuoteDocument[];
+  deliveryAttempts: SupabaseQuoteDeliveryAttempt[];
   deliveryOutbox: SupabaseQuoteDeliveryOutbox[];
   onCalculateQuoteSnapshot: () => void;
   onForkRevision: () => void;
@@ -1347,8 +1431,10 @@ function SupabaseTimelinePanel({
   onPrepareApprovalGate: () => void;
   onPrepareDeliveryOutbox: () => void;
   onPrepareSendIntent: () => void;
+  onRecordDeliveryAttempt: () => void;
   onSaveConfigurationDraft: (event: FormEvent<HTMLFormElement>) => void;
   projectDetail: SupabaseProjectDetail | null;
+  providerStatus: SupabaseQuoteProviderStatus | null;
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDiff: SupabaseQuoteRevisionDiff | null;
   revisionDetail: SupabaseQuoteRevisionDetail | null;
@@ -1451,6 +1537,7 @@ function SupabaseTimelinePanel({
               canPrepareApproval={canPrepareApproval}
               documentPreview={documentPreview}
               documents={documents}
+              deliveryAttempts={deliveryAttempts}
               deliveryOutbox={deliveryOutbox}
               onForkRevision={onForkRevision}
               onGenerateQuoteArtifact={onGenerateQuoteArtifact}
@@ -1461,6 +1548,8 @@ function SupabaseTimelinePanel({
               onPrepareApprovalGate={onPrepareApprovalGate}
               onPrepareDeliveryOutbox={onPrepareDeliveryOutbox}
               onPrepareSendIntent={onPrepareSendIntent}
+              onRecordDeliveryAttempt={onRecordDeliveryAttempt}
+              providerStatus={providerStatus}
               quoteSnapshot={quoteSnapshot}
               revisionDiff={revisionDiff}
               revisionDetail={revisionDetail}
@@ -1494,6 +1583,7 @@ function SupabaseQuoteLifecyclePanel({
   artifacts,
   busy,
   canPrepareApproval,
+  deliveryAttempts,
   deliveryOutbox,
   documentPreview,
   documents,
@@ -1506,6 +1596,8 @@ function SupabaseQuoteLifecyclePanel({
   onPrepareApprovalGate,
   onPrepareDeliveryOutbox,
   onPrepareSendIntent,
+  onRecordDeliveryAttempt,
+  providerStatus,
   quoteSnapshot,
   revisionDiff,
   revisionDetail,
@@ -1516,6 +1608,7 @@ function SupabaseQuoteLifecyclePanel({
   artifacts: SupabaseQuoteArtifact[];
   busy: boolean;
   canPrepareApproval: boolean;
+  deliveryAttempts: SupabaseQuoteDeliveryAttempt[];
   deliveryOutbox: SupabaseQuoteDeliveryOutbox[];
   documentPreview: SupabaseQuoteDocumentPreview | null;
   documents: SupabaseQuoteDocument[];
@@ -1528,6 +1621,8 @@ function SupabaseQuoteLifecyclePanel({
   onPrepareApprovalGate: () => void;
   onPrepareDeliveryOutbox: () => void;
   onPrepareSendIntent: () => void;
+  onRecordDeliveryAttempt: () => void;
+  providerStatus: SupabaseQuoteProviderStatus | null;
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDiff: SupabaseQuoteRevisionDiff | null;
   revisionDetail: SupabaseQuoteRevisionDetail;
@@ -1540,11 +1635,13 @@ function SupabaseQuoteLifecyclePanel({
   const latestHtmlArtifact = artifacts.find((artifact) => artifact.artifact_type === "quote_html_storage") ?? null;
   const latestPdfArtifact = artifacts.find((artifact) => artifact.artifact_type === "quote_pdf") ?? null;
   const latestDeliveryOutbox = deliveryOutbox[0] ?? null;
+  const latestDeliveryAttempt = deliveryAttempts[0] ?? null;
   const canPreview = Boolean(latestDocument);
   const canStoreArtifact = approvalGate?.status === "approved" && revisionDetail.quote_revision.status === "approved";
   const canGeneratePdf = canStoreArtifact && Boolean(latestHtmlArtifact);
   const canPrepareSendIntent = Boolean(sendGate?.eligible_to_prepare_send);
   const canPrepareDelivery = Boolean(sendGate?.eligible_to_prepare_delivery);
+  const canRecordDeliveryAttempt = Boolean(sendGate?.eligible_to_record_delivery_attempt && latestDeliveryOutbox);
   const documentPreviewUrl = documentPreview ? `/api/supabase/documents/${documentPreview.id}/preview` : "";
   return (
     <div className="lifecyclePanel">
@@ -1563,6 +1660,8 @@ function SupabaseQuoteLifecyclePanel({
         <SummaryCard title="PDF artefakt" value={latestPdfArtifact ? latestPdfArtifact.pdf_status : "yok"} />
         <SummaryCard title="Onay kapisi" value={approvalGate?.status ?? "not_prepared"} />
         <SummaryCard title="Gonderim kapisi" value={sendGate?.status ?? "not_ready"} />
+        <SummaryCard title="Provider" value={providerStatus?.provider_status ?? "provider_missing"} />
+        <SummaryCard title="Deneme ledger" value={`${deliveryAttempts.length} kayit`} />
       </div>
 
       <div className="buttonRow">
@@ -1592,6 +1691,9 @@ function SupabaseQuoteLifecyclePanel({
         </button>
         <button disabled={busy || !canPrepareDelivery} onClick={onPrepareDeliveryOutbox} type="button">
           Provider outbox hazirla
+        </button>
+        <button disabled={busy || !canRecordDeliveryAttempt} onClick={onRecordDeliveryAttempt} type="button">
+          Teslimat denemesi kaydet
         </button>
         <button disabled type="button">Dis e-posta gonderimi kapali</button>
         <button disabled type="button">Uretim paketi</button>
@@ -1715,9 +1817,15 @@ function SupabaseQuoteLifecyclePanel({
           <p className="smallNote">
             Hazirlik uygun: {String(sendGate.eligible_to_prepare_send)} /
             outbox uygun: {String(sendGate.eligible_to_prepare_delivery)} /
+            deneme uygun: {String(sendGate.eligible_to_record_delivery_attempt)} /
             calisan gonderim: {String(sendGate.quote_send_triggered)} /
             son niyet: {sendGate.latest_send_intent_status} /
-            outbox: {sendGate.latest_delivery_outbox_status}
+            outbox: {sendGate.latest_delivery_outbox_status} /
+            deneme: {sendGate.latest_delivery_attempt_status}
+          </p>
+          <p className="smallNote">
+            Provider dogrulandi: {String(sendGate.provider_acknowledgement_verified)} /
+            sent gecisi: {String(sendGate.sent_transition_enabled)}
           </p>
           <p className="smallNote">Artefakt durumu: {sendGate.artifact_status}</p>
           <p className="smallNote">Blokajlar: {sendGate.blocking_reasons.join(", ") || "yok"}</p>
@@ -1739,6 +1847,21 @@ function SupabaseQuoteLifecyclePanel({
           </p>
         </div>
       ) : null}
+      {providerStatus ? (
+        <div className="approvalBox">
+          <strong>Provider siniri: {providerStatus.provider_status}</strong>
+          <p>
+            Adapter: {providerStatus.provider_adapter} /
+            config: {providerStatus.provider_config_version} /
+            gercek gonderim: {String(providerStatus.real_delivery_enabled)}
+          </p>
+          <p className="smallNote">
+            Ack gerekli: {String(providerStatus.provider_acknowledgement_required)} /
+            ack dogrulandi: {String(providerStatus.provider_acknowledgement_verified)} /
+            sent gecisi: {String(providerStatus.sent_transition_enabled)}
+          </p>
+        </div>
+      ) : null}
       {latestDeliveryOutbox ? (
         <div className="approvalBox">
           <strong>Provider outbox: {latestDeliveryOutbox.status}</strong>
@@ -1751,6 +1874,21 @@ function SupabaseQuoteLifecyclePanel({
             Dis gonderim: {String(latestDeliveryOutbox.external_delivery_attempted)} /
             teklif sent: {String(latestDeliveryOutbox.quote_sent)} /
             uretim paketi: {String(latestDeliveryOutbox.production_package_triggered)}
+          </p>
+        </div>
+      ) : null}
+      {latestDeliveryAttempt ? (
+        <div className="approvalBox">
+          <strong>Teslimat denemesi: {latestDeliveryAttempt.status}</strong>
+          <p>
+            Provider: {latestDeliveryAttempt.provider_status} /
+            adapter: {latestDeliveryAttempt.provider_adapter} /
+            alici mevcut: {latestDeliveryAttempt.recipient_available ? "evet" : "hayir"}
+          </p>
+          <p className="smallNote">
+            Dis gonderim: {String(latestDeliveryAttempt.external_delivery_attempted)} /
+            ack: {String(latestDeliveryAttempt.provider_acknowledged)} /
+            teklif sent: {String(latestDeliveryAttempt.quote_sent)}
           </p>
         </div>
       ) : null}
