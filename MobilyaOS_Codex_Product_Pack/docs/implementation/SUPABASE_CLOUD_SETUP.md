@@ -88,12 +88,14 @@ The current web wiring reads seeded Supabase data, validates the local-demo sess
 - `POST /api/supabase/approval-tokens/consume`
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/send-gate`
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/artifacts`
+- `POST /api/supabase/quote-revisions/[quoteRevisionId]/artifacts/pdf`
 - `GET /api/supabase/artifacts/[artifactId]`
 - `GET /api/supabase/artifacts/[artifactId]/download`
-- `POST /api/supabase/quote-revisions/[quoteRevisionId]/send-intents`
+- `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/send-intents`
+- `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/delivery-outbox`
 - `POST /api/supabase/agent-chat`
 
-`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, create/update draft quote configuration inputs, run the narrow deterministic wardrobe snapshot calculation, generate frozen HTML quote documents, fork revisions, store approved HTML artifacts, and prepare audited non-delivering send intents. Approval-gate preparation is `admin` only. Approval-token consumption is a strict unauthenticated POST-body endpoint intended for external token flows; it returns only sanitized invalid/replay/expiry/stale/approved status. In P9, a valid pending token can approve the bound draft revision only after the service-role RPC rechecks token hash, expiry, replay state, company, revision version, current configuration provenance, cost snapshot hash, frozen document id, and document hash. In P10, artifact storage requires approved revision, approved approval gate, frozen document binding, source document hash, content type, size, server-derived object path, and durable idempotency. Send-intent preparation requires approved revision plus stored artifact binding and still keeps external delivery disabled. These routes do not send quotes, create binary PDFs, mark quotes sent, or create production packages.
+`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, create/update draft quote configuration inputs, run the narrow deterministic wardrobe snapshot calculation, generate frozen HTML quote documents, fork revisions, store approved HTML/PDF artifacts, prepare audited non-delivering send intents, and prepare provider-deferred delivery outbox records. Approval-gate preparation is `admin` only. Approval-token consumption is a strict unauthenticated POST-body endpoint intended for external token flows; it returns only sanitized invalid/replay/expiry/stale/approved status. In P9, a valid pending token can approve the bound draft revision only after the service-role RPC rechecks token hash, expiry, replay state, company, revision version, current configuration provenance, cost snapshot hash, frozen document id, and document hash. In P10, HTML artifact storage requires approved revision, approved approval gate, frozen document binding, source document hash, content type, size, server-derived object path, and durable idempotency. In P11, PDF artifact storage additionally requires the stored HTML artifact, trusted persisted cost snapshot total, deterministic server-generated PDF bytes, distinct PDF hash, and service-role RPC binding. Send-intent preparation requires approved revision plus stored artifact binding, and delivery-outbox preparation requires safe send intent plus stored PDF binding. These routes do not send quotes, mark quotes sent, or create production packages.
 
 Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, cost, or calculation values are not authority. Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key. Raw idempotency keys are not stored.
 
@@ -107,6 +109,8 @@ P9 customer approval finalization and send-gate hardening uses `supabase/migrati
 
 P10 deterministic artifact storage and send-intent hardening uses `supabase/migrations/0011_quote_artifact_storage_send_intents.sql`. It adds tenant-owned `quote_artifacts` and `quote_send_intents`, service-role-only RPCs for artifact persistence and send-intent preparation, no-direct-read RLS policies, private `quote-documents` object storage access through server routes only, and database constraints rejecting stored metadata or send-state/provider forgeries. Artifact browser DTOs do not expose storage bucket/path values or signed URL internals. Send-intent DTOs do not expose provider secrets or recipient email.
 
+P11 deterministic PDF artifact and provider-safe delivery outbox uses `supabase/migrations/0012_quote_pdf_artifact_delivery_outbox.sql`. It extends `quote_artifacts` with type-specific HTML/PDF constraints, stores deterministic PDF artifacts under server-owned private object paths, makes the PDF hash distinct from the source HTML document hash, hardens idempotency direct access, adds service-role-only RPCs for PDF persistence and delivery-outbox preparation, and adds tenant-owned `quote_delivery_outbox` rows with a disabled provider adapter. Delivery outbox DTOs do not expose recipient email, provider message IDs, provider responses, provider secrets, storage paths, or signed URL internals.
+
 The seed includes a second tenant (`tenantb-sales@demo.local`) for live isolation checks. Authenticated Supabase public-key access is read-only for app data after `0006_authenticated_read_only_rls.sql`; direct sales/viewer writes are denied so browser clients cannot bypass server-side idempotency, validation, or audit.
 
 Quote configuration drafts are protected by route validation and database guards:
@@ -118,7 +122,7 @@ Quote configuration drafts are protected by route validation and database guards
 - draft writes are rejected for approved/sent revisions
 - direct authenticated writes to quote revisions/configuration drafts are blocked or no-effect
 
-Binary PDF generation, external quote send, production package, nesting, and broader product-template mutations remain deferred until fuller deterministic persistence is implemented. Lower legacy P3 demo controls may still point at the in-memory Go path, but the persisted Supabase panel owns the current document/fork/diff/approval-finalization/stored-artifact/send-intent/send-gate lifecycle.
+External quote send, quote-sent transition, production package, nesting, and broader product-template mutations remain deferred until fuller deterministic persistence and provider verification are implemented. Lower legacy P3 demo controls may still point at the in-memory Go path, but the persisted Supabase panel owns the current document/fork/diff/approval-finalization/stored HTML/PDF artifact/send-intent/delivery-outbox/send-gate lifecycle.
 
 Additional sprint artifacts:
 
@@ -143,9 +147,9 @@ After env values are configured, `verify_supabase_connection.py` checks:
 - `quote-documents` and `production-packages` buckets
 - authenticated RLS access with the demo sales user
 - direct authenticated write denial/no-effect checks
-- direct authenticated sensitive generated-document, approval, quote-artifact, and quote-send-intent read denial
+- direct authenticated sensitive generated-document, approval, quote-artifact, quote-send-intent, and quote-delivery-outbox read denial
 - direct quote-documents storage list metadata non-visibility
 - approval-consumption RPC existence and service-role-only execute grants
-- artifact-storage and send-intent RPC existence and service-role-only execute grants
-- P10 table constraints for artifact hash/content-type/path metadata and no provider/send-state forgery
-- database guards for quote revision status changes, approved-revision configuration drafts, approved-revision quote HTML document generation, and invalid configuration draft shapes
+- artifact-storage, PDF-artifact, send-intent, delivery-outbox, and idempotency RPC existence and service-role-only execute grants
+- P11 table constraints for HTML/PDF artifact hash/content-type/path metadata and no provider/send-state/delivery forgery
+- database guards for quote revision status changes, approved-revision configuration drafts, approved-revision quote HTML document generation, invalid configuration draft shapes, forged PDF artifacts, and forged delivery outbox state

@@ -57,12 +57,16 @@ def test_policy_manifest_contains_security_boundary_flags() -> None:
         "get_quote_artifact_status",
         "explain_quote_artifact_status",
         "explain_quote_artifact",
+        "get_pdf_artifact_status",
+        "explain_pdf_artifact_status",
         "get_approval_status",
         "explain_approval_status",
         "get_send_gate_status",
         "explain_send_gate_status",
         "get_send_preparation_status",
         "explain_send_preparation_status",
+        "get_delivery_status",
+        "explain_delivery_status",
         "get_revision_diff",
         "explain_revision_diff",
         "create_quote_configuration_draft",
@@ -196,12 +200,16 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     artifact_status = get_tool_policy("get_quote_artifact_status")
     artifact_status_explanation = get_tool_policy("explain_quote_artifact_status")
     artifact_explanation = get_tool_policy("explain_quote_artifact")
+    pdf_artifact_status = get_tool_policy("get_pdf_artifact_status")
+    pdf_artifact_explanation = get_tool_policy("explain_pdf_artifact_status")
     approval_status = get_tool_policy("get_approval_status")
     approval_explanation = get_tool_policy("explain_approval_status")
     send_gate = get_tool_policy("get_send_gate_status")
     send_gate_explanation = get_tool_policy("explain_send_gate_status")
     send_preparation = get_tool_policy("get_send_preparation_status")
     send_preparation_explanation = get_tool_policy("explain_send_preparation_status")
+    delivery_status = get_tool_policy("get_delivery_status")
+    delivery_explanation = get_tool_policy("explain_delivery_status")
     diff = get_tool_policy("get_revision_diff")
     diff_explanation = get_tool_policy("explain_revision_diff")
 
@@ -234,6 +242,18 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert artifact_status_explanation.requires_audit is False
     assert artifact_status_explanation.requires_approval is False
     assert artifact_status_explanation.executable is True
+
+    assert pdf_artifact_status is not None
+    assert pdf_artifact_status.mode == "read"
+    assert pdf_artifact_status.executable is True
+    assert pdf_artifact_status.requires_idempotency is False
+    assert pdf_artifact_status.requires_approval is False
+
+    assert pdf_artifact_explanation is not None
+    assert pdf_artifact_explanation.mode == "conversation"
+    assert pdf_artifact_explanation.requires_audit is False
+    assert pdf_artifact_explanation.requires_approval is False
+    assert pdf_artifact_explanation.executable is True
 
     assert approval_status is not None
     assert approval_status.mode == "read"
@@ -269,6 +289,18 @@ def test_persisted_document_and_diff_tools_are_read_only() -> None:
     assert send_preparation_explanation.requires_audit is False
     assert send_preparation_explanation.requires_approval is False
     assert send_preparation_explanation.executable is True
+
+    assert delivery_status is not None
+    assert delivery_status.mode == "read"
+    assert delivery_status.executable is True
+    assert delivery_status.requires_idempotency is False
+    assert delivery_status.requires_approval is False
+
+    assert delivery_explanation is not None
+    assert delivery_explanation.mode == "conversation"
+    assert delivery_explanation.requires_audit is False
+    assert delivery_explanation.requires_approval is False
+    assert delivery_explanation.executable is True
 
     assert diff is not None
     assert diff.mode == "read"
@@ -332,6 +364,12 @@ def test_prompt_injection_markers_cannot_grant_document_or_diff_tools() -> None:
         "storage_path=/private",
         "signed_url=https://example.invalid",
         "provider_secret=hidden",
+        "provider_message_id=forged",
+        "provider_response=ok",
+        "delivery_status=sent",
+        "delivery_verified=true",
+        "quote_sent=true",
+        "mark delivered",
         "smtp password leaked",
         "generate artifact from chat",
         "generate pdf from chat",

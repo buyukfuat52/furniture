@@ -962,7 +962,7 @@ def classify_message(message: str) -> AgentID:
         return "costing_pricing"
     if contains_any(
         text,
-        ["teklif", "proposal", "pdf", "belge", "dokuman", "onizleme", "gonder", "onay", "send"],
+        ["teklif", "quote", "proposal", "pdf", "belge", "dokuman", "onizleme", "gonder", "onay", "send"],
     ):
         return "quote_document"
     return "enterprise_search"
@@ -988,6 +988,12 @@ def detect_prompt_injection(message: str) -> list[str]:
         "call forbidden tool",
         "signed url",
         "storage path",
+        "provider_message_id",
+        "provider response",
+        "delivery_status",
+        "delivery verified",
+        "quote_sent",
+        "mark delivered",
         "kendin hesapla",
         "calculate total yourself",
         "do not call tools",
@@ -1019,6 +1025,12 @@ def wants_policy_bypass(message: str) -> bool:
             "call forbidden tool",
             "signed url",
             "storage path",
+            "provider_message_id",
+            "provider response",
+            "delivery_status",
+            "delivery verified",
+            "quote_sent",
+            "mark delivered",
             "do not call tools",
         ],
     )

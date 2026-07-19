@@ -48,7 +48,10 @@ const forbiddenPayloadKeys = [
   "database_password",
   "provider_secret",
   "smtp_password",
-  "provider_message_id"
+  "provider_message_id",
+  "provider_response",
+  "delivery_status",
+  "delivery_verified"
 ];
 const forbiddenResponseFields = [
   "company_id",
@@ -68,6 +71,9 @@ const forbiddenResponseFields = [
   "provider_secret",
   "smtp_password",
   "provider_message_id",
+  "provider_response",
+  "delivery_status",
+  "delivery_verified",
   "recipient_email"
 ];
 const forgedPayloadMarkers = {
@@ -89,6 +95,9 @@ const forgedPayloadMarkers = {
   provider_secret: "browser-supplied",
   smtp_password: "browser-supplied",
   provider_message_id: "browser-supplied",
+  provider_response: "browser-supplied",
+  delivery_status: "browser-supplied",
+  delivery_verified: true,
   artifact_html: "browser-supplied",
   database_password: "browser-supplied",
   SUPABASE_SERVICE_ROLE_KEY: "browser-supplied",
@@ -296,6 +305,15 @@ async function requestText(baseUrl, path, options, label) {
   assertSafePayload(label, text);
   assertNoForgedPayloadEcho(label, text);
   return { response, text };
+}
+
+async function requestBytes(baseUrl, path, options, label) {
+  const response = await fetch(`${baseUrl}${path}`, options);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const text = bytes.toString("latin1");
+  assertSafePayload(label, text);
+  assertNoForgedPayloadEcho(label, text);
+  return { response, bytes, text };
 }
 
 function newApprovalSmokeToken() {
@@ -704,6 +722,15 @@ function assertSendGate(payload, expected, label) {
   if (typeof expected.artifactBound === "boolean") {
     requireSafe(sendGate.artifact_bound === expected.artifactBound, `${label} artifact bound flag must be ${expected.artifactBound}.`);
   }
+  if (typeof expected.pdfArtifactBound === "boolean") {
+    requireSafe(sendGate.pdf_artifact_bound === expected.pdfArtifactBound, `${label} PDF artifact bound flag must be ${expected.pdfArtifactBound}.`);
+  }
+  if (typeof expected.eligibleToPrepareDelivery === "boolean") {
+    requireSafe(
+      sendGate.eligible_to_prepare_delivery === expected.eligibleToPrepareDelivery,
+      `${label} delivery prepare flag must be ${expected.eligibleToPrepareDelivery}.`
+    );
+  }
   requireSafe(sendGate.quote_send_triggered === false, `${label} must not send a quote.`);
   requireSafe(sendGate.production_package_triggered === false, `${label} must not trigger production package.`);
   requireSafe(sendGate.email_provider_configured === false, `${label} must report no configured email provider.`);
@@ -711,10 +738,12 @@ function assertSendGate(payload, expected, label) {
     requireSafe(sendGate.artifact_status === expected.artifactStatus, `${label} artifact status must be ${expected.artifactStatus}.`);
   } else {
     requireSafe(
-      ["html_storage_missing", "html_stored_pdf_deferred"].includes(sendGate.artifact_status),
-      `${label} must report a P10 artifact status.`
+      ["html_storage_missing", "html_stored_pdf_deferred", "html_and_pdf_stored"].includes(sendGate.artifact_status),
+      `${label} must report a bounded artifact status.`
     );
   }
+  requireSafe(["none", "provider_deferred", "delivery_blocked"].includes(sendGate.latest_delivery_outbox_status), `${label} delivery outbox status must be bounded.`);
+  requireSafe(sendGate.provider_status === "provider_missing", `${label} provider status must stay provider_missing.`);
   requireSafe(Array.isArray(sendGate.blocking_reasons), `${label} must include blocking reasons.`);
   assertNoForbiddenResponseFields(label, payload);
 }
@@ -746,6 +775,33 @@ function assertStoredQuoteArtifact(payload, expected, label) {
   assertNoForbiddenResponseFields(label, payload);
 }
 
+function assertStoredQuotePdfArtifact(payload, expected, label) {
+  const artifact = payload.artifact;
+  requireSafe(Boolean(artifact?.id), `${label} must include an artifact id.`);
+  requireSafe(artifact.revision_id === expected.quoteRevisionId, `${label} must bind to quote revision.`);
+  requireSafe(artifact.generated_document_id === expected.documentId, `${label} must bind to generated document.`);
+  requireSafe(artifact.cost_snapshot_id === expected.costSnapshotId, `${label} must bind to cost snapshot.`);
+  requireSafe(artifact.artifact_type === "quote_pdf", `${label} type must be quote_pdf.`);
+  requireSafe(artifact.status === "stored", `${label} status must be stored.`);
+  requireSafe(artifact.content_type === "application/pdf", `${label} content type must be PDF.`);
+  requireSafe(/^[0-9a-f]{64}$/i.test(artifact.sha256), `${label} artifact hash must be sha256.`);
+  requireSafe(artifact.sha256 !== expected.documentHash, `${label} PDF hash must differ from frozen HTML hash.`);
+  requireSafe(artifact.source_document_hash === expected.documentHash, `${label} source hash must match frozen document hash.`);
+  requireSafe(artifact.snapshot_hash === expected.costSnapshotHash, `${label} snapshot hash must match cost snapshot.`);
+  requireSafe(artifact.revision_version === expected.quoteRevisionVersion, `${label} revision version must bind.`);
+  requirePositiveInteger(artifact.size_bytes, `${label} artifact size`);
+  requireSafe(artifact.artifact_version === "quote-pdf-v1.0.0", `${label} artifact version must be deterministic.`);
+  requireSafe(artifact.renderer_version === "mobilyaos-deterministic-pdf-writer-v1.0.0", `${label} renderer version must be deterministic.`);
+  requireSafe(artifact.storage_status === "object_stored", `${label} storage status must be object_stored.`);
+  requireSafe(artifact.access_model === "server_mediated_download", `${label} access model must be server mediated.`);
+  requireSafe(artifact.signed_url_returned === false, `${label} must not return signed URL.`);
+  requireSafe(artifact.external_url_generated === false, `${label} must not return external URL.`);
+  requireSafe(artifact.pdf_status === "generated", `${label} binary PDF must be generated.`);
+  requireSafe(Array.isArray(artifact.deferred_actions), `${label} must include deferred actions.`);
+  requireSafe(artifact.deferred_actions.includes("quote_send_external_delivery"), `${label} must keep external send deferred.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
 function assertSendIntent(payload, expected, label) {
   const intent = payload.send_intent;
   requireSafe(Boolean(intent?.id), `${label} must include a send intent id.`);
@@ -763,6 +819,27 @@ function assertSendIntent(payload, expected, label) {
   requireSafe(Array.isArray(intent.deferred_actions), `${label} must include deferred actions.`);
   requireSafe(intent.deferred_actions.includes("quote_send_external_delivery"), `${label} must keep external send deferred.`);
   requireSafe(intent.deferred_actions.includes("production_package"), `${label} must keep production package deferred.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
+function assertDeliveryOutbox(payload, expected, label) {
+  const outbox = payload.delivery_outbox;
+  requireSafe(Boolean(outbox?.id), `${label} must include a delivery outbox id.`);
+  requireSafe(outbox.revision_id === expected.quoteRevisionId, `${label} must bind quote revision.`);
+  requireSafe(outbox.send_intent_id === expected.sendIntentId, `${label} must bind send intent.`);
+  requireSafe(outbox.pdf_artifact_id === expected.pdfArtifactId, `${label} must bind PDF artifact.`);
+  requireSafe(outbox.generated_document_id === expected.documentId, `${label} must bind generated document.`);
+  requireSafe(["provider_deferred", "delivery_blocked"].includes(outbox.status), `${label} must remain provider-deferred or blocked.`);
+  requireSafe(outbox.provider_status === "provider_missing", `${label} provider status must be missing.`);
+  requireSafe(outbox.provider_adapter === "disabled_provider_adapter_v1", `${label} provider adapter must be disabled.`);
+  requireSafe(["project_customer", "missing_customer_email"].includes(outbox.recipient_source), `${label} recipient source must be server-derived.`);
+  requireSafe(outbox.email_provider_configured === false, `${label} provider must be unconfigured.`);
+  requireSafe(outbox.external_delivery_attempted === false, `${label} must not attempt external delivery.`);
+  requireSafe(outbox.quote_sent === false, `${label} must not mark quote sent.`);
+  requireSafe(outbox.production_package_triggered === false, `${label} must not trigger production package.`);
+  requireSafe(outbox.delivery_version === "quote-delivery-outbox-v1.0.0", `${label} delivery version must be deterministic.`);
+  requireSafe(Array.isArray(outbox.deferred_actions), `${label} must include deferred actions.`);
+  requireSafe(outbox.deferred_actions.includes("quote_send_external_delivery"), `${label} must keep external delivery deferred.`);
   assertNoForbiddenResponseFields(label, payload);
 }
 
@@ -850,9 +927,19 @@ async function main() {
         body: { ...forgedPayloadMarkers, sha256: "0".repeat(64), status: "stored" }
       },
       {
+        key: "pdf-artifact",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/artifacts/pdf`,
+        body: { ...forgedPayloadMarkers, sha256: "0".repeat(64), grand_total_minor: 1, status: "stored", pdf_status: "generated" }
+      },
+      {
         key: "send-intent",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/send-intents`,
         body: { ...forgedPayloadMarkers, status: "sent", quote_sent: true }
+      },
+      {
+        key: "delivery-outbox",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-outbox`,
+        body: { ...forgedPayloadMarkers, status: "sent", quote_sent: true, delivery_verified: true }
       }
     ];
 
@@ -911,8 +998,16 @@ async function main() {
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/send-gate`
       },
       {
+        label: "unauthenticated quote send intents list",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/send-intents`
+      },
+      {
         label: "unauthenticated quote artifacts list",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/artifacts`
+      },
+      {
+        label: "unauthenticated quote delivery outbox list",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-outbox`
       },
       {
         label: "unauthenticated quote artifact detail",
@@ -1098,6 +1193,18 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/approval-status`
       },
       {
+        label: "second tenant reads primary send intents",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/send-intents`
+      },
+      {
+        label: "second tenant reads primary artifacts",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/artifacts`
+      },
+      {
+        label: "second tenant reads primary delivery outbox",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/delivery-outbox`
+      },
+      {
         label: "second tenant reads primary revision diff",
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/diff?against=${demoApprovedQuoteRevisionId}`
       },
@@ -1134,6 +1241,21 @@ async function main() {
       {
         label: "primary tenant reads second approval status",
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/approval-status`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second send intents",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/send-intents`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second artifacts",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/artifacts`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second delivery outbox",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/delivery-outbox`,
         cookie: salesCookie
       },
       {
@@ -1186,6 +1308,30 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/fork`,
         method: "POST",
         body: { expected_revision_version: 1 }
+      },
+      {
+        label: "second tenant artifact primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/artifacts`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "second tenant PDF artifact primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/artifacts/pdf`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "second tenant send-intent primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/send-intents`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "second tenant delivery outbox primary revision",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/delivery-outbox`,
+        method: "POST",
+        body: {}
       }
     ];
     for (const probe of secondTenantWriteProbes) {
@@ -1236,6 +1382,30 @@ async function main() {
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/fork`,
         method: "POST",
         body: { expected_revision_version: 1 }
+      },
+      {
+        label: "primary tenant artifact second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/artifacts`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "primary tenant PDF artifact second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/artifacts/pdf`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "primary tenant send-intent second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/send-intents`,
+        method: "POST",
+        body: {}
+      },
+      {
+        label: "primary tenant delivery outbox second tenant revision",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/delivery-outbox`,
+        method: "POST",
+        body: {}
       }
     ];
     for (const probe of primaryToSecondTenantWriteProbes) {
@@ -1260,6 +1430,10 @@ async function main() {
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_draft_created");
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_configuration_created");
     requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_snapshot_calculated");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_artifact_stored");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_pdf_artifact_generated");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_send_intent_prepared");
+    requireAuditUnchanged(auditBefore, auditAfterSecondTenantIdor, "quote_delivery_outbox_prepared");
 
     const idorProbes = [
       {
@@ -2255,6 +2429,13 @@ async function main() {
     }, "send intent before artifact");
     requireSafe(result.response.status === 409, "Send intent before stored artifact must return 409.");
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `pdf-before-html-artifact-${suffix}` },
+      body: JSON.stringify({})
+    }, "PDF artifact before HTML artifact");
+    requireSafe(result.response.status === 409, "PDF artifact before stored HTML artifact must return 409.");
+
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts`, {
       method: "POST",
       headers: {
@@ -2414,8 +2595,166 @@ async function main() {
       approved: true,
       eligibleToPrepare: true,
       artifactBound: true,
+      pdfArtifactBound: false,
+      eligibleToPrepareDelivery: false,
       artifactStatus: "html_stored_pdf_deferred"
     }, "send gate after artifact storage");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts/pdf`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: salesCookie,
+        "x-idempotency-key": `pdf-artifact-cross-site-${suffix}`,
+        Origin: "https://cross-site.invalid",
+        "Sec-Fetch-Site": "cross-site"
+      },
+      body: JSON.stringify({})
+    }, "cross-site PDF artifact generation");
+    requireSafe(result.response.status === 403, "Cross-site PDF artifact generation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-pdf-artifact-${suffix}` },
+      body: JSON.stringify({})
+    }, "viewer PDF artifact generation");
+    requireSafe(result.response.status === 403, "Viewer PDF artifact generation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `forged-pdf-artifact-${suffix}` },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        sha256: "0".repeat(64),
+        source_document_hash: "1".repeat(64),
+        snapshot_hash: "2".repeat(64),
+        grand_total_minor: 99999999,
+        content_type: "application/pdf",
+        status: "stored",
+        pdf_status: "generated"
+      })
+    }, "forged PDF artifact generation body");
+    requireSafe(result.response.status === 422, "Forged PDF artifact generation body must return 422.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before PDF artifact storage");
+    requireSafe(result.response.ok, "Demo data must succeed before PDF artifact storage.");
+    const auditBeforePdfArtifact = countAuditActions(result.payload.audit_entries);
+
+    const pdfArtifactKey = `quote-pdf-artifact-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": pdfArtifactKey },
+      body: JSON.stringify({})
+    }, "quote PDF artifact storage");
+    requireSafe(
+      result.response.status === 201,
+      `Quote PDF artifact storage must return 201; got ${result.response.status} ${String(result.payload?.title || "")} ${String(result.payload?.detail || "")}`.trim()
+    );
+    assertStoredQuotePdfArtifact(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteRevisionVersion: approvedQuoteRevision.version,
+      documentId: generatedDocument.id,
+      documentHash: generatedDocument.sha256,
+      costSnapshotId: calculatedCostSnapshot.id,
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash
+    }, "quote PDF artifact storage");
+    const storedPdfArtifact = result.payload.artifact;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": pdfArtifactKey },
+      body: JSON.stringify({})
+    }, "quote PDF artifact idempotency replay");
+    requireSafe(result.response.status === 201, "Quote PDF artifact replay must return stored status.");
+    requireSafe(result.payload.artifact?.id === storedPdfArtifact.id, "Quote PDF artifact replay must return the original artifact id.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/artifacts/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": pdfArtifactKey },
+      body: JSON.stringify({ idempotency_key: `conflicting-pdf-artifact-${suffix}` })
+    }, "quote PDF artifact idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote PDF artifact idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/artifacts/${storedPdfArtifact.id}`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote PDF artifact metadata get");
+    requireSafe(result.response.ok, "Quote PDF artifact metadata get must succeed.");
+    assertStoredQuotePdfArtifact(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteRevisionVersion: approvedQuoteRevision.version,
+      documentId: generatedDocument.id,
+      documentHash: generatedDocument.sha256,
+      costSnapshotId: calculatedCostSnapshot.id,
+      costSnapshotHash: calculatedCostSnapshot.snapshot_hash
+    }, "quote PDF artifact metadata get");
+
+    const downloadedPdfArtifact = await requestBytes(baseUrl, `/api/supabase/artifacts/${storedPdfArtifact.id}/download`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote PDF artifact controlled download");
+    requireSafe(downloadedPdfArtifact.response.ok, "Quote PDF artifact controlled download must succeed.");
+    requireSafe(downloadedPdfArtifact.bytes.subarray(0, 5).toString("ascii") === "%PDF-", "PDF download must start with PDF header.");
+    requireSafe(
+      (downloadedPdfArtifact.response.headers.get("content-type") || "").includes("application/pdf"),
+      "PDF artifact download must use application/pdf."
+    );
+    requireSafe(
+      (downloadedPdfArtifact.response.headers.get("content-disposition") || "").includes(".pdf"),
+      "PDF artifact download filename must be PDF."
+    );
+    requireSafe(
+      (downloadedPdfArtifact.response.headers.get("cache-control") || "").includes("no-store"),
+      "PDF artifact download must be no-store."
+    );
+    requireSafe(
+      createHash("sha256").update(downloadedPdfArtifact.bytes).digest("hex") === storedPdfArtifact.sha256,
+      "Downloaded PDF artifact hash must match stored artifact hash."
+    );
+    requireSafe(
+      downloadedPdfArtifact.text.includes(moneyMinorText(calculatedCostSnapshot.grand_total_minor, calculatedCostSnapshot.currency)),
+      "Downloaded PDF total must match persisted cost snapshot total."
+    );
+    requireSafe(!downloadedPdfArtifact.text.includes("99999999"), "Downloaded PDF must not include forged browser total.");
+
+    result = await requestJson(baseUrl, `/api/supabase/artifacts/${storedPdfArtifact.id}`, {
+      method: "GET",
+      headers: { Cookie: secondTenantCookie }
+    }, "second tenant reads stored PDF artifact metadata");
+    requireSafe(result.response.status === 404, "Second tenant PDF artifact metadata read must return tenant-scoped 404.");
+
+    const secondTenantPdfDownload = await requestText(baseUrl, `/api/supabase/artifacts/${storedPdfArtifact.id}/download`, {
+      method: "GET",
+      headers: { Cookie: secondTenantCookie }
+    }, "second tenant downloads stored PDF artifact");
+    requireSafe(secondTenantPdfDownload.response.status === 404, "Second tenant PDF artifact download must return tenant-scoped 404.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after PDF artifact storage");
+    requireSafe(result.response.ok, "Demo data must succeed after PDF artifact storage.");
+    const auditAfterPdfArtifact = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforePdfArtifact, auditAfterPdfArtifact, "quote_pdf_artifact_generated", 1);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "send gate after PDF artifact storage");
+    requireSafe(result.response.ok, "Send gate after PDF artifact storage must be readable.");
+    assertSendGate(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved",
+      approved: true,
+      eligibleToPrepare: true,
+      artifactBound: true,
+      pdfArtifactBound: true,
+      eligibleToPrepareDelivery: false,
+      artifactStatus: "html_and_pdf_stored"
+    }, "send gate after PDF artifact storage");
 
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
       method: "POST",
@@ -2511,8 +2850,135 @@ async function main() {
       approved: true,
       eligibleToPrepare: true,
       artifactBound: true,
-      artifactStatus: "html_stored_pdf_deferred"
+      pdfArtifactBound: true,
+      eligibleToPrepareDelivery: true,
+      artifactStatus: "html_and_pdf_stored"
     }, "send gate after send-intent preparation");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-intents`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote send-intent list");
+    requireSafe(result.response.ok, "Quote send-intent list must succeed.");
+    requireSafe(
+      result.payload.send_intents?.some((item) => item.id === sendIntent.id),
+      "Quote send-intent list must include the prepared send intent."
+    );
+    assertNoForbiddenResponseFields("quote send-intent list", result.payload);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-outbox`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: salesCookie,
+        "x-idempotency-key": `delivery-outbox-cross-site-${suffix}`,
+        Origin: "https://cross-site.invalid",
+        "Sec-Fetch-Site": "cross-site"
+      },
+      body: JSON.stringify({})
+    }, "cross-site delivery outbox preparation");
+    requireSafe(result.response.status === 403, "Cross-site delivery outbox preparation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-outbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: viewerCookie, "x-idempotency-key": `viewer-delivery-outbox-${suffix}` },
+      body: JSON.stringify({})
+    }, "viewer delivery outbox preparation");
+    requireSafe(result.response.status === 403, "Viewer delivery outbox preparation must return 403.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-outbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `forged-delivery-outbox-${suffix}` },
+      body: JSON.stringify({
+        ...forgedPayloadMarkers,
+        status: "sent",
+        quote_sent: true,
+        external_delivery_attempted: true,
+        email_provider_configured: true,
+        provider_status: "provider_configured",
+        provider_message_id: "browser-supplied",
+        delivery_status: "sent",
+        delivery_verified: true,
+        recipient_email: "browser@example.invalid"
+      })
+    }, "forged delivery outbox body");
+    requireSafe(result.response.status === 422, "Forged delivery outbox body must return 422.");
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit before delivery outbox preparation");
+    requireSafe(result.response.ok, "Demo data must succeed before delivery outbox preparation.");
+    const auditBeforeDeliveryOutbox = countAuditActions(result.payload.audit_entries);
+
+    const deliveryOutboxKey = `quote-delivery-outbox-${suffix}`;
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-outbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": deliveryOutboxKey },
+      body: JSON.stringify({})
+    }, "quote delivery outbox preparation");
+    requireSafe(result.response.status === 201, "Quote delivery outbox preparation must return 201.");
+    assertDeliveryOutbox(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      sendIntentId: sendIntent.id,
+      pdfArtifactId: storedPdfArtifact.id,
+      documentId: generatedDocument.id
+    }, "quote delivery outbox preparation");
+    const deliveryOutbox = result.payload.delivery_outbox;
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-outbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": deliveryOutboxKey },
+      body: JSON.stringify({})
+    }, "quote delivery outbox idempotency replay");
+    requireSafe(result.response.status === 201, "Quote delivery outbox replay must return stored status.");
+    requireSafe(result.payload.delivery_outbox?.id === deliveryOutbox.id, "Quote delivery outbox replay must return the original outbox id.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-outbox`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": deliveryOutboxKey },
+      body: JSON.stringify({ idempotency_key: `conflicting-delivery-outbox-${suffix}` })
+    }, "quote delivery outbox idempotency conflict");
+    requireSafe(result.response.status === 409, "Quote delivery outbox idempotency conflict must return 409.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-outbox`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "quote delivery outbox list");
+    requireSafe(result.response.ok, "Quote delivery outbox list must succeed.");
+    requireSafe(
+      result.payload.delivery_outbox?.some((item) => item.id === deliveryOutbox.id),
+      "Quote delivery outbox list must include the prepared outbox record."
+    );
+    assertNoForbiddenResponseFields("quote delivery outbox list", result.payload);
+
+    result = await requestJson(baseUrl, "/api/supabase/demo-data", {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "audit after delivery outbox preparation");
+    requireSafe(result.response.ok, "Demo data must succeed after delivery outbox preparation.");
+    const auditAfterDeliveryOutbox = countAuditActions(result.payload.audit_entries);
+    requireAuditDelta(auditBeforeDeliveryOutbox, auditAfterDeliveryOutbox, "quote_delivery_outbox_prepared", 1);
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "send gate after delivery outbox preparation");
+    requireSafe(result.response.ok, "Send gate after delivery outbox preparation must be readable.");
+    requireSafe(
+      result.payload.send_gate?.latest_delivery_outbox_status === deliveryOutbox.status,
+      "Send gate must report the latest delivery outbox status."
+    );
+    assertSendGate(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved",
+      approved: true,
+      eligibleToPrepare: true,
+      artifactBound: true,
+      pdfArtifactBound: true,
+      eligibleToPrepareDelivery: true,
+      artifactStatus: "html_and_pdf_stored"
+    }, "send gate after delivery outbox preparation");
 
     const sendGatePost = await requestText(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/send-gate`, {
       method: "POST",
@@ -2662,7 +3128,9 @@ async function main() {
     requireSafe(auditActions.has("quote_approval_gate_prepared"), "Audit entries must include quote_approval_gate_prepared.");
     requireSafe(auditActions.has("quote_approved"), "Audit entries must include quote_approved.");
     requireSafe(auditActions.has("quote_artifact_stored"), "Audit entries must include quote_artifact_stored.");
+    requireSafe(auditActions.has("quote_pdf_artifact_generated"), "Audit entries must include quote_pdf_artifact_generated.");
     requireSafe(auditActions.has("quote_send_intent_prepared"), "Audit entries must include quote_send_intent_prepared.");
+    requireSafe(auditActions.has("quote_delivery_outbox_prepared"), "Audit entries must include quote_delivery_outbox_prepared.");
     requireSafe(auditActions.has("quote_approval_token_replayed"), "Audit entries must include quote_approval_token_replayed.");
     requireSafe(auditActions.has("quote_approval_token_expired"), "Audit entries must include quote_approval_token_expired.");
     const auditAfter = countAuditActions(result.payload.audit_entries);
@@ -2678,7 +3146,9 @@ async function main() {
     requireAuditIncrease(auditBefore, auditAfter, "quote_approval_gate_prepared");
     requireAuditIncrease(auditBefore, auditAfter, "quote_approved");
     requireAuditIncrease(auditBefore, auditAfter, "quote_artifact_stored");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_pdf_artifact_generated");
     requireAuditIncrease(auditBefore, auditAfter, "quote_send_intent_prepared");
+    requireAuditIncrease(auditBefore, auditAfter, "quote_delivery_outbox_prepared");
     requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_replayed");
     requireAuditActionIncrease(auditBeforeAll, auditAfterAll, "quote_approval_token_expired");
 

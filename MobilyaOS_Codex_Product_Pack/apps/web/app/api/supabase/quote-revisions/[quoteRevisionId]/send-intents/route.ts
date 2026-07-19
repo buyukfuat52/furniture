@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prepareQuoteSendIntent } from "../../../../../../lib/server/supabaseRepository";
+import { listQuoteSendIntents, prepareQuoteSendIntent } from "../../../../../../lib/server/supabaseRepository";
 import { idempotencyKeyFromRequest, reserveIdempotency, storeIdempotencyResult } from "../../../../../../lib/server/idempotency";
 import { requireMutationRequestSafety } from "../../../../../../lib/server/requestSecurity";
 import { requireBoundary, requireSession, safeError } from "../../../../../../lib/server/routeGuards";
@@ -29,6 +29,24 @@ function mapSendIntentError(error: unknown): NextResponse {
     return safeError(422, "Invalid send intent request", "A trusted approved quote and stored artifact are required.");
   }
   return safeError(404, "Not found", "The requested tenant-scoped quote revision was not found.");
+}
+
+export async function GET(request: Request, context: RouteContext) {
+  const { quoteRevisionId } = await context.params;
+  const session = await requireSession(request);
+  if (session instanceof NextResponse) {
+    return session;
+  }
+  const boundary = requireBoundary(session, "read_quote_send_intent");
+  if (boundary) {
+    return boundary;
+  }
+  try {
+    const send_intents = await listQuoteSendIntents(session.mutationScope, quoteRevisionId);
+    return NextResponse.json({ send_intents });
+  } catch {
+    return safeError(404, "Not found", "The requested tenant-scoped quote send intents were not found.");
+  }
 }
 
 export async function POST(request: Request, context: RouteContext) {
@@ -76,7 +94,9 @@ export async function POST(request: Request, context: RouteContext) {
 
   try {
     const send_intent = await prepareQuoteSendIntent(session.mutationScope, quoteRevisionId, reserved);
-    return NextResponse.json({ send_intent }, { status: 201 });
+    const body = { send_intent };
+    await storeIdempotencyResult(reserved, 201, body).catch(() => undefined);
+    return NextResponse.json(body, { status: 201 });
   } catch (error) {
     const response = mapSendIntentError(error);
     const responseBody = await response.clone().json().catch(() => ({}));

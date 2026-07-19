@@ -223,7 +223,7 @@ paths:
   /supabase/quote-revisions/{revision_id}/send-gate:
     get:
       summary: Read quote send-gate status
-      description: Returns server-derived send eligibility and blocker metadata for a tenant-scoped quote revision. P10 reports stored-artifact and send-intent preparation state, while external send, binary PDF, and production package generation remain unavailable.
+      description: Returns server-derived send eligibility and blocker metadata for a tenant-scoped quote revision. P11 reports HTML/PDF artifact binding, send-intent preparation, provider-deferred delivery outbox state, and keeps external delivery, quote-sent transition, and production package generation unavailable.
       security:
         - bearerAuth: []
       parameters:
@@ -235,6 +235,10 @@ paths:
       responses:
         "200":
           description: Sanitized send-gate status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuoteSendGate"
         "401":
           description: Session required.
         "404":
@@ -297,6 +301,36 @@ paths:
           description: Approved revision, approval gate, or artifact binding is not ready.
         "422":
           description: Request body shape was rejected.
+  /supabase/quote-revisions/{revision_id}/artifacts/pdf:
+    post:
+      summary: Generate deterministic quote PDF artifact
+      description: Generates and stores a deterministic binary PDF artifact from trusted persisted approved revision, frozen document, cost snapshot, and stored HTML artifact state. The browser may provide only an idempotency key and never provides totals, hashes, status, or storage paths.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Sanitized stored PDF artifact metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifact]
+                properties:
+                  artifact:
+                    $ref: "#/components/schemas/QuoteArtifact"
+        "403":
+          description: Caller role cannot generate quote PDF artifacts.
+        "409":
+          description: Approved revision, frozen document, cost snapshot, approval gate, or source HTML artifact binding is not ready.
+        "422":
+          description: Request body shape was rejected.
   /supabase/artifacts/{artifact_id}:
     get:
       summary: Read stored quote artifact metadata
@@ -326,8 +360,8 @@ paths:
           description: Tenant-scoped artifact was not found.
   /supabase/artifacts/{artifact_id}/download:
     get:
-      summary: Download stored quote HTML artifact
-      description: Serves the private stored HTML artifact through an authenticated server-mediated route after SHA-256 verification. No storage path or signed URL is returned.
+      summary: Download stored quote artifact
+      description: Serves a private stored quote HTML or PDF artifact through an authenticated server-mediated route after SHA-256 verification. No storage path or signed URL is returned.
       security:
         - bearerAuth: []
       parameters:
@@ -338,19 +372,51 @@ paths:
             type: string
       responses:
         "200":
-          description: HTML artifact attachment.
+          description: HTML or PDF artifact attachment.
           content:
             text/html:
               schema:
                 type: string
+            application/pdf:
+              schema:
+                type: string
+                format: binary
         "401":
           description: Session required.
         "404":
           description: Tenant-scoped artifact was not found.
   /supabase/quote-revisions/{revision_id}/send-intents:
+    get:
+      summary: List audited quote send intents
+      description: Returns sanitized tenant-scoped send-intent records without provider secrets, recipient email, provider responses, or send-state authority.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized send-intent list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [send_intents]
+                properties:
+                  send_intents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/QuoteSendIntent"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
     post:
       summary: Prepare audited quote send intent
-      description: Creates a non-delivering send intent after approved revision and stored-artifact binding. External delivery, quote-sent state, binary PDF finalization, and production-package creation remain disabled.
+      description: Creates or reuses a non-delivering send intent after approved revision and stored HTML artifact binding. External delivery, quote-sent state, and production-package creation remain disabled.
       security:
         - bearerAuth: []
       parameters:
@@ -375,6 +441,64 @@ paths:
           description: Caller role cannot prepare send intents.
         "409":
           description: Approved revision or stored artifact binding is not ready.
+        "422":
+          description: Request body shape was rejected.
+  /supabase/quote-revisions/{revision_id}/delivery-outbox:
+    get:
+      summary: List provider-safe delivery outbox records
+      description: Returns sanitized tenant-scoped delivery outbox records. P11 uses a disabled provider adapter, so records show provider-deferred status and never expose provider message IDs, provider responses, recipient email, or secrets.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized delivery outbox list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [delivery_outbox]
+                properties:
+                  delivery_outbox:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/QuoteDeliveryOutbox"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
+    post:
+      summary: Prepare provider-deferred quote delivery outbox record
+      description: Creates or reuses an audited internal delivery outbox record only after approved revision, send-intent, and stored PDF artifact binding. With no configured provider, no email is sent and the quote is not marked sent.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Sanitized provider-deferred outbox record.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [delivery_outbox]
+                properties:
+                  delivery_outbox:
+                    $ref: "#/components/schemas/QuoteDeliveryOutbox"
+        "403":
+          description: Caller role cannot prepare delivery outbox records.
+        "409":
+          description: Approved revision, send intent, or PDF artifact binding is not ready.
         "422":
           description: Request body shape was rejected.
   /revisions/{revision_id}/fork:
@@ -610,6 +734,87 @@ components:
           type: integer
         vat_bps:
           type: integer
+    QuoteSendGate:
+      type: object
+      required:
+        - revision_id
+        - quote_status
+        - status
+        - eligible_to_send
+        - eligible_to_prepare_send
+        - eligible_to_prepare_delivery
+        - approved_revision
+        - frozen_document_bound
+        - document_hash_bound
+        - snapshot_hash_bound
+        - artifact_bound
+        - pdf_artifact_bound
+        - email_provider_configured
+        - latest_send_intent_status
+        - latest_delivery_outbox_status
+        - provider_status
+        - quote_send_triggered
+        - production_package_triggered
+        - artifact_status
+        - blocking_reasons
+        - deferred_actions
+      properties:
+        revision_id:
+          type: string
+          format: uuid
+        quote_status:
+          type: string
+        status:
+          type: string
+          enum: [send_blocked, send_deferred, send_prepared, provider_deferred]
+        eligible_to_send:
+          type: boolean
+          const: false
+        eligible_to_prepare_send:
+          type: boolean
+        eligible_to_prepare_delivery:
+          type: boolean
+        approved_revision:
+          type: boolean
+        frozen_document_bound:
+          type: boolean
+        document_hash_bound:
+          type: boolean
+        snapshot_hash_bound:
+          type: boolean
+        artifact_bound:
+          type: boolean
+        pdf_artifact_bound:
+          type: boolean
+        email_provider_configured:
+          type: boolean
+          const: false
+        latest_send_intent_status:
+          type: string
+          enum: [none, send_prepared, send_deferred, send_blocked]
+        latest_delivery_outbox_status:
+          type: string
+          enum: [none, provider_deferred, delivery_blocked]
+        provider_status:
+          type: string
+          enum: [provider_missing]
+        quote_send_triggered:
+          type: boolean
+          const: false
+        production_package_triggered:
+          type: boolean
+          const: false
+        artifact_status:
+          type: string
+          enum: [html_storage_missing, html_stored_pdf_deferred, html_and_pdf_stored]
+        blocking_reasons:
+          type: array
+          items:
+            type: string
+        deferred_actions:
+          type: array
+          items:
+            type: string
     QuoteArtifact:
       type: object
       required:
@@ -743,6 +948,75 @@ components:
           const: false
         send_version:
           type: string
+        created_at:
+          type: string
+        deferred_actions:
+          type: array
+          items:
+            type: string
+    QuoteDeliveryOutbox:
+      type: object
+      required:
+        - id
+        - revision_id
+        - send_intent_id
+        - pdf_artifact_id
+        - generated_document_id
+        - status
+        - provider_status
+        - recipient_source
+        - recipient_available
+        - email_provider_configured
+        - external_delivery_attempted
+        - quote_sent
+        - production_package_triggered
+        - delivery_version
+        - provider_adapter
+        - deferred_actions
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        send_intent_id:
+          type: string
+          format: uuid
+        pdf_artifact_id:
+          type: string
+          format: uuid
+        generated_document_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [provider_deferred, delivery_blocked]
+        provider_status:
+          type: string
+          enum: [provider_missing, not_attempted]
+        recipient_source:
+          type: string
+          enum: [project_customer, missing_customer_email]
+        recipient_available:
+          type: boolean
+        email_provider_configured:
+          type: boolean
+          const: false
+        external_delivery_attempted:
+          type: boolean
+          const: false
+        quote_sent:
+          type: boolean
+          const: false
+        production_package_triggered:
+          type: boolean
+          const: false
+        delivery_version:
+          type: string
+        provider_adapter:
+          type: string
+          enum: [disabled_provider_adapter_v1]
         created_at:
           type: string
         deferred_actions:

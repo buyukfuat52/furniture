@@ -20,12 +20,15 @@ const forbidden = [
   "raw_storage_path",
   "provider_secret",
   "smtp_password",
-  "provider_message_id"
+  "provider_message_id",
+  "provider_response",
+  "delivery_status",
+  "delivery_verified"
 ];
 
 const riskyRouteMethods = ["PUT", "PATCH", "DELETE"];
 const riskyQuoteRouteMethods = ["POST", ...riskyRouteMethods];
-const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
+const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|delivery_status|delivery_verified|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|provider_message_id|provider_response|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
 
 function walk(dir) {
   const entries = [];
@@ -80,7 +83,7 @@ function requireOrder(text, markers, message) {
 }
 
 function sourceBlock(text, name) {
-  const patterns = [`export async function ${name}`, `export function ${name}`, `function ${name}`];
+  const patterns = [`export async function ${name}`, `async function ${name}`, `export function ${name}`, `function ${name}`];
   const start = patterns.map((pattern) => text.indexOf(pattern)).find((index) => index >= 0);
   if (start === undefined) {
     violations.push(`${name} was not found for boundary inspection`);
@@ -194,8 +197,11 @@ for (const marker of ["TrustedMutationScope", "quote_send", "quote_approve", "cr
 }
 requireMarker(mutationBoundaryText, "read_send_gate_status", "server mutation boundary must register read_send_gate_status as read-only");
 requireMarker(mutationBoundaryText, "generate_quote_artifact", "server mutation boundary must register generate_quote_artifact");
+requireMarker(mutationBoundaryText, "generate_quote_pdf_artifact", "server mutation boundary must register generate_quote_pdf_artifact");
 requireMarker(mutationBoundaryText, "prepare_quote_send_intent", "server mutation boundary must register prepare_quote_send_intent");
+requireMarker(mutationBoundaryText, "prepare_quote_delivery_outbox", "server mutation boundary must register prepare_quote_delivery_outbox");
 requireMarker(mutationBoundaryText, "read_quote_artifact", "server mutation boundary must register read_quote_artifact as read-only");
+requireMarker(mutationBoundaryText, "read_quote_delivery_outbox", "server mutation boundary must register read_quote_delivery_outbox as read-only");
 const activeMutationMatch = mutationBoundaryText.match(/activeMutationKinds[\s\S]*?\(\[([\s\S]*?)\]\)/);
 const activeMutationText = activeMutationMatch ? activeMutationMatch[1] : "";
 for (const riskyKind of ["quote_send", "quote_approve", "generate_customer_document", "create_production_package"]) {
@@ -317,6 +323,27 @@ for (const marker of [
   requireMarker(p10MigrationText, marker, `P10 migration is missing artifact/send marker ${marker}`);
 }
 
+const p11MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0012_quote_pdf_artifact_delivery_outbox.sql"), "utf8");
+for (const marker of [
+  "quote_artifacts_pdf_content_type_p11",
+  "quote_artifacts_pdf_status_p11",
+  "quote_artifacts_pdf_path_p11",
+  "quote_delivery_outbox",
+  "tenant quote_delivery_outbox no direct read",
+  "tenant idempotency records no direct access",
+  "persist_quote_pdf_artifact_with_idempotency",
+  "prepare_quote_delivery_outbox_with_idempotency",
+  "provider_message_id is null",
+  "external_delivery_attempted = false",
+  "quote_sent = false",
+  "revoke all on function public.reserve_idempotency_record",
+  "revoke all on function public.persist_quote_pdf_artifact_with_idempotency",
+  "revoke all on function public.prepare_quote_delivery_outbox_with_idempotency",
+  "to service_role"
+]) {
+  requireMarker(p11MigrationText, marker, `P11 migration is missing PDF/delivery marker ${marker}`);
+}
+
 const mutationRouteChecks = [
   ["app/api/supabase/customers/route.ts", ["GET", "POST"], ["withMutationSession", "create_customer", "appendAuditEntry", "customer_created"]],
   ["app/api/supabase/projects/route.ts", ["GET", "POST"], ["withMutationSession", "create_project", "appendAuditEntry", "project_created"]],
@@ -331,16 +358,18 @@ const mutationRouteChecks = [
   ["app/api/supabase/documents/[documentId]/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_document", "getQuoteDocument"]],
   ["app/api/supabase/documents/[documentId]/preview/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_document", "getQuoteDocumentArtifact", "Content-Security-Policy", "no-store", "nosniff"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/artifacts/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_artifact", "generate_quote_artifact", "listQuoteArtifacts", "generateStoredQuoteArtifact", "reserveIdempotency", "quote_artifact_stored", "rejectBrowserAuthority"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/artifacts/pdf/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "generate_quote_pdf_artifact", "generateStoredQuotePdfArtifact", "reserveIdempotency", "quote_pdf_artifact_generated", "rejectBrowserAuthority"]],
   ["app/api/supabase/artifacts/[artifactId]/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_artifact", "getQuoteArtifact"]],
   ["app/api/supabase/artifacts/[artifactId]/download/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_artifact", "getQuoteArtifactDownload", "Content-Security-Policy", "no-store", "nosniff"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/fork/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "fork_quote_revision", "expected_revision_version", "forkQuoteRevision", "reserveIdempotency", "quote_revision_forked", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/diff/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_revision_diff", "getQuoteRevisionDiff", "against", "rejectUnsupportedQuery"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-status/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_approval_status", "getApprovalGateStatus"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/send-gate/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_send_gate_status", "getQuoteSendGateStatus"]],
-  ["app/api/supabase/quote-revisions/[quoteRevisionId]/send-intents/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "prepare_quote_send_intent", "prepareQuoteSendIntent", "reserveIdempotency", "quote_send_intent_prepared", "rejectBrowserAuthority"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/send-intents/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_send_intent", "prepare_quote_send_intent", "listQuoteSendIntents", "prepareQuoteSendIntent", "reserveIdempotency", "quote_send_intent_prepared", "rejectBrowserAuthority"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-outbox/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_delivery_outbox", "prepare_quote_delivery_outbox", "listQuoteDeliveryOutbox", "prepareQuoteDeliveryOutbox", "reserveIdempotency", "quote_delivery_outbox_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/approval-tokens/consume/route.ts", ["POST"], ["requireSameOriginMutation", "allowedBodyKeys", "requireApprovalTokenConsumeRateLimit", "consumeApprovalToken", "token_secret_returned", "quote_status_changed", "quote_send_triggered", "production_package_triggered"]],
-  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "listQuoteArtifacts", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments"]]
+  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "listQuoteArtifacts", "listQuoteDeliveryOutbox", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments", "get_pdf_artifact_status", "get_delivery_status"]]
 ];
 for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const text = readFileSync(join(root, route), "utf8");
@@ -360,9 +389,10 @@ for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   }
   const p7PostRoute = route.includes("/documents/route.ts") || route.includes("/fork/route.ts") || route.includes("/approval-token/route.ts");
   const p10PostRoute = route.includes("/artifacts/route.ts") || route.includes("/send-intents/route.ts");
+  const p11PostRoute = route.includes("/artifacts/pdf/route.ts") || route.includes("/delivery-outbox/route.ts");
   const riskyMethods = route.includes("calculate")
     ? ["GET", "PUT", "PATCH", "DELETE"]
-    : p7PostRoute || p10PostRoute
+    : p7PostRoute || p10PostRoute || p11PostRoute
       ? ["PUT", "PATCH", "DELETE"]
     : route.includes("snapshot")
       ? riskyQuoteRouteMethods
@@ -497,12 +527,37 @@ requireMarker(generateStoredQuoteArtifactBlock, "rpc/persist_quote_artifact_with
 requireMarker(generateStoredQuoteArtifactBlock, "p_storage_path: storagePath", "generateStoredQuoteArtifact must use the server-derived storage path");
 requireNoRegex(generateStoredQuoteArtifactBlock, /\binput\.(storage_path|sha256|status|email_provider_configured|recipient_email)\b/i, "generateStoredQuoteArtifact must not trust browser artifact fields");
 
+const generateStoredQuotePdfArtifactBlock = sourceBlock(repositoryText, "generateStoredQuotePdfArtifact");
+requireMarker(generateStoredQuotePdfArtifactBlock, 'revision.status !== "approved"', "generateStoredQuotePdfArtifact must require approved revisions");
+requireMarker(generateStoredQuotePdfArtifactBlock, "getApprovalGateStatus(context, revision.id)", "generateStoredQuotePdfArtifact must require approval binding");
+requireMarker(generateStoredQuotePdfArtifactBlock, "buildDeterministicQuotePdfArtifact", "generateStoredQuotePdfArtifact must build PDF bytes server-side");
+requireMarker(generateStoredQuotePdfArtifactBlock, "sha256Hex(build.bytes)", "generateStoredQuotePdfArtifact must hash PDF bytes server-side");
+requireMarker(generateStoredQuotePdfArtifactBlock, "supabaseStorageUpload", "generateStoredQuotePdfArtifact must upload PDF through server-side storage helper");
+requireMarker(generateStoredQuotePdfArtifactBlock, "rpc/persist_quote_pdf_artifact_with_idempotency", "generateStoredQuotePdfArtifact must use the atomic PDF artifact RPC");
+requireMarker(generateStoredQuotePdfArtifactBlock, "p_storage_path: storagePath", "generateStoredQuotePdfArtifact must use the server-derived storage path");
+requireMarker(generateStoredQuotePdfArtifactBlock, "p_grand_total_minor: snapshot.cost_snapshot.grand_total_minor", "generateStoredQuotePdfArtifact must bind persisted cost snapshot total");
+requireNoRegex(generateStoredQuotePdfArtifactBlock, /\binput\.(storage_path|sha256|status|pdf_status|content_type|grand_total_minor|snapshot_hash|source_document_hash|provider_message_id|recipient_email|quote_sent)\b/i, "generateStoredQuotePdfArtifact must not trust browser PDF/artifact fields");
+
+const getQuoteArtifactStorageRecordBlock = sourceBlock(repositoryText, "getQuoteArtifactStorageRecord");
+requireMarker(getQuoteArtifactStorageRecordBlock, 'status: "eq.stored"', "artifact download lookup must require stored artifacts");
+requireMarker(getQuoteArtifactStorageRecordBlock, 'artifact.artifact_type === "quote_html_storage"', "artifact download lookup must type-check HTML artifacts");
+requireMarker(getQuoteArtifactStorageRecordBlock, 'artifact.artifact_type === "quote_pdf"', "artifact download lookup must type-check PDF artifacts");
+requireMarker(getQuoteArtifactStorageRecordBlock, "quotePdfContentType", "artifact download lookup must use PDF content allowlist");
+
 const prepareQuoteSendIntentBlock = sourceBlock(repositoryText, "prepareQuoteSendIntent");
 requireMarker(prepareQuoteSendIntentBlock, 'revision.status !== "approved"', "prepareQuoteSendIntent must require approved revisions");
 requireMarker(prepareQuoteSendIntentBlock, "listQuoteArtifacts(context, revision.id)", "prepareQuoteSendIntent must require a stored artifact");
 requireMarker(prepareQuoteSendIntentBlock, "rpc/prepare_quote_send_intent_with_idempotency", "prepareQuoteSendIntent must use the atomic send-intent RPC");
 requireMarker(prepareQuoteSendIntentBlock, "p_email_provider_configured: false", "prepareQuoteSendIntent must keep email provider disabled in P10");
 requireNoRegex(prepareQuoteSendIntentBlock, /\binput\.(status|recipient|recipient_email|email_provider_configured|external_delivery_attempted|quote_sent|provider_status)\b/i, "prepareQuoteSendIntent must not trust browser send fields");
+
+const prepareQuoteDeliveryOutboxBlock = sourceBlock(repositoryText, "prepareQuoteDeliveryOutbox");
+requireMarker(prepareQuoteDeliveryOutboxBlock, 'revision.status !== "approved"', "prepareQuoteDeliveryOutbox must require approved revisions");
+requireMarker(prepareQuoteDeliveryOutboxBlock, "artifact_type === \"quote_pdf\"", "prepareQuoteDeliveryOutbox must require a stored PDF artifact");
+requireMarker(prepareQuoteDeliveryOutboxBlock, "listQuoteSendIntents(context, revision.id)", "prepareQuoteDeliveryOutbox must require a server-read send intent");
+requireMarker(prepareQuoteDeliveryOutboxBlock, "rpc/prepare_quote_delivery_outbox_with_idempotency", "prepareQuoteDeliveryOutbox must use the atomic delivery outbox RPC");
+requireMarker(prepareQuoteDeliveryOutboxBlock, "p_email_provider_configured: false", "prepareQuoteDeliveryOutbox must keep email provider disabled");
+requireNoRegex(prepareQuoteDeliveryOutboxBlock, /\binput\.(status|recipient|recipient_email|email_provider_configured|external_delivery_attempted|quote_sent|provider_status|provider_message_id|delivery_status|delivery_verified)\b/i, "prepareQuoteDeliveryOutbox must not trust browser delivery fields");
 
 const quoteStatusPolicyBlock = sourceBlock(repositoryText, "quoteStatusPolicy");
 requireMarker(quoteStatusPolicyBlock, "direct_status_update_allowed: false", "quote status policy must forbid browser direct status writes");

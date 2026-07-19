@@ -23,7 +23,12 @@ const forbiddenPayloadKeys = [
   "token_hash",
   "artifact_html",
   "raw_storage_path",
-  "database_password"
+  "database_password",
+  "provider_message_id",
+  "provider_response",
+  "delivery_status",
+  "delivery_verified",
+  "recipient_email"
 ];
 
 function findRepoRoot(start) {
@@ -387,7 +392,10 @@ async function main() {
         quote_revision_id: selectedRevision.id,
         storage_path: "browser-supplied",
         signed_url: "browser-supplied",
-        email_provider_configured: true
+        email_provider_configured: true,
+        provider_message_id: "browser-supplied",
+        delivery_status: "sent",
+        recipient_email: "browser@example.invalid"
       })
     });
     requireSafe(response.ok, "Artifact status agent request must be handled safely.");
@@ -395,7 +403,9 @@ async function main() {
     assertSafeAgentPayload("artifact status agent payload", artifactAgentPayload);
     requireSafe(artifactAgentPayload.agent_id === "quote_document", "Artifact request must route to quote_document.");
     requireToolAction(artifactAgentPayload, "get_quote_artifact_status", "Quote artifact agent explanation");
+    requireToolAction(artifactAgentPayload, "get_pdf_artifact_status", "Quote PDF artifact agent explanation");
     requireToolAction(artifactAgentPayload, "get_send_gate_status", "Quote artifact send-gate explanation");
+    requireToolAction(artifactAgentPayload, "get_delivery_status", "Quote delivery agent explanation");
     requireSafe(
       !JSON.stringify(artifactAgentPayload).includes("browser-supplied"),
       "Artifact agent must not echo browser-supplied artifact/provider fields."

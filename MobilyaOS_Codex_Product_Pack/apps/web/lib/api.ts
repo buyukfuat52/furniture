@@ -296,19 +296,23 @@ export type SupabaseApprovalConsumption = {
 export type SupabaseSendGateStatus = {
   revision_id: string;
   quote_status: string;
-  status: "send_blocked" | "send_deferred" | "send_prepared";
+  status: "send_blocked" | "send_deferred" | "send_prepared" | "provider_deferred";
   eligible_to_send: false;
   eligible_to_prepare_send: boolean;
+  eligible_to_prepare_delivery: boolean;
   approved_revision: boolean;
   frozen_document_bound: boolean;
   document_hash_bound: boolean;
   snapshot_hash_bound: boolean;
   artifact_bound: boolean;
+  pdf_artifact_bound: boolean;
   email_provider_configured: false;
-  latest_send_intent_status: "none" | "send_prepared" | "send_deferred" | "send_blocked" | "sent";
+  latest_send_intent_status: "none" | "send_prepared" | "send_deferred" | "send_blocked";
+  latest_delivery_outbox_status: "none" | "provider_deferred" | "delivery_blocked";
+  provider_status: "provider_missing";
   quote_send_triggered: false;
   production_package_triggered: false;
-  artifact_status: "html_storage_missing" | "html_stored_pdf_deferred";
+  artifact_status: "html_storage_missing" | "html_stored_pdf_deferred" | "html_and_pdf_stored";
   blocking_reasons: string[];
   deferred_actions: string[];
 };
@@ -318,8 +322,8 @@ export type SupabaseQuoteSendIntent = {
   revision_id: string;
   artifact_id: string;
   generated_document_id: string;
-  status: "send_prepared" | "send_deferred" | "send_blocked" | "sent";
-  provider_status: "provider_missing" | "provider_configured" | "not_attempted";
+  status: "send_prepared" | "send_deferred" | "send_blocked";
+  provider_status: "provider_missing" | "not_attempted";
   recipient_source: "project_customer" | "missing_customer_email";
   recipient_available: boolean;
   email_provider_configured: boolean;
@@ -327,6 +331,26 @@ export type SupabaseQuoteSendIntent = {
   quote_sent: false;
   production_package_triggered: false;
   send_version: string;
+  created_at: string;
+  deferred_actions: string[];
+};
+
+export type SupabaseQuoteDeliveryOutbox = {
+  id: string;
+  revision_id: string;
+  send_intent_id: string;
+  pdf_artifact_id: string;
+  generated_document_id: string;
+  status: "provider_deferred" | "delivery_blocked";
+  provider_status: "provider_missing" | "not_attempted";
+  recipient_source: "project_customer" | "missing_customer_email";
+  recipient_available: boolean;
+  email_provider_configured: false;
+  external_delivery_attempted: false;
+  quote_sent: false;
+  production_package_triggered: false;
+  delivery_version: string;
+  provider_adapter: "disabled_provider_adapter_v1";
   created_at: string;
   deferred_actions: string[];
 };

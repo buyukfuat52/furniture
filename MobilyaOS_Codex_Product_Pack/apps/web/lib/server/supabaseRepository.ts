@@ -11,6 +11,12 @@ import {
   quoteDocumentVersion,
   revisionDiffEntries
 } from "./quoteLifecycle";
+import {
+  buildDeterministicQuotePdfArtifact,
+  quotePdfContentType,
+  quotePdfRendererVersion,
+  quotePdfArtifactVersion
+} from "./pdfArtifact";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -67,6 +73,25 @@ const quoteSendIntentSelect = [
   "quote_sent",
   "production_package_triggered",
   "send_version",
+  "created_at"
+].join(",");
+const quoteDeliveryOutboxSelect = [
+  "id",
+  "company_id",
+  "quote_revision_id",
+  "quote_send_intent_id",
+  "quote_pdf_artifact_id",
+  "generated_document_id",
+  "status",
+  "provider_status",
+  "recipient_source",
+  "recipient_available",
+  "email_provider_configured",
+  "external_delivery_attempted",
+  "quote_sent",
+  "production_package_triggered",
+  "delivery_version",
+  "provider_adapter",
   "created_at"
 ].join(",");
 const approvalGateSelect = [
@@ -367,19 +392,23 @@ export type ApprovalTokenConsumptionRecord = {
 export type QuoteSendGateStatusRecord = {
   revision_id: string;
   quote_status: string;
-  status: "send_blocked" | "send_deferred" | "send_prepared";
+  status: "send_blocked" | "send_deferred" | "send_prepared" | "provider_deferred";
   eligible_to_send: false;
   eligible_to_prepare_send: boolean;
+  eligible_to_prepare_delivery: boolean;
   approved_revision: boolean;
   frozen_document_bound: boolean;
   document_hash_bound: boolean;
   snapshot_hash_bound: boolean;
   artifact_bound: boolean;
+  pdf_artifact_bound: boolean;
   email_provider_configured: false;
-  latest_send_intent_status: "none" | "send_prepared" | "send_deferred" | "send_blocked" | "sent";
+  latest_send_intent_status: "none" | "send_prepared" | "send_deferred" | "send_blocked";
+  latest_delivery_outbox_status: "none" | "provider_deferred" | "delivery_blocked";
+  provider_status: "provider_missing";
   quote_send_triggered: false;
   production_package_triggered: false;
-  artifact_status: "html_storage_missing" | "html_stored_pdf_deferred";
+  artifact_status: "html_storage_missing" | "html_stored_pdf_deferred" | "html_and_pdf_stored";
   blocking_reasons: string[];
   deferred_actions: string[];
 };
@@ -389,8 +418,8 @@ export type QuoteSendIntentRecord = {
   revision_id: string;
   artifact_id: string;
   generated_document_id: string;
-  status: "send_prepared" | "send_deferred" | "send_blocked" | "sent";
-  provider_status: "provider_missing" | "provider_configured" | "not_attempted";
+  status: "send_prepared" | "send_deferred" | "send_blocked";
+  provider_status: "provider_missing" | "not_attempted";
   recipient_source: "project_customer" | "missing_customer_email";
   recipient_available: boolean;
   email_provider_configured: boolean;
@@ -398,6 +427,26 @@ export type QuoteSendIntentRecord = {
   quote_sent: false;
   production_package_triggered: false;
   send_version: string;
+  created_at: string;
+  deferred_actions: string[];
+};
+
+export type QuoteDeliveryOutboxRecord = {
+  id: string;
+  revision_id: string;
+  send_intent_id: string;
+  pdf_artifact_id: string;
+  generated_document_id: string;
+  status: "provider_deferred" | "delivery_blocked";
+  provider_status: "provider_missing" | "not_attempted";
+  recipient_source: "project_customer" | "missing_customer_email";
+  recipient_available: boolean;
+  email_provider_configured: false;
+  external_delivery_attempted: false;
+  quote_sent: false;
+  production_package_triggered: false;
+  delivery_version: string;
+  provider_adapter: "disabled_provider_adapter_v1";
   created_at: string;
   deferred_actions: string[];
 };
@@ -637,7 +686,18 @@ async function supabaseRest<T extends JsonRecord[]>(
     cache: "no-store"
   });
   if (!response.ok) {
-    throw new Error(`Supabase repository request failed with status ${response.status}.`);
+    const errorText = await response.text().catch(() => "");
+    let errorPayload: { code?: unknown; message?: unknown } | null = null;
+    try {
+      errorPayload = JSON.parse(errorText || "null") as { code?: unknown; message?: unknown } | null;
+    } catch {
+      errorPayload = null;
+    }
+    const errorCode = typeof errorPayload?.code === "string" ? ` code ${errorPayload.code}` : "";
+    const safeMessage = typeof errorPayload?.message === "string"
+      ? ` message ${errorPayload.message.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[id]").replace(/[0-9a-f]{64}/gi, "[hash]").slice(0, 180)}`
+      : "";
+    throw new Error(`Supabase repository request failed with status ${response.status}${errorCode}${safeMessage}.`);
   }
   const text = await response.text();
   return (text ? JSON.parse(text) : []) as T;
@@ -1394,6 +1454,125 @@ export async function generateStoredQuoteArtifact(
   return response.artifact;
 }
 
+export async function generateStoredQuotePdfArtifact(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string,
+  reservation: IdempotencyReservation
+): Promise<QuoteArtifactRecord> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  if (revision.status !== "approved") {
+    throw new Error("approved quote revision is required for PDF artifact storage.");
+  }
+  const approvalGate = await getApprovalGateStatus(context, revision.id);
+  if (approvalGate.status !== "approved" || !approvalGate.generated_document_id) {
+    throw new Error("approved quote gate binding is required.");
+  }
+  const [document, snapshot, artifacts] = await Promise.all([
+    getQuoteDocumentArtifact(context, approvalGate.generated_document_id),
+    getQuoteSnapshot(context, revision.id),
+    listQuoteArtifacts(context, revision.id)
+  ]);
+  if (
+    !snapshot.cost_snapshot ||
+    snapshot.calculation_status !== "calculated" ||
+    document.revision_id !== revision.id ||
+    document.sha256 !== approvalGate.document_hash ||
+    document.snapshot_hash !== approvalGate.snapshot_hash ||
+    document.snapshot_hash !== snapshot.cost_snapshot.snapshot_hash ||
+    document.cost_snapshot_id !== snapshot.cost_snapshot.id ||
+    document.document_type !== "quote_html"
+  ) {
+    throw new Error("PDF artifact source document binding is invalid.");
+  }
+  const sourceHtmlArtifact = artifacts.find((candidate) => (
+    candidate.status === "stored" &&
+    candidate.artifact_type === "quote_html_storage" &&
+    candidate.pdf_status === "deferred" &&
+    candidate.generated_document_id === document.id &&
+    candidate.source_document_hash === document.sha256 &&
+    candidate.sha256 === document.sha256 &&
+    candidate.snapshot_hash === snapshot.cost_snapshot?.snapshot_hash
+  )) ?? null;
+  if (!sourceHtmlArtifact) {
+    throw new Error("stored HTML artifact is required before PDF generation.");
+  }
+  const build = buildDeterministicQuotePdfArtifact({
+    revision,
+    document,
+    costSnapshot: snapshot.cost_snapshot
+  });
+  const artifactHash = sha256Hex(build.bytes);
+  if (artifactHash === document.sha256) {
+    throw new Error("PDF artifact hash must be distinct from the source HTML hash.");
+  }
+  const storagePath = `${context.companyId}/${revision.id}/artifacts/${artifactHash}/quote.pdf`;
+  await supabaseStorageUpload({
+    bucket: "quote-documents",
+    path: storagePath,
+    contentType: build.contentType,
+    bytes: build.bytes
+  });
+  const response = await supabaseRestJson<{ artifact: QuoteArtifactRecord }>(
+    "rpc/persist_quote_pdf_artifact_with_idempotency",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_company_id: context.companyId,
+        p_actor_app_user_id: context.appUserId,
+        p_revision_id: revision.id,
+        p_generated_document_id: document.id,
+        p_source_html_artifact_id: sourceHtmlArtifact.id,
+        p_idempotency_record_id: reservation.id,
+        p_request_hash: reservation.requestHash,
+        p_storage_path: storagePath,
+        p_content_type: build.contentType,
+        p_sha256: artifactHash,
+        p_size_bytes: build.sizeBytes,
+        p_artifact_version: build.artifactVersion,
+        p_renderer_version: build.rendererVersion,
+        p_revision_version: revision.version,
+        p_snapshot_hash: snapshot.cost_snapshot.snapshot_hash,
+        p_source_document_hash: document.sha256,
+        p_grand_total_minor: snapshot.cost_snapshot.grand_total_minor,
+        p_currency: snapshot.cost_snapshot.currency,
+        p_metadata_json: {
+          provenance: {
+            source: "deterministic_pdf_from_frozen_quote_html",
+            document_version: document.document_version,
+            artifact_version: quotePdfArtifactVersion,
+            renderer_version: quotePdfRendererVersion,
+            quote_revision_id: revision.id,
+            quote_revision_version: revision.version,
+            source_document_id: document.id,
+            source_document_hash: document.sha256,
+            source_html_artifact_id: sourceHtmlArtifact.id,
+            source_html_artifact_hash: sourceHtmlArtifact.sha256,
+            cost_snapshot_id: snapshot.cost_snapshot.id,
+            cost_snapshot_hash: snapshot.cost_snapshot.snapshot_hash,
+            calculation_version: snapshot.cost_snapshot.formula_version,
+            total_source: "persisted_cost_snapshot",
+            grand_total_minor: snapshot.cost_snapshot.grand_total_minor,
+            currency: snapshot.cost_snapshot.currency,
+            storage: "server_route_mediated",
+            pdf_status: "generated"
+          },
+          artifact: {
+            kind: "pdf",
+            storage_status: "object_stored",
+            storage_provider: "supabase_storage",
+            access_model: "server_mediated_download",
+            locator_exposed: false,
+            temporary_link_returned: false,
+            external_url_generated: false,
+            binary_pdf_status: "generated"
+          }
+        }
+      })
+    }
+  );
+  return response.artifact;
+}
+
 export async function forkQuoteRevision(
   context: TrustedRepositoryContext,
   sourceRevisionId: string,
@@ -1586,7 +1765,7 @@ export async function getQuoteSendGateStatus(
     ? await getQuoteDocument(context, approvalGate.generated_document_id).catch(() => null)
     : null;
   const artifacts = await listQuoteArtifacts(context, revision.id).catch(() => []);
-  const storedArtifact = artifacts.find((artifact) => (
+  const storedHtmlArtifact = artifacts.find((artifact) => (
     artifact.status === "stored" &&
     artifact.artifact_type === "quote_html_storage" &&
     document &&
@@ -1594,39 +1773,70 @@ export async function getQuoteSendGateStatus(
     artifact.source_document_hash === document.sha256 &&
     artifact.snapshot_hash === document.snapshot_hash
   )) ?? null;
+  const storedPdfArtifact = artifacts.find((artifact) => (
+    artifact.status === "stored" &&
+    artifact.artifact_type === "quote_pdf" &&
+    artifact.pdf_status === "generated" &&
+    document &&
+    artifact.generated_document_id === document.id &&
+    artifact.source_document_hash === document.sha256 &&
+    artifact.snapshot_hash === document.snapshot_hash
+  )) ?? null;
   const latestSendIntent = await getLatestQuoteSendIntent(context, revision.id).catch(() => null);
+  const latestDeliveryOutbox = await getLatestQuoteDeliveryOutbox(context, revision.id).catch(() => null);
   const documentHashBound = Boolean(document && approvalGate.document_hash && document.sha256 === approvalGate.document_hash);
   const snapshotHashBound = Boolean(document && approvalGate.snapshot_hash && document.snapshot_hash === approvalGate.snapshot_hash);
   const approvedRevision = revision.status === "approved" && approvalGate.status === "approved";
   const frozenDocumentBound = Boolean(document && documentHashBound && snapshotHashBound);
-  const artifactBound = Boolean(storedArtifact);
+  const artifactBound = Boolean(storedHtmlArtifact);
+  const pdfArtifactBound = Boolean(storedPdfArtifact);
   const eligibleToPrepareSend = Boolean(approvedRevision && frozenDocumentBound && artifactBound);
+  const eligibleToPrepareDelivery = Boolean(eligibleToPrepareSend && pdfArtifactBound && latestSendIntent);
   const blockingReasons = [
     approvedRevision ? null : "quote_not_approved",
     frozenDocumentBound ? null : "frozen_document_not_bound",
     artifactBound ? null : "stored_artifact_not_bound",
-    "binary_pdf_deferred",
+    pdfArtifactBound ? null : "binary_pdf_missing",
+    latestSendIntent ? null : "send_intent_missing",
     "email_provider_not_configured",
     "external_delivery_not_configured"
   ].filter((reason): reason is string => Boolean(reason));
+  const artifactStatus: QuoteSendGateStatusRecord["artifact_status"] = !artifactBound
+    ? "html_storage_missing"
+    : pdfArtifactBound
+      ? "html_and_pdf_stored"
+      : "html_stored_pdf_deferred";
+  const status: QuoteSendGateStatusRecord["status"] = !eligibleToPrepareSend
+    ? "send_blocked"
+    : latestDeliveryOutbox
+      ? "provider_deferred"
+      : latestSendIntent
+        ? "send_prepared"
+        : "send_deferred";
   return {
     revision_id: revision.id,
     quote_status: revision.status,
-    status: eligibleToPrepareSend ? "send_deferred" : "send_blocked",
+    status,
     eligible_to_send: false,
     eligible_to_prepare_send: eligibleToPrepareSend,
+    eligible_to_prepare_delivery: eligibleToPrepareDelivery,
     approved_revision: approvedRevision,
     frozen_document_bound: frozenDocumentBound,
     document_hash_bound: documentHashBound,
     snapshot_hash_bound: snapshotHashBound,
     artifact_bound: artifactBound,
+    pdf_artifact_bound: pdfArtifactBound,
     email_provider_configured: false,
     latest_send_intent_status: latestSendIntent?.status ?? "none",
+    latest_delivery_outbox_status: latestDeliveryOutbox?.status ?? "none",
+    provider_status: "provider_missing",
     quote_send_triggered: false,
     production_package_triggered: false,
-    artifact_status: artifactBound ? "html_stored_pdf_deferred" : "html_storage_missing",
+    artifact_status: artifactStatus,
     blocking_reasons: blockingReasons,
-    deferred_actions: ["quote_send_external_delivery", "quote_pdf", "production_package"]
+    deferred_actions: pdfArtifactBound
+      ? ["quote_send_external_delivery", "production_package"]
+      : ["quote_send_external_delivery", "quote_pdf", "production_package"]
   };
 }
 
@@ -1648,6 +1858,14 @@ export async function prepareQuoteSendIntent(
   if (!artifact) {
     throw new Error("stored quote artifact is required for send intent.");
   }
+  const existingSendIntent = (await listQuoteSendIntents(context, revision.id).catch(() => [])).find((candidate) => (
+    candidate.artifact_id === artifact.id &&
+    candidate.generated_document_id === artifact.generated_document_id &&
+    candidate.status !== "send_blocked"
+  )) ?? null;
+  if (existingSendIntent) {
+    return existingSendIntent;
+  }
   const response = await supabaseRestJson<{ send_intent: QuoteSendIntentRecord }>(
     "rpc/prepare_quote_send_intent_with_idempotency",
     {
@@ -1666,6 +1884,89 @@ export async function prepareQuoteSendIntent(
     }
   );
   return response.send_intent;
+}
+
+export async function listQuoteSendIntents(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteSendIntentRecord[]> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  const rows = await supabaseRest<JsonRecord[]>(
+    `quote_send_intents?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      quote_revision_id: `eq.${revision.id}`,
+      select: quoteSendIntentSelect,
+      order: "created_at.desc"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "quote_send_intents");
+  return rows.map(quoteSendIntentFromRow);
+}
+
+export async function listQuoteDeliveryOutbox(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteDeliveryOutboxRecord[]> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  const rows = await supabaseRest<JsonRecord[]>(
+    `quote_delivery_outbox?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      quote_revision_id: `eq.${revision.id}`,
+      select: quoteDeliveryOutboxSelect,
+      order: "created_at.desc"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "quote_delivery_outbox");
+  return rows.map(quoteDeliveryOutboxFromRow);
+}
+
+export async function prepareQuoteDeliveryOutbox(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string,
+  reservation: IdempotencyReservation
+): Promise<QuoteDeliveryOutboxRecord> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  if (revision.status !== "approved") {
+    throw new Error("approved quote revision is required for delivery outbox preparation.");
+  }
+  const [artifacts, sendIntents] = await Promise.all([
+    listQuoteArtifacts(context, revision.id),
+    listQuoteSendIntents(context, revision.id)
+  ]);
+  const pdfArtifact = artifacts.find((candidate) => (
+    candidate.status === "stored" &&
+    candidate.artifact_type === "quote_pdf" &&
+    candidate.pdf_status === "generated"
+  )) ?? null;
+  if (!pdfArtifact) {
+    throw new Error("stored PDF artifact is required for delivery outbox preparation.");
+  }
+  const sendIntent = sendIntents.find((candidate) => (
+    candidate.generated_document_id === pdfArtifact.generated_document_id &&
+    candidate.status !== "send_blocked"
+  )) ?? sendIntents[0] ?? null;
+  if (!sendIntent) {
+    throw new Error("send intent is required before delivery outbox preparation.");
+  }
+  const response = await supabaseRestJson<{ delivery_outbox: QuoteDeliveryOutboxRecord }>(
+    "rpc/prepare_quote_delivery_outbox_with_idempotency",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_company_id: context.companyId,
+        p_actor_app_user_id: context.appUserId,
+        p_revision_id: revision.id,
+        p_quote_send_intent_id: sendIntent.id,
+        p_quote_pdf_artifact_id: pdfArtifact.id,
+        p_quote_revision_version: revision.version,
+        p_idempotency_record_id: reservation.id,
+        p_request_hash: reservation.requestHash,
+        p_delivery_version: "quote-delivery-outbox-v1.0.0",
+        p_email_provider_configured: false
+      })
+    }
+  );
+  return response.delivery_outbox;
 }
 
 export async function persistQuoteCalculationResult(
@@ -2033,6 +2334,7 @@ async function getQuoteArtifactStorageRecord(
     `quote_artifacts?${new URLSearchParams({
       id: `eq.${trustedArtifactId}`,
       company_id: `eq.${context.companyId}`,
+      status: "eq.stored",
       select: quoteArtifactStorageSelect
     }).toString()}`
   );
@@ -2040,16 +2342,26 @@ async function getQuoteArtifactStorageRecord(
     throw new Error("Quote artifact was not found in the session company.");
   }
   assertCompanyScope(rows, context.companyId, "quote_artifacts");
-  return quoteArtifactStorageFromRow(rows[0]);
+  const artifact = quoteArtifactStorageFromRow(rows[0]);
+  if (
+    !(
+      (artifact.artifact_type === "quote_html_storage" && artifact.content_type === "text/html; charset=utf-8") ||
+      (artifact.artifact_type === "quote_pdf" && artifact.content_type === quotePdfContentType)
+    )
+  ) {
+    throw new Error("Quote artifact content policy is invalid.");
+  }
+  return artifact;
 }
 
 function quoteArtifactFromRow(row: JsonRecord): QuoteArtifactRecord {
+  const artifactType = asString(row.artifact_type) as QuoteArtifactRecord["artifact_type"];
   return {
     id: asString(row.id),
     revision_id: asString(row.quote_revision_id),
     generated_document_id: asString(row.generated_document_id),
     cost_snapshot_id: asNullableString(row.cost_snapshot_id),
-    artifact_type: asString(row.artifact_type) as QuoteArtifactRecord["artifact_type"],
+    artifact_type: artifactType,
     status: asString(row.status) as QuoteArtifactRecord["status"],
     content_type: asString(row.content_type),
     sha256: asString(row.sha256),
@@ -2065,7 +2377,9 @@ function quoteArtifactFromRow(row: JsonRecord): QuoteArtifactRecord {
     signed_url_returned: false,
     external_url_generated: false,
     created_at: asString(row.created_at),
-    deferred_actions: ["quote_pdf"]
+    deferred_actions: artifactType === "quote_pdf"
+      ? ["quote_send_external_delivery", "production_package"]
+      : ["quote_pdf", "quote_send_external_delivery", "production_package"]
   };
 }
 
@@ -2149,14 +2463,34 @@ async function getLatestQuoteSendIntent(
   return rows[0] ? quoteSendIntentFromRow(rows[0]) : null;
 }
 
+async function getLatestQuoteDeliveryOutbox(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<QuoteDeliveryOutboxRecord | null> {
+  const trustedRevisionId = requireUuid(quoteRevisionId, "Quote revision id");
+  const rows = await supabaseRest<JsonRecord[]>(
+    `quote_delivery_outbox?${new URLSearchParams({
+      company_id: `eq.${context.companyId}`,
+      quote_revision_id: `eq.${trustedRevisionId}`,
+      select: quoteDeliveryOutboxSelect,
+      order: "created_at.desc",
+      limit: "1"
+    }).toString()}`
+  );
+  assertCompanyScope(rows, context.companyId, "quote_delivery_outbox");
+  return rows[0] ? quoteDeliveryOutboxFromRow(rows[0]) : null;
+}
+
 function quoteSendIntentFromRow(row: JsonRecord): QuoteSendIntentRecord {
   return {
     id: asString(row.id),
     revision_id: asString(row.quote_revision_id),
     artifact_id: asString(row.quote_artifact_id),
     generated_document_id: asString(row.generated_document_id),
-    status: asString(row.status) as QuoteSendIntentRecord["status"],
-    provider_status: asString(row.provider_status) as QuoteSendIntentRecord["provider_status"],
+    status: asString(row.status) === "sent" ? "send_blocked" : asString(row.status) as QuoteSendIntentRecord["status"],
+    provider_status: asString(row.provider_status) === "provider_configured"
+      ? "provider_missing"
+      : asString(row.provider_status) as QuoteSendIntentRecord["provider_status"],
     recipient_source: asString(row.recipient_source) as QuoteSendIntentRecord["recipient_source"],
     recipient_available: row.recipient_available === true,
     email_provider_configured: row.email_provider_configured === true,
@@ -2165,7 +2499,31 @@ function quoteSendIntentFromRow(row: JsonRecord): QuoteSendIntentRecord {
     production_package_triggered: false,
     send_version: asString(row.send_version),
     created_at: asString(row.created_at),
-    deferred_actions: ["quote_send_external_delivery", "quote_pdf", "production_package"]
+    deferred_actions: ["quote_send_external_delivery", "production_package"]
+  };
+}
+
+function quoteDeliveryOutboxFromRow(row: JsonRecord): QuoteDeliveryOutboxRecord {
+  return {
+    id: asString(row.id),
+    revision_id: asString(row.quote_revision_id),
+    send_intent_id: asString(row.quote_send_intent_id),
+    pdf_artifact_id: asString(row.quote_pdf_artifact_id),
+    generated_document_id: asString(row.generated_document_id),
+    status: asString(row.status) as QuoteDeliveryOutboxRecord["status"],
+    provider_status: asString(row.provider_status) === "provider_configured"
+      ? "provider_missing"
+      : asString(row.provider_status) as QuoteDeliveryOutboxRecord["provider_status"],
+    recipient_source: asString(row.recipient_source) as QuoteDeliveryOutboxRecord["recipient_source"],
+    recipient_available: row.recipient_available === true,
+    email_provider_configured: false,
+    external_delivery_attempted: false,
+    quote_sent: false,
+    production_package_triggered: false,
+    delivery_version: asString(row.delivery_version),
+    provider_adapter: "disabled_provider_adapter_v1",
+    created_at: asString(row.created_at),
+    deferred_actions: ["quote_send_external_delivery", "production_package"]
   };
 }
 

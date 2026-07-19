@@ -15,12 +15,16 @@ export type PlannedMutationKind =
   | "fork_quote_revision"
   | "prepare_quote_approval_token"
   | "generate_quote_artifact"
+  | "generate_quote_pdf_artifact"
   | "read_quote_document"
   | "read_quote_artifact"
   | "read_revision_diff"
   | "read_approval_status"
   | "read_send_gate_status"
+  | "read_quote_send_intent"
   | "prepare_quote_send_intent"
+  | "read_quote_delivery_outbox"
+  | "prepare_quote_delivery_outbox"
   | "read_quote_revision"
   | "list_project_quote_revisions"
   | "append_audit_entry"
@@ -47,7 +51,9 @@ const activeMutationKinds = new Set<PlannedMutationKind>([
   "calculate_quote_snapshot",
   "generate_frozen_quote_document",
   "generate_quote_artifact",
+  "generate_quote_pdf_artifact",
   "prepare_quote_send_intent",
+  "prepare_quote_delivery_outbox",
   "fork_quote_revision"
 ]);
 
@@ -75,7 +81,9 @@ export function planProductMutationBoundary(
     kind === "read_quote_artifact" ||
     kind === "read_revision_diff" ||
     kind === "read_approval_status" ||
-    kind === "read_send_gate_status"
+    kind === "read_send_gate_status" ||
+    kind === "read_quote_send_intent" ||
+    kind === "read_quote_delivery_outbox"
   ) {
     return {
       kind,
@@ -91,8 +99,8 @@ export function planProductMutationBoundary(
       allowed: writerRoles.has(scope.role),
       status: writerRoles.has(scope.role) ? "allowed_mutation" : "denied",
       reason: writerRoles.has(scope.role)
-        ? "Reviewed draft/artifact/send-intent mutation may proceed through tenant-scoped repository methods."
-        : "Viewer and non-writer roles cannot create customer, project, quote draft, quote configuration draft, quote calculation snapshot, frozen document, stored artifact, send-intent, or fork records."
+        ? "Reviewed draft/artifact/PDF/outbox/send-intent mutation may proceed through tenant-scoped repository methods."
+        : "Viewer and non-writer roles cannot create customer, project, quote draft, quote configuration draft, quote calculation snapshot, frozen document, stored artifact, PDF artifact, delivery outbox, send-intent, or fork records."
     };
   }
 

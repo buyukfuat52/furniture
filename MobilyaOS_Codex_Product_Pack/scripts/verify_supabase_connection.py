@@ -37,6 +37,7 @@ REQUIRED_TABLES = [
     "generated_documents",
     "quote_artifacts",
     "quote_send_intents",
+    "quote_delivery_outbox",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -60,6 +61,7 @@ TENANT_TABLES = [
     "generated_documents",
     "quote_artifacts",
     "quote_send_intents",
+    "quote_delivery_outbox",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -335,6 +337,14 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             DEMO_REVISION_ID,
             "quote_revision_id",
         )
+        direct_quote_delivery_outbox = sensitive_table_rows(
+            env,
+            access_token,
+            "quote_delivery_outbox",
+            "id,metadata_json,provider_message_id",
+            DEMO_REVISION_ID,
+            "quote_revision_id",
+        )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Authenticated RLS smoke: failed ({exc.__class__.__name__})")
         return False
@@ -367,6 +377,8 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             and len(direct_quote_artifacts) == 0
             and isinstance(direct_quote_send_intents, list)
             and len(direct_quote_send_intents) == 0
+            and isinstance(direct_quote_delivery_outbox, list)
+            and len(direct_quote_delivery_outbox) == 0
         )
         print(f"Authenticated direct sensitive table read: {'ok' if direct_sensitive_read_blocked else 'failed'}")
         direct_storage_read_blocked = expect_storage_list_no_direct_visibility(
@@ -470,6 +482,63 @@ def verify_configuration_database_guards(cur: Any) -> bool:
     return status_guard and approved_guard and shape_guard and approved_document_guard
 
 
+def verify_p11_database_guards(cur: Any) -> bool:
+    pdf_artifact_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_artifacts (
+          company_id, quote_revision_id, generated_document_id, artifact_type, status,
+          content_type, storage_bucket, storage_path, sha256, size_bytes, artifact_version,
+          renderer_version, revision_version, snapshot_hash, source_document_hash,
+          pdf_status, metadata_json
+        )
+        values (
+          %s, %s, %s, 'quote_pdf', 'stored',
+          'text/html; charset=utf-8', 'quote-documents', 'guard/quote.pdf',
+          %s, 128, 'quote-pdf-v1.0.0', 'guard-renderer-v1', 1,
+          %s, %s, 'generated',
+          '{"provenance": {}, "artifact": {}}'::jsonb
+        )
+        """,
+        (
+            DEMO_COMPANY_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            "b" * 64,
+            "guard-snapshot-hash",
+            "a" * 64,
+        ),
+        "PDF artifact DB guard",
+    )
+    delivery_outbox_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_delivery_outbox (
+          company_id, quote_revision_id, quote_send_intent_id, quote_pdf_artifact_id,
+          generated_document_id, status, provider_status, provider_message_id,
+          recipient_source, recipient_available, email_provider_configured,
+          external_delivery_attempted, quote_sent, production_package_triggered,
+          delivery_version, metadata_json
+        )
+        values (
+          %s, %s, %s, %s, %s,
+          'sent', 'provider_configured', 'forged-provider-message',
+          'project_customer', true, true, true, true, true,
+          'guard-delivery-v1', '{"delivery": {}}'::jsonb
+        )
+        """,
+        (
+            DEMO_COMPANY_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+            DEMO_APPROVED_REVISION_ID,
+        ),
+        "Delivery outbox DB guard",
+    )
+    return pdf_artifact_guard and delivery_outbox_guard
+
+
 def verify_approval_consumption_rpc(cur: Any) -> bool:
     cur.execute(
         """
@@ -509,10 +578,13 @@ def verify_approval_consumption_rpc(cur: Any) -> bool:
     return ok and trigger_ok
 
 
-def verify_p10_rpc_grants(cur: Any) -> bool:
+def verify_p11_rpc_grants(cur: Any) -> bool:
     expected_functions = [
+        "reserve_idempotency_record",
         "persist_quote_artifact_with_idempotency",
         "prepare_quote_send_intent_with_idempotency",
+        "persist_quote_pdf_artifact_with_idempotency",
+        "prepare_quote_delivery_outbox_with_idempotency",
     ]
     ok = True
     for function_name in expected_functions:
@@ -548,13 +620,23 @@ def verify_p10_rpc_grants(cur: Any) -> bool:
     return ok
 
 
-def verify_p10_schema_guards(cur: Any) -> bool:
+def verify_p11_schema_guards(cur: Any) -> bool:
     expected_constraints = {
         "quote_artifacts": [
+            "'provenance'::text",
+            "'artifact'::text",
+            "!~*",
+            "storage_bucket = 'quote-documents'::text",
+            "quote_html_storage",
             "sha256 = source_document_hash",
             "content_type = 'text/html; charset=utf-8'::text",
-            "storage_bucket = 'quote-documents'::text",
             "pdf_status = 'deferred'::text",
+            "quote.html",
+            "quote_pdf",
+            "sha256 <> source_document_hash",
+            "content_type = 'application/pdf'::text",
+            "pdf_status = 'generated'::text",
+            "quote.pdf",
         ],
         "quote_send_intents": [
             "status <> 'sent'::text",
@@ -563,6 +645,20 @@ def verify_p10_schema_guards(cur: Any) -> bool:
             "production_package_triggered = false",
             "email_provider_configured = false",
             "provider_status <> 'provider_configured'::text",
+        ],
+        "quote_delivery_outbox": [
+            "delivery_attempted",
+            "delivery_failed",
+            "sent",
+            "provider_status <> 'provider_configured'::text",
+            "provider_adapter = 'disabled_provider_adapter_v1'::text",
+            "provider_message_id IS NULL",
+            "email_provider_configured = false",
+            "external_delivery_attempted = false",
+            "quote_sent = false",
+            "production_package_triggered = false",
+            "'delivery'::text",
+            "!~*",
         ],
     }
     ok = True
@@ -581,7 +677,7 @@ def verify_p10_schema_guards(cur: Any) -> bool:
         )
         defs = "\n".join(row[0] for row in cur.fetchall())
         table_ok = all(marker in defs for marker in markers)
-        print(f"P10 {table} DB guards: {'ok' if table_ok else 'failed'}")
+        print(f"P11 {table} DB guards: {'ok' if table_ok else 'failed'}")
         ok = ok and table_ok
     return ok
 
@@ -741,9 +837,10 @@ def main() -> int:
                 cur.execute("select id from storage.buckets where id = any(%s)", (REQUIRED_BUCKETS,))
                 found_buckets = {row[0] for row in cur.fetchall()}
                 approval_consumption_rpc_ok = verify_approval_consumption_rpc(cur)
-                p10_rpc_grants_ok = verify_p10_rpc_grants(cur)
-                p10_schema_guards_ok = verify_p10_schema_guards(cur)
+                p11_rpc_grants_ok = verify_p11_rpc_grants(cur)
+                p11_schema_guards_ok = verify_p11_schema_guards(cur)
                 guard_ok = verify_configuration_database_guards(cur)
+                p11_guard_ok = verify_p11_database_guards(cur)
     except Exception as exc:
         print(f"Cannot verify Supabase database: {safe_exception_label(exc)}")
         return 1
@@ -779,9 +876,11 @@ def main() -> int:
         failed = True
     if not approval_consumption_rpc_ok:
         failed = True
-    if not p10_rpc_grants_ok:
+    if not p11_rpc_grants_ok:
         failed = True
-    if not p10_schema_guards_ok:
+    if not p11_schema_guards_ok:
+        failed = True
+    if not p11_guard_ok:
         failed = True
     if not verify_authenticated_rls(env):
         failed = True

@@ -10,12 +10,15 @@ SECRET_SHAPES = [
     ("supabase-secret-key-shape", re.compile(r"sb_secret_[A-Za-z0-9_-]{8,}")),
     ("postgres-url-with-userinfo", re.compile(r"postgres(?:ql)?://[^\s:@]+:[^\s@]+@")),
     ("private-key-block", re.compile(r"-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----")),
+    ("sendgrid-api-key-shape", re.compile(r"SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}")),
 ]
 
 POPULATED_ASSIGNMENT = re.compile(
     r"(?m)^[^\S\r\n]*"
     r"(SUPABASE_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL|DIRECT_DATABASE_URL|"
-    r"JWT_SECRET|SESSION_ENCRYPTION_KEY|ACCESS_TOKEN|REFRESH_TOKEN)"
+    r"JWT_SECRET|SESSION_ENCRYPTION_KEY|ACCESS_TOKEN|REFRESH_TOKEN|SMTP_PASSWORD|"
+    r"EMAIL_PROVIDER_SECRET|SENDGRID_API_KEY|RESEND_API_KEY|MAILGUN_API_KEY|"
+    r"POSTMARK_SERVER_TOKEN|[A-Z0-9_]*(?:API_KEY|TOKEN))"
     r"[^\S\r\n]*=[^\S\r\n]*(\S+)"
 )
 

@@ -1,7 +1,7 @@
 # MobilyaOS Implementation Status
 
 Run ID: `20260715T040315+0300`
-Current scope: P10 deterministic artifact storage and audited quote send-intent workflow on the Supabase Cloud path
+Current scope: P11 deterministic binary PDF artifact storage and provider-safe delivery outbox workflow on the Supabase Cloud path
 Parent orchestrator: `parent_codex`
 Created: 2026-07-15
 
@@ -23,6 +23,82 @@ Created: 2026-07-15
 | P8 - Secure artifact and approval consumption | P8 | Passed | Document JSON is metadata-only, artifact HTML is served through an authenticated controlled preview route, approval-token consumption/replay/expiry is sanitized and audited, same-origin/rate-limit guards are in place, prompt-injection tests include malicious tool output, and non-Docker validation passed. |
 | P9 - Customer approval finalization and send gate | P9 | Passed | Guarded approval-token finalization, customer-safe approval UI, read-only send gate, approved-revision document guard, runtime-agent read-only send-gate tools, docs, live Supabase validation, web smokes, compute tests, pack validation, secret scan, and diff checks passed. |
 | P10 - Deterministic artifact storage and send intent | P10 | Passed | Deterministic approved HTML artifact storage, controlled artifact download, audited send-intent preparation, P10 Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
+| P11 - Deterministic binary PDF and provider-safe delivery workflow | P11 | Passed | Deterministic PDF artifact storage/download, provider-deferred delivery outbox, read-only PDF/delivery chat facts, P11 Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
+
+## P11 Deterministic Binary PDF And Provider-Safe Delivery Plan
+
+Run ID: `20260719T031026+0300-p11`
+
+Sidecar assignments:
+
+- `domain_architect`: read-only review of PDF artifact invariants, provenance, immutability, send-state vocabulary, exact sent conditions, production deferral, and LLM non-authority.
+- `security_reviewer`: read-only review of PDF access/storage leakage, provider secret leakage, provider-message/recipient/send-state forgery, tenant/IDOR, CSRF/fetch-metadata, rate limiting, idempotency, audit, service-role exposure, and prompt/tool-output injection.
+- `qa_reviewer`: read-only review of PDF artifact, delivery outbox/send-intent, access-control, no-send, idempotency, audit, and prompt-injection smoke coverage.
+
+Implementation sequence:
+
+1. Inspect runtime dependencies and choose the safest PDF path. Current local dependencies do not include a PDF renderer, browser automation, Docker, Go, or native PDF tools, so P11 will use a small deterministic server-side PDF writer for the narrow quote artifact rather than adding a fragile renderer.
+2. Add a non-destructive Supabase migration that permits `quote_pdf` rows in `quote_artifacts`, adds PDF-specific hash/content-type/path guards, and creates a no-direct-read provider-safe delivery outbox table/RPC if needed.
+3. Generate PDF bytes only from trusted persisted state: approved revision, approved approval gate, frozen generated document, stored HTML artifact, and matching cost snapshot/document hashes. The browser must not supply totals, hashes, paths, status, recipient, provider message ID, or delivery state as authority.
+4. Store PDF artifact bytes in the private `quote-documents` bucket with a server-derived path, persist sanitized metadata, verify SHA-256 on controlled download, and prove the PDF text contains the same grand total as the persisted cost snapshot.
+5. Promote send intent into a provider-safe delivery boundary without live email. If no safe provider is configured, create only an audited/internal outbox record with provider-deferred status; never mark quote sent, never attempt external delivery, and never create production state.
+6. Update UI, read-only chat/tool policy, smoke tests, Supabase verification, docs, OpenAPI, and ADRs.
+
+Stop conditions:
+
+- Stop before claiming completion if PDF access, artifact provenance, total consistency, storage path leakage, provider-secret handling, send-state forgery, tenant isolation, or role checks cannot be verified.
+- Do not implement real external email delivery, production package generation, runtime agent mutation execution, destructive migrations, or Docker/Go/Make-dependent PDF generation.
+
+## P11 Decisions, Sidecar Findings, And Validation
+
+Current result: complete. P11 added deterministic binary PDF artifact generation/storage for the approved Supabase quote slice, controlled hash-verified HTML/PDF downloads, a provider-deferred delivery outbox boundary, read-only PDF/delivery chat facts, and P11 Supabase verifier/security smoke coverage. External email delivery, quote-sent transition, provider acknowledgements, production packages, runtime agent mutation execution, Docker, Go, and Make remain deferred/unavailable locally.
+
+Agent reports:
+
+- `domain_architect`: confirmed PDF artifacts must be generated only from trusted persisted approved revision, approval gate, frozen document, stored HTML artifact, and cost snapshot state; artifact hashes and versions are append-only provenance, while delivery and production remain deferred.
+- `backend_engineer`: implemented the deterministic TypeScript PDF writer, PDF artifact route/RPC/storage binding, delivery-outbox route/RPC, service-role-only grants, idempotency hardening, hash-verified downloads, and live verifier updates.
+- `frontend_engineer`: added UI controls/status for HTML/PDF artifacts, send gate, send intents, and provider-deferred delivery outbox without browser-side authoritative calculations.
+- `ai_prompt_engineer`: added read-only PDF/delivery facts to web chat and compute policy metadata while keeping PDF generation, delivery, send, approval, calculation, and production tools non-executable from chat.
+- `security_reviewer`: high findings around idempotency direct access, PDF artifact content/type download controls, and duplicate send/outbox risk were remediated with no-direct idempotency access, artifact type/content allowlists, existing send-intent reuse, outbox uniqueness, and expanded smokes.
+- `qa_reviewer`: expanded static, session, mutation, compute, Supabase verifier, and secret-scan coverage for PDF provenance, PDF total compatibility, tenant/role denial, forged provider/recipient/send state, delivery outbox idempotency, and prompt injection.
+
+Notable implementation notes:
+
+- The PDF writer is intentionally narrow and deterministic. It writes binary `%PDF-1.4` bytes from persisted quote/document/cost fields and does not use browser-supplied totals.
+- Stored PDF metadata avoids forbidden storage/signed-link/provider/recipient labels; public DTOs remain sanitized and expose only safe booleans/status.
+- The provider adapter is `disabled_provider_adapter_v1`; P11 creates provider-deferred outbox records only and never marks a quote sent.
+
+P11 command log:
+
+| Command | Result | Notes |
+| --- | --- | --- |
+| `py -3.12 scripts/check_supabase_env.py` | Passed | `.env.local` found; required keys configured; URL structures valid; no secret values printed. |
+| `py -3.12 scripts/apply_supabase_migrations.py` | Passed | Applied migrations through `0012_quote_pdf_artifact_delivery_outbox.sql`. |
+| `py -3.12 scripts/seed_supabase.py` | Passed | Demo Auth users and tenant fixtures seeded. |
+| `py -3.12 scripts/verify_supabase_connection.py` | Passed | Live DB/RLS/storage/tenant/direct-read/RPC/guard checks passed, including P11 PDF/outbox guards. |
+| `npm run test -w apps/web` | Passed | Static server-boundary checks passed. |
+| `npm run typecheck -w apps/web` | Passed | Web TypeScript passed. |
+| `npm run build -w apps/web` | Passed | Next.js production build passed with P11 routes. |
+| `npm run test:session -w apps/web` | Passed | Session/chat smoke passed with read-only PDF/delivery facts and prompt-injection denial. |
+| `npm run test:mutations -w apps/web` | Passed | Live mutation smoke passed with PDF artifact storage/download, PDF total/hash compatibility, delivery outbox, IDOR, role, idempotency, audit, and forged-authority checks. |
+| `npm run test --workspaces --if-present` | Passed | Web static test passed; contracts package remains placeholder. |
+| `npm run typecheck --workspaces --if-present` | Passed | Web typecheck passed; contracts package remains placeholder. |
+| `npm run build --workspaces --if-present` | Passed | Web production build passed; contracts package remains placeholder. |
+| `py -3.12 -m ruff check .` in `services/compute` | Passed | Ruff passed. |
+| `py -3.12 -m mypy app` in `services/compute` | Passed | Mypy passed. |
+| `py -3.12 -m pytest` in `services/compute` | Passed | 45 passed; one known FastAPI/Starlette TestClient deprecation warning. |
+| `py -3.12 -m py_compile ...` | Passed | Supabase helper and secret-scan scripts compile. |
+| `py -3.12 scripts/validate_pack.py .` | Passed | Pack validation passed. |
+| `py -3.12 scripts/secret_scan.py` and `npm run secret-scan` | Passed | Tracked-file secret scan passed; `.env.local` is ignored. |
+| `git diff --check` | Passed | No whitespace errors; Git reported CRLF conversion warnings only. |
+| `make verify`, Go tests, Docker Compose | Skipped | GNU Make, Go, and Docker Desktop are unavailable locally and not required by P11. |
+
+Remaining P11 risks:
+
+- The deterministic PDF layout is narrow and not a full commercial renderer.
+- Real external email delivery, provider acknowledgement, quote-sent transition, customer delivery ledger, and production package generation remain deferred.
+- Go-backed repositories and Docker/make validation remain unavailable locally.
+- Session/rate limiting remain local-development hardening, not production-grade distributed controls.
 
 ## P10 Deterministic Artifact Storage And Send Intent Plan
 

@@ -12,6 +12,7 @@ import {
   SupabaseDemoLoginResponse,
   SupabaseDemoOverview,
   SupabaseApprovalGate,
+  SupabaseQuoteDeliveryOutbox,
   SupabaseProjectDetail,
   SupabaseQuoteArtifact,
   SupabaseQuoteConfigurationDraftResponse,
@@ -66,6 +67,7 @@ export default function HomePage() {
   const [cloudApprovalGate, setCloudApprovalGate] = useState<SupabaseApprovalGate | null>(null);
   const [cloudSendGate, setCloudSendGate] = useState<SupabaseSendGateStatus | null>(null);
   const [cloudSendIntent, setCloudSendIntent] = useState<SupabaseQuoteSendIntent | null>(null);
+  const [cloudDeliveryOutbox, setCloudDeliveryOutbox] = useState<SupabaseQuoteDeliveryOutbox[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [chatInput, setChatInput] = useState("Bu projenin maliyet snapshot sonucunu acikla");
   const [chatResult, setChatResult] = useState<AgentChatResponse | null>(null);
@@ -296,7 +298,8 @@ export default function HomePage() {
         loadSupabaseQuoteDocuments(quoteRevisionId, false),
         loadSupabaseQuoteArtifacts(quoteRevisionId, false),
         loadSupabaseApprovalStatus(quoteRevisionId, false),
-        loadSupabaseSendGateStatus(quoteRevisionId, false)
+        loadSupabaseSendGateStatus(quoteRevisionId, false),
+        loadSupabaseDeliveryOutbox(quoteRevisionId, false)
       ]);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -378,6 +381,25 @@ export default function HomePage() {
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
       setCloudArtifacts([]);
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseDeliveryOutbox(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ delivery_outbox: SupabaseQuoteDeliveryOutbox[] }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/delivery-outbox`
+      );
+      setCloudDeliveryOutbox(result.delivery_outbox);
+    } catch {
+      setCloudDeliveryOutbox([]);
     } finally {
       if (setBusy) {
         setCloudBusy(false);
@@ -696,6 +718,31 @@ export default function HomePage() {
       );
       setSeedSummary(`Saklanan teklif artefakti: ${result.artifact.sha256.slice(0, 12)}`);
       await loadSupabaseQuoteArtifacts(revisionId, false);
+      await loadSupabaseDeliveryOutbox(revisionId, false);
+      await loadSupabaseSendGateStatus(revisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function generateSupabaseQuotePdfArtifact() {
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    if (!revisionId) {
+      setError("PDF artefakti icin onayli Supabase revizyonu ve saklanan HTML artefakti gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<{ artifact: SupabaseQuoteArtifact }>(
+        `/api/supabase/quote-revisions/${revisionId}/artifacts/pdf`,
+        {}
+      );
+      setSeedSummary(`PDF teklif artefakti saklandi: ${result.artifact.sha256.slice(0, 12)}`);
+      await loadSupabaseQuoteArtifacts(revisionId, false);
+      await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -719,6 +766,31 @@ export default function HomePage() {
       );
       setCloudSendIntent(result.send_intent);
       setSeedSummary(`Gonderim niyeti kaydedildi: ${result.send_intent.status}`);
+      await loadSupabaseDeliveryOutbox(revisionId, false);
+      await loadSupabaseSendGateStatus(revisionId, false);
+    } catch (caught) {
+      setError(String(caught instanceof Error ? caught.message : caught));
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function prepareSupabaseQuoteDeliveryOutbox() {
+    const revisionId = cloudRevisionDetail?.quote_revision.id;
+    if (!revisionId) {
+      setError("Teslimat outbox hazirligi icin onayli Supabase revizyonu gerekli.");
+      return;
+    }
+    setCloudBusy(true);
+    setError("");
+    try {
+      const result = await supabasePost<{ delivery_outbox: SupabaseQuoteDeliveryOutbox }>(
+        `/api/supabase/quote-revisions/${revisionId}/delivery-outbox`,
+        {}
+      );
+      setCloudDeliveryOutbox([result.delivery_outbox]);
+      setSeedSummary(`Provider guvenli outbox kaydi: ${result.delivery_outbox.status}`);
+      await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -959,6 +1031,9 @@ export default function HomePage() {
             revisionDetail={cloudRevisionDetail}
             sendGate={cloudSendGate}
             sendIntent={cloudSendIntent}
+            deliveryOutbox={cloudDeliveryOutbox}
+            onGenerateQuotePdfArtifact={generateSupabaseQuotePdfArtifact}
+            onPrepareDeliveryOutbox={prepareSupabaseQuoteDeliveryOutbox}
             onPrepareApprovalGate={prepareSupabaseApprovalGate}
             onLoadRevisionDetail={loadSupabaseQuoteRevisionDetail}
           />
@@ -1233,14 +1308,17 @@ function SupabaseTimelinePanel({
   configurationDraft,
   documentPreview,
   documents,
+  deliveryOutbox,
   onCalculateQuoteSnapshot,
   onForkRevision,
   onGenerateQuoteArtifact,
   onGenerateQuoteDocument,
+  onGenerateQuotePdfArtifact,
   onLoadDocumentPreview,
   onLoadRevisionDiff,
   onLoadRevisionDetail,
   onPrepareApprovalGate,
+  onPrepareDeliveryOutbox,
   onPrepareSendIntent,
   onSaveConfigurationDraft,
   projectDetail,
@@ -1257,14 +1335,17 @@ function SupabaseTimelinePanel({
   configurationDraft: SupabaseQuoteConfigurationDraftResponse | null;
   documentPreview: SupabaseQuoteDocumentPreview | null;
   documents: SupabaseQuoteDocument[];
+  deliveryOutbox: SupabaseQuoteDeliveryOutbox[];
   onCalculateQuoteSnapshot: () => void;
   onForkRevision: () => void;
   onGenerateQuoteArtifact: () => void;
   onGenerateQuoteDocument: () => void;
+  onGenerateQuotePdfArtifact: () => void;
   onLoadDocumentPreview: (documentId: string) => void;
   onLoadRevisionDiff: () => void;
   onLoadRevisionDetail: (quoteRevisionId: string) => void;
   onPrepareApprovalGate: () => void;
+  onPrepareDeliveryOutbox: () => void;
   onPrepareSendIntent: () => void;
   onSaveConfigurationDraft: (event: FormEvent<HTMLFormElement>) => void;
   projectDetail: SupabaseProjectDetail | null;
@@ -1355,7 +1436,7 @@ function SupabaseTimelinePanel({
               >
                 Kayitli taslagi hesapla
               </button>
-              <button disabled type="button">PDF kapali</button>
+              <button disabled type="button">PDF onaydan sonra</button>
               <button disabled type="button">Onay kapali</button>
               <button disabled type="button">Gonderim kapali</button>
               <button disabled type="button">Uretim paketi kapali</button>
@@ -1370,12 +1451,15 @@ function SupabaseTimelinePanel({
               canPrepareApproval={canPrepareApproval}
               documentPreview={documentPreview}
               documents={documents}
+              deliveryOutbox={deliveryOutbox}
               onForkRevision={onForkRevision}
               onGenerateQuoteArtifact={onGenerateQuoteArtifact}
               onGenerateQuoteDocument={onGenerateQuoteDocument}
+              onGenerateQuotePdfArtifact={onGenerateQuotePdfArtifact}
               onLoadDocumentPreview={onLoadDocumentPreview}
               onLoadRevisionDiff={onLoadRevisionDiff}
               onPrepareApprovalGate={onPrepareApprovalGate}
+              onPrepareDeliveryOutbox={onPrepareDeliveryOutbox}
               onPrepareSendIntent={onPrepareSendIntent}
               quoteSnapshot={quoteSnapshot}
               revisionDiff={revisionDiff}
@@ -1410,14 +1494,17 @@ function SupabaseQuoteLifecyclePanel({
   artifacts,
   busy,
   canPrepareApproval,
+  deliveryOutbox,
   documentPreview,
   documents,
   onForkRevision,
   onGenerateQuoteArtifact,
   onGenerateQuoteDocument,
+  onGenerateQuotePdfArtifact,
   onLoadDocumentPreview,
   onLoadRevisionDiff,
   onPrepareApprovalGate,
+  onPrepareDeliveryOutbox,
   onPrepareSendIntent,
   quoteSnapshot,
   revisionDiff,
@@ -1429,14 +1516,17 @@ function SupabaseQuoteLifecyclePanel({
   artifacts: SupabaseQuoteArtifact[];
   busy: boolean;
   canPrepareApproval: boolean;
+  deliveryOutbox: SupabaseQuoteDeliveryOutbox[];
   documentPreview: SupabaseQuoteDocumentPreview | null;
   documents: SupabaseQuoteDocument[];
   onForkRevision: () => void;
   onGenerateQuoteArtifact: () => void;
   onGenerateQuoteDocument: () => void;
+  onGenerateQuotePdfArtifact: () => void;
   onLoadDocumentPreview: (documentId: string) => void;
   onLoadRevisionDiff: () => void;
   onPrepareApprovalGate: () => void;
+  onPrepareDeliveryOutbox: () => void;
   onPrepareSendIntent: () => void;
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDiff: SupabaseQuoteRevisionDiff | null;
@@ -1447,9 +1537,14 @@ function SupabaseQuoteLifecyclePanel({
   const hasCalculatedSnapshot = quoteSnapshot?.calculation_status === "calculated" && Boolean(quoteSnapshot.cost_snapshot);
   const latestDocument = documents[0] ?? null;
   const latestArtifact = artifacts[0] ?? null;
+  const latestHtmlArtifact = artifacts.find((artifact) => artifact.artifact_type === "quote_html_storage") ?? null;
+  const latestPdfArtifact = artifacts.find((artifact) => artifact.artifact_type === "quote_pdf") ?? null;
+  const latestDeliveryOutbox = deliveryOutbox[0] ?? null;
   const canPreview = Boolean(latestDocument);
   const canStoreArtifact = approvalGate?.status === "approved" && revisionDetail.quote_revision.status === "approved";
+  const canGeneratePdf = canStoreArtifact && Boolean(latestHtmlArtifact);
   const canPrepareSendIntent = Boolean(sendGate?.eligible_to_prepare_send);
+  const canPrepareDelivery = Boolean(sendGate?.eligible_to_prepare_delivery);
   const documentPreviewUrl = documentPreview ? `/api/supabase/documents/${documentPreview.id}/preview` : "";
   return (
     <div className="lifecyclePanel">
@@ -1464,7 +1559,8 @@ function SupabaseQuoteLifecyclePanel({
       <div className="grid">
         <SummaryCard title="Belgeler" value={`${documents.length} kayit`} />
         <SummaryCard title="Son belge" value={latestDocument ? latestDocument.sha256.slice(0, 12) : "-"} />
-        <SummaryCard title="Artefakt" value={latestArtifact ? latestArtifact.storage_status : "yok"} />
+        <SummaryCard title="HTML artefakt" value={latestHtmlArtifact ? latestHtmlArtifact.storage_status : "yok"} />
+        <SummaryCard title="PDF artefakt" value={latestPdfArtifact ? latestPdfArtifact.pdf_status : "yok"} />
         <SummaryCard title="Onay kapisi" value={approvalGate?.status ?? "not_prepared"} />
         <SummaryCard title="Gonderim kapisi" value={sendGate?.status ?? "not_ready"} />
       </div>
@@ -1486,10 +1582,16 @@ function SupabaseQuoteLifecyclePanel({
           Onay kapisi hazirla
         </button>
         <button disabled={busy || !canStoreArtifact} onClick={onGenerateQuoteArtifact} type="button">
-          Artefakti sakla
+          HTML artefakti sakla
+        </button>
+        <button disabled={busy || !canGeneratePdf} onClick={onGenerateQuotePdfArtifact} type="button">
+          PDF artefakti sakla
         </button>
         <button disabled={busy || !canPrepareSendIntent} onClick={onPrepareSendIntent} type="button">
           Gonderim niyeti hazirla
+        </button>
+        <button disabled={busy || !canPrepareDelivery} onClick={onPrepareDeliveryOutbox} type="button">
+          Provider outbox hazirla
         </button>
         <button disabled type="button">Dis e-posta gonderimi kapali</button>
         <button disabled type="button">Uretim paketi</button>
@@ -1531,10 +1633,11 @@ function SupabaseQuoteLifecyclePanel({
         <div className="artifactPanel">
           <h3>Saklanan artefaktlar</h3>
           <table className="table">
-            <thead><tr><th>Artefakt</th><th>Belge</th><th>Durum</th><th>PDF</th><th>Boyut</th><th></th></tr></thead>
+            <thead><tr><th>Tip</th><th>Artefakt</th><th>Belge</th><th>Durum</th><th>PDF</th><th>Boyut</th><th></th></tr></thead>
             <tbody>
               {artifacts.map((artifact) => (
                 <tr key={artifact.id}>
+                  <td>{artifact.artifact_type === "quote_pdf" ? "PDF" : "HTML"}</td>
                   <td>{artifact.sha256.slice(0, 12)}</td>
                   <td>{artifact.source_document_hash.slice(0, 12)}</td>
                   <td>{artifact.storage_status}</td>
@@ -1553,11 +1656,11 @@ function SupabaseQuoteLifecyclePanel({
             <span>{latestArtifact?.access_model ?? "server_mediated_download"}</span>
             <span>signed URL {String(latestArtifact?.signed_url_returned ?? false)}</span>
             <span>external URL {String(latestArtifact?.external_url_generated ?? false)}</span>
-            <span>PDF deferred</span>
+            <span>PDF {latestPdfArtifact?.pdf_status ?? "deferred"}</span>
           </div>
         </div>
       ) : (
-        <div className="warningBox">Onaydan sonra HTML artefakti server tarafinda object storage'a saklanabilir. Binary PDF bu fazda ertelidir.</div>
+        <div className="warningBox">Onaydan sonra HTML ve PDF artefaktlari server tarafinda object storage'a saklanabilir.</div>
       )}
 
       {revisionDiff ? (
@@ -1606,12 +1709,15 @@ function SupabaseQuoteLifecyclePanel({
             Onayli revizyon: {sendGate.approved_revision ? "evet" : "hayir"} /
             belge bagli: {sendGate.frozen_document_bound ? "evet" : "hayir"} /
             artefakt bagli: {sendGate.artifact_bound ? "evet" : "hayir"} /
+            PDF bagli: {sendGate.pdf_artifact_bound ? "evet" : "hayir"} /
             e-posta saglayici: {sendGate.email_provider_configured ? "hazir" : "yok"}
           </p>
           <p className="smallNote">
             Hazirlik uygun: {String(sendGate.eligible_to_prepare_send)} /
+            outbox uygun: {String(sendGate.eligible_to_prepare_delivery)} /
             calisan gonderim: {String(sendGate.quote_send_triggered)} /
-            son niyet: {sendGate.latest_send_intent_status}
+            son niyet: {sendGate.latest_send_intent_status} /
+            outbox: {sendGate.latest_delivery_outbox_status}
           </p>
           <p className="smallNote">Artefakt durumu: {sendGate.artifact_status}</p>
           <p className="smallNote">Blokajlar: {sendGate.blocking_reasons.join(", ") || "yok"}</p>
@@ -1630,6 +1736,21 @@ function SupabaseQuoteLifecyclePanel({
             Dis gonderim: {String(sendIntent.external_delivery_attempted)} /
             teklif sent: {String(sendIntent.quote_sent)} /
             uretim paketi: {String(sendIntent.production_package_triggered)}
+          </p>
+        </div>
+      ) : null}
+      {latestDeliveryOutbox ? (
+        <div className="approvalBox">
+          <strong>Provider outbox: {latestDeliveryOutbox.status}</strong>
+          <p>
+            Adapter: {latestDeliveryOutbox.provider_adapter} /
+            saglayici: {latestDeliveryOutbox.provider_status} /
+            alici mevcut: {latestDeliveryOutbox.recipient_available ? "evet" : "hayir"}
+          </p>
+          <p className="smallNote">
+            Dis gonderim: {String(latestDeliveryOutbox.external_delivery_attempted)} /
+            teklif sent: {String(latestDeliveryOutbox.quote_sent)} /
+            uretim paketi: {String(latestDeliveryOutbox.production_package_triggered)}
           </p>
         </div>
       ) : null}

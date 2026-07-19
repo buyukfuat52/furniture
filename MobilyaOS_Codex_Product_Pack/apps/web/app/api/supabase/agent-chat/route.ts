@@ -9,6 +9,7 @@ import {
   getQuoteRevisionDiff,
   getQuoteSendGateStatus,
   getQuoteSnapshot,
+  listQuoteDeliveryOutbox,
   listQuoteArtifacts,
   listQuoteDocuments,
   listProjects,
@@ -18,6 +19,7 @@ import {
   type QuoteArtifactRecord,
   type QuoteConfigurationDraftRecord,
   type QuoteDocumentRecord,
+  type QuoteDeliveryOutboxRecord,
   type QuoteRevisionDetailRecord,
   type QuoteRevisionDiffResponse,
   type QuoteRevisionRecord,
@@ -294,13 +296,37 @@ function sendGateFacts(sendGate: QuoteSendGateStatusRecord | null): Array<{ labe
     { label: "Gonderim kapisi", value: sendGate.status },
     { label: "Gonderime uygun", value: sendGate.eligible_to_send },
     { label: "Gonderim hazirligina uygun", value: sendGate.eligible_to_prepare_send },
+    { label: "Outbox hazirligina uygun", value: sendGate.eligible_to_prepare_delivery },
     { label: "Onayli revizyon", value: sendGate.approved_revision },
     { label: "Frozen belge bagli", value: sendGate.frozen_document_bound },
     { label: "Artefakt bagli", value: sendGate.artifact_bound },
+    { label: "PDF artefakt bagli", value: sendGate.pdf_artifact_bound },
     { label: "PDF/artifact durumu", value: sendGate.artifact_status },
     { label: "Son gonderim niyeti", value: sendGate.latest_send_intent_status },
+    { label: "Son delivery outbox", value: sendGate.latest_delivery_outbox_status },
+    { label: "Provider durumu", value: sendGate.provider_status },
     { label: "Teklif gonderildi", value: sendGate.quote_send_triggered },
     { label: "Gonderim blokajlari", value: sendGate.blocking_reasons.join(", ") }
+  ];
+}
+
+function deliveryFacts(outbox: QuoteDeliveryOutboxRecord[]): Array<{ label: string; value: unknown }> {
+  const latest = outbox[0] ?? null;
+  if (!latest) {
+    return [
+      { label: "Delivery outbox", value: "yok" },
+      { label: "Provider delivery", value: "deferred" }
+    ];
+  }
+  return [
+    { label: "Delivery outbox", value: latest.status },
+    { label: "Provider adapter", value: latest.provider_adapter },
+    { label: "Provider status", value: latest.provider_status },
+    { label: "Recipient source", value: latest.recipient_source },
+    { label: "Recipient available", value: latest.recipient_available },
+    { label: "External delivery attempted", value: latest.external_delivery_attempted },
+    { label: "Quote sent", value: latest.quote_sent },
+    { label: "Production package triggered", value: latest.production_package_triggered }
   ];
 }
 
@@ -402,6 +428,7 @@ export async function POST(request: Request) {
     let approvalGate: ApprovalGateRecord | null = null;
     let sendGate: QuoteSendGateStatusRecord | null = null;
     let quoteArtifacts: QuoteArtifactRecord[] = [];
+    let deliveryOutbox: QuoteDeliveryOutboxRecord[] = [];
 
     if (projectId) {
       projectDetail = await getProjectDetail(session.mutationScope, projectId);
@@ -427,19 +454,23 @@ export async function POST(request: Request) {
       approvalGate = await getApprovalGateStatus(session.mutationScope, revisionId);
       sendGate = await getQuoteSendGateStatus(session.mutationScope, revisionId);
       quoteArtifacts = await listQuoteArtifacts(session.mutationScope, revisionId);
+      deliveryOutbox = await listQuoteDeliveryOutbox(session.mutationScope, revisionId);
       toolCalls.push(completedTool("agent-tool-2", "get_quote_revision_detail", "Oturum sirketine ait revizyon okundu."));
       toolCalls.push(completedTool("agent-tool-3", "get_quote_configuration_draft", "Konfigurasyon taslagi salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-4", "get_quote_snapshot", "Deterministik snapshot salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-approval-status", "get_approval_status", "Onay kapisi durumu salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-send-gate", "get_send_gate_status", "Gonderim kapisi salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-artifact-status", "get_quote_artifact_status", "Saklanan artefakt durumu salt okunur okundu."));
+      toolCalls.push(completedTool("agent-tool-pdf-artifact-status", "get_pdf_artifact_status", "PDF artefakt durumu salt okunur okundu."));
+      toolCalls.push(completedTool("agent-tool-delivery-status", "get_delivery_status", "Provider-safe delivery outbox durumu salt okunur okundu."));
       facts.push(
         ...revisionFacts(revisionDetail),
         ...configurationFacts(configurationDraft),
         ...snapshotFacts(quoteSnapshot),
         ...approvalFacts(approvalGate),
         ...sendGateFacts(sendGate),
-        ...artifactFacts(quoteArtifacts)
+        ...artifactFacts(quoteArtifacts),
+        ...deliveryFacts(deliveryOutbox)
       );
     } else {
       missingInformation.push("Supabase proje veya revizyon secimi");
