@@ -27,6 +27,12 @@ export type IdempotencyReservation = {
   mode: "durable_supabase_scoped";
 };
 
+export type IdempotencyResource = {
+  type: string;
+  id: string;
+  version?: string | number;
+};
+
 const ttlMs = 10 * 60 * 1000;
 const forbiddenStoredKeys = new Set([
   "SUPABASE_SECRET_KEY",
@@ -146,12 +152,13 @@ export async function reserveIdempotency(input: {
   appUserId: string;
   action: string;
   body: unknown;
+  resource?: IdempotencyResource;
 }): Promise<IdempotencyReplay | IdempotencyReservation | null> {
   if (!input.key) {
     return null;
   }
 
-  const requestHash = hashInput(input.body);
+  const requestHash = hashInput(input.resource ? { body: input.body, resource: input.resource } : input.body);
   const rows = await supabaseRest<IdempotencyRecordRow[]>(
     "rpc/reserve_idempotency_record",
     {

@@ -13,21 +13,27 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withMutationSession(request, "create_project", "project_created", async ({ session }, body, reservation) => {
-    const project = await createProject(session.mutationScope, {
-      customer_id: typeof body.customer_id === "string" ? body.customer_id : "",
-      name: typeof body.name === "string" ? body.name : ""
-    });
-    await appendAuditEntry(session.mutationScope, {
-      action: "project_created",
-      target_type: "project",
-      target_id: project.id,
-      metadata: {
-        route: "projects",
-        idempotency: Boolean(reservation),
-        idempotency_mode: "durable_supabase_scoped"
-      }
-    });
-    return NextResponse.json({ project }, { status: 201 });
-  });
+  return withMutationSession(
+    request,
+    "create_project",
+    "project_created",
+    async ({ session }, body, reservation) => {
+      const project = await createProject(session.mutationScope, {
+        customer_id: typeof body.customer_id === "string" ? body.customer_id : "",
+        name: typeof body.name === "string" ? body.name : ""
+      });
+      await appendAuditEntry(session.mutationScope, {
+        action: "project_created",
+        target_type: "project",
+        target_id: project.id,
+        metadata: {
+          route: "projects",
+          idempotency: Boolean(reservation),
+          idempotency_mode: "durable_supabase_scoped"
+        }
+      });
+      return NextResponse.json({ project }, { status: 201 });
+    },
+    { resource: { type: "project_collection", id: "projects", version: "project-create-v1.0.0" } }
+  );
 }

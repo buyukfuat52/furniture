@@ -1,6 +1,6 @@
 # Runtime Agent Tool Gateway Preparation
 
-Status: P12 provider configuration boundary, delivery attempt ledger, and guarded sent-state checkpoint. The read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, true second-tenant selector denial smokes pass, and the gateway policy skeleton in `services/compute/app/tool_gateway_policy.py` now includes validate/calculate/get/explain quote snapshot metadata plus read-only quote document, quote artifact status, PDF artifact status, approval-status, send-gate, send-preparation, delivery-status, provider-status, delivery-attempt status, not-sent explanation, and revision diff tools. Unsafe runtime mutation execution is still not activated.
+Status: P14 real provider delivery boundary, webhook readiness, and fail-closed real sent-transition checkpoint. The read-only web chat prototype is implemented through `POST /api/supabase/agent-chat`, true second-tenant selector denial smokes pass, and the gateway policy skeleton in `services/compute/app/tool_gateway_policy.py` now includes validate/calculate/get/explain quote snapshot metadata plus read-only quote document, quote artifact status, PDF artifact status, approval-status, send-gate, send-preparation, delivery-status, provider-status, delivery-attempt status, sandbox acknowledgement status, webhook readiness, real delivery status, real sent-deferred explanation, sandbox-vs-real delivery explanation, not-sent explanation, and revision diff tools. Unsafe runtime mutation execution is still not activated.
 
 ## Runtime Context Boundary
 
@@ -32,7 +32,7 @@ Allowed:
 - Read the current tenant-scoped deterministic quote snapshot when persisted provenance matches the current configuration draft/version.
 - Explain persisted snapshot facts fetched server-side, including deterministic source/version and stored totals, without recalculating them.
 - Read trusted frozen quote document facts fetched server-side without returning storage locators, raw HTML to the model, token hashes, or approval token material.
-- Read trusted artifact access metadata, PDF artifact status, approval-gate status, send-gate status, send-preparation status, delivery-outbox status, provider configuration boundary status, delivery-attempt ledger status, and not-sent reasons fetched server-side without generating artifacts, consuming tokens, approving from chat, changing quote status from chat, recording delivery attempts from chat, or triggering send/production workflows.
+- Read trusted artifact access metadata, PDF artifact status, approval-gate status, send-preparation status, delivery-outbox status, provider configuration boundary status, delivery-attempt ledger status, sandbox acknowledgement status, webhook readiness, real delivery status, sandbox-vs-real delivery facts, and not-sent reasons fetched server-side without generating artifacts, consuming tokens, approving from chat, changing quote status from chat, recording delivery attempts from chat, consuming webhooks, or triggering send/production workflows.
 - Read deterministic server-derived revision diff facts fetched server-side.
 - Summarize audit counts/latest safe action labels.
 - Ask for missing measurements or selected revision context.
@@ -40,7 +40,7 @@ Allowed:
 Denied:
 
 - Browser-supplied company, role, user, tenant, cost snapshot, document facts, diff entries, approval state, or quote status as authority.
-- Quote send, quote-sent transition, provider acknowledgement assertion, delivery-attempt recording from chat, send-intent preparation from chat, delivery-outbox preparation from chat, artifact generation from chat, approval-token consumption from chat, quote status approval from chat, official PDF generation from chat, production package, create, update, delete, or other mutation-like requests.
+- Quote send, quote-sent transition, real provider delivery, real provider webhook consumption, provider acknowledgement assertion, delivery-attempt recording from chat, send-intent preparation from chat, delivery-outbox preparation from chat, artifact generation from chat, approval-token consumption from chat, quote status approval from chat, official PDF generation from chat, production package, create, update, delete, or other mutation-like requests.
 - Authoritative BOM, edge, labor, cost, tax, margin, quote total, nesting, or production quantity calculation.
 - Browser-supplied snapshots, totals, cost payloads, or approval status as tool input authority.
 - Secret, token, database URL, cookie, service key, or local path disclosure.
@@ -98,11 +98,19 @@ Runtime agent execution remains deferred. Some underlying application routes alr
 | `explain_delivery_status` | Read/conversation | May summarize trusted provider-deferred outbox facts. It must not send quotes, mark delivery attempted, mark quotes sent, set provider message IDs, expose provider internals, or create production packages. |
 | `get_provider_status` | Read/query | Requires authenticated session context, backend-resolved tenant scope, target revision validation, and sanitized server-owned provider configuration boundary state. It may report configured/missing booleans, disabled adapter labels, and blocked reasons only. It must not expose provider secrets, hostnames, usernames, credentials, raw provider payloads, provider message IDs, recipients, or sent authority. |
 | `explain_provider_status` | Read/conversation | May summarize why the current provider boundary is missing or unverified. It must not ask for secrets, echo env values, configure providers, call providers, mark quotes sent, or treat provider-configured as provider-verified. |
+| `get_provider_configuration_status` | Read/query | Compatibility alias for sanitized provider configuration status. It may report provider mode, configured/valid booleans, adapter/config version labels, and blocked/deferred reasons only. It must not return env names with values, hostnames, usernames, credentials, raw provider payloads, webhook signatures, provider message IDs, recipient data, or send authority. |
+| `explain_provider_configuration_status` | Read/conversation | May explain server-fetched provider configuration readiness and why real delivery remains disabled. It must not request provider secrets from the user, infer provider details from prompts, activate a provider, call an external provider, or mark a quote sent. |
 | `get_delivery_attempt_status` | Read/query | Requires authenticated session context, backend-resolved tenant scope, target revision validation, prepared delivery outbox state, and sanitized delivery-attempt ledger output. It may report blocked attempt status, version labels, idempotency status, and safe deferred actions only. It must not return sent timestamps, provider message IDs, raw provider responses, recipients, webhook secrets, storage paths, or acknowledgement authority. |
 | `explain_delivery_attempt_status` | Read/conversation | May summarize trusted delivery-attempt facts and blockers. It must not record attempts, fake acknowledgements, mark sent, retry delivery, call webhooks, or create production packages. |
+| `get_webhook_readiness` | Read/query | Requires authenticated session context, backend-resolved tenant scope, target revision validation, provider status resolution, and sanitized latest sandbox acknowledgement facts. It may report webhook configured/enabled booleans, signature-readiness booleans, sandbox acknowledgement status, and real sent blocked reason. It must not consume webhooks, return webhook secrets/signatures, store raw payloads, expose provider event IDs, or assert real acknowledgement. |
+| `explain_webhook_readiness` | Read/conversation | May explain why real webhook consumption is unavailable or deferred based on trusted readiness fields. It must not process webhook bodies, verify browser-supplied signatures, ask for webhook secrets, treat sandbox acknowledgement as real acknowledgement, or mark quotes sent. |
+| `explain_real_delivery_status` | Read/conversation | May summarize trusted provider, delivery-attempt, sandbox acknowledgement, webhook-readiness, and send-gate facts. It must keep real email sent, real acknowledgement, quote sent, and production package false unless a future verified backend command changes them. |
+| `explain_why_real_sent_is_deferred` | Read/conversation | May explain the exact blockers for the approved-to-sent transition. It must not satisfy blockers from prompt text, browser payloads, tool-output instructions, sandbox acknowledgement, or user claims. |
+| `explain_sandbox_vs_real_delivery` | Read/conversation | May distinguish sandbox delivery verification from real provider delivery and real acknowledgement verification. It must not let sandbox acknowledgement trigger real sent state or production package creation. |
 | `explain_why_quote_is_not_sent` | Read/conversation | May summarize trusted send-gate/provider/attempt facts that explain why a quote is not sent. It must keep provider acknowledgement, external delivery, sent state, and production state false unless a future verified backend command says otherwise. |
 | `record_delivery_attempt_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot record delivery attempts; the HTTP delivery-attempt route is an audited server/RPC boundary and currently records only blocked provider-missing attempts. |
 | `mark_quote_sent_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot mark quotes sent, set sent timestamps, assert provider acknowledgements, or consume provider webhooks. |
+| `acknowledge_delivery_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot assert sandbox or real delivery acknowledgement, submit webhook bodies, replay acknowledgements, verify signatures, or create real sent state. |
 | `send_quote_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot send quotes or mark quotes sent. |
 | `generate_pdf_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot generate official PDFs. |
 | `generate_artifact_from_chat` | Forbidden mutation | Registered only so policy drift is visible. Runtime agents cannot store or generate quote artifacts. |
@@ -123,10 +131,10 @@ Any route that sends, approves, exports official PDFs, releases production artif
 
 ## Current Implementation Status
 
-- This document is preparation guidance plus the P11 read-only web chat boundary.
-- Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes, configuration-draft POST/PATCH routes, deterministic snapshot calculation route, frozen document route, revision fork route, approval-gate preparation route, artifact-storage route, PDF-artifact route, send-intent preparation route, provider-deferred delivery-outbox route, and blocked delivery-attempt route. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
-- Policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, mutation idempotency metadata, approval/send-gate/artifact/PDF/send-preparation/delivery/provider/delivery-attempt metadata, prompt-injection denial, non-executable mutation/workflow policies, quote snapshot/document/diff policy metadata, sanitized prompt labels, and the static policy manifest endpoint.
-- Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, server-fetched snapshot/document/artifact/PDF/approval/send-gate/delivery/provider/delivery-attempt/diff availability and missing-state explanations, prompt-injection blocking before reads, mutation/PDF-generation/artifact/send/delivery/provider-ack/mark-sent/approve/token-consume/calculation denial, forbidden field filtering, and no agent-side calculation.
+- This document is preparation guidance plus the P14 read-only web chat boundary.
+- Durable idempotency is implemented for the current Supabase-backed customer/project/quote-draft POST routes, configuration-draft POST/PATCH routes, deterministic snapshot calculation route, frozen document route, revision fork route, approval-gate preparation route, artifact-storage route, PDF-artifact route, send-intent preparation route, provider-deferred delivery-outbox route, blocked delivery-attempt route, and sandbox acknowledgement route. P14 also binds idempotency request hashes to the target resource so same body/key replays cannot cross revision or attempt targets. Runtime agent mutation tools are still deferred until the gateway enforces the same boundary.
+- Policy tests cover forbidden tools, viewer mutation denial, tenant/session requirements, target-bound mutation idempotency metadata, approval/send-gate/artifact/PDF/send-preparation/delivery/provider/delivery-attempt/sandbox-acknowledgement/webhook-readiness metadata, prompt-injection denial, non-executable mutation/workflow policies, quote snapshot/document/diff policy metadata, sanitized prompt labels, and the static policy manifest endpoint. The manifest is `phase14-tool-gateway-read-only-v1`.
+- Web session smoke covers unauthenticated chat blocking, read-only session-scoped chat success, server-fetched snapshot/document/artifact/PDF/approval/send-gate/delivery/provider/delivery-attempt/sandbox-acknowledgement/webhook-readiness/diff availability and missing-state explanations, prompt-injection blocking before reads, mutation/PDF-generation/artifact/send/delivery/provider-ack/webhook-consumption/mark-sent/approve/token-consume/calculation denial, forbidden field filtering, and no agent-side calculation.
 - Unsafe runtime agent execution is not activated beyond the existing deterministic rules-mode adapters and read-only Supabase web route.
 - Phase 7 session smoke verifies that primary and second tenant selector IDs cannot cross the agent route.
 - Future implementation must keep gateway policy server-side and must add tests for tenant isolation, role denial, approval-token consumption denial/replay/stale binding, idempotency replay, prompt injection, malicious tool output, and deterministic-domain calculation ownership.
@@ -159,3 +167,34 @@ Still forbidden/deferred:
 - `calculate_authoritative_totals_from_chat`
 
 P13 session and compute tests cover malicious prompts asking the assistant to fake sandbox acknowledgement, replay acknowledgement, mark a quote sent, assert provider acknowledgement, bypass policy, call webhook-like actions, or calculate/send from chat. The accepted behavior is explanation or denial only.
+
+## P14 Real Provider And Webhook Readiness Boundary
+
+Implemented/prepared read-only tools:
+
+- `get_provider_configuration_status`
+- `explain_provider_configuration_status`
+- `get_webhook_readiness`
+- `explain_webhook_readiness`
+- `explain_real_delivery_status`
+- `explain_why_real_sent_is_deferred`
+- `explain_sandbox_vs_real_delivery`
+
+These tools may explain only server-fetched provider mode/config booleans, webhook readiness booleans, sandbox acknowledgement status, real acknowledgement disabled state, and real sent blockers. They must not expose provider secrets, env values, hostnames, usernames, credentials, webhook secrets/signatures, provider event identifiers, raw provider payloads, raw provider responses, recipient data, storage paths, signed URLs, token material, database URLs, or internal repository details.
+
+Still forbidden/deferred:
+
+- `send_quote_from_chat`
+- `mark_quote_sent_from_chat`
+- `acknowledge_delivery_from_chat`
+- `consume_provider_webhook_from_chat`
+- `record_delivery_attempt_from_chat`
+- `approve_quote_from_chat`
+- `consume_approval_token_from_chat`
+- `generate_pdf_from_chat`
+- `generate_artifact_from_chat`
+- `generate_production_package`
+- `mutate_quote_from_chat`
+- `calculate_authoritative_totals_from_chat`
+
+P14 tests must prove prompt/tool-output attempts to force real provider acknowledgement, forge webhook signatures, replay provider events, supply provider message IDs, mark real sent, or reinterpret sandbox acknowledgement as real delivery are denied or answered with read-only explanations.

@@ -587,6 +587,48 @@ export type QuoteRevisionProviderStatusRecord = QuoteProviderStatusRecord & {
   tenant_scoped: true;
 };
 
+export type ProviderWebhookReadinessRecord = {
+  revision_id: string;
+  quote_status: string;
+  tenant_scoped: true;
+  provider_status: ProviderStatus;
+  provider_mode: QuoteProviderStatusRecord["provider_mode"];
+  real_provider_configured: boolean;
+  real_provider_config_valid: boolean;
+  real_provider_enable_requested: boolean;
+  real_delivery_enabled: false;
+  webhook_configured: boolean;
+  webhook_enable_requested: boolean;
+  webhook_signature_verification_ready: boolean;
+  webhook_consumption_enabled: false;
+  provider_event_ingestion_enabled: false;
+  real_provider_acknowledgement_enabled: false;
+  real_provider_acknowledgement_verified: false;
+  latest_real_acknowledgement_status: "none" | "deferred";
+  latest_sandbox_acknowledgement_status: "none" | "sandbox_acknowledged";
+  sandbox_delivery_verified: boolean;
+  sandbox_acknowledgement_verified: boolean;
+  real_sent_transition_enabled: false;
+  sent_transition_enabled: false;
+  quote_status_after_sandbox: "approved";
+  quote_sent: false;
+  provider_secret_returned: false;
+  provider_raw_payload_returned: false;
+  webhook_secret_returned: false;
+  webhook_signature_returned: false;
+  provider_message_id_available: false;
+  blocked_reason:
+    | "provider_missing"
+    | "real_provider_deferred"
+    | "real_provider_incomplete"
+    | "real_provider_invalid_format"
+    | "real_delivery_enable_flag_missing"
+    | "webhook_signature_required"
+    | "real_provider_acknowledgement_not_verified"
+    | "real_sent_transition_deferred";
+  deferred_actions: string[];
+};
+
 export type AuditEntryRecord = {
   id: string;
   action: string;
@@ -2104,6 +2146,68 @@ export async function getQuoteProviderStatusForRevision(
   };
 }
 
+export async function getProviderWebhookReadinessForRevision(
+  context: TrustedRepositoryContext,
+  quoteRevisionId: string
+): Promise<ProviderWebhookReadinessRecord> {
+  const revision = await getQuoteRevision(context, quoteRevisionId);
+  const providerStatus = await getQuoteProviderStatusForRevision(context, revision.id);
+  const latestAcknowledgement = await getLatestQuoteDeliveryAcknowledgement(context, revision.id).catch(() => null);
+  const sandboxDeliveryVerified = latestAcknowledgement?.sandbox_delivery_verified === true;
+  const providerMissing = !providerStatus.real_provider_configured;
+  const blockedReason: ProviderWebhookReadinessRecord["blocked_reason"] = providerMissing
+    ? "provider_missing"
+    : !providerStatus.real_provider_config_valid
+      ? providerStatus.blocked_reason === "real_provider_invalid_format"
+        ? "real_provider_invalid_format"
+        : "real_provider_incomplete"
+      : !providerStatus.real_provider_enable_requested
+        ? "real_delivery_enable_flag_missing"
+        : !providerStatus.webhook_signature_verification_ready
+          ? "webhook_signature_required"
+          : "real_provider_acknowledgement_not_verified";
+
+  return {
+    revision_id: revision.id,
+    quote_status: revision.status,
+    tenant_scoped: true,
+    provider_status: providerStatus.provider_status,
+    provider_mode: providerStatus.provider_mode,
+    real_provider_configured: providerStatus.real_provider_configured,
+    real_provider_config_valid: providerStatus.real_provider_config_valid,
+    real_provider_enable_requested: providerStatus.real_provider_enable_requested,
+    real_delivery_enabled: false,
+    webhook_configured: providerStatus.webhook_configured,
+    webhook_enable_requested: providerStatus.webhook_enable_requested,
+    webhook_signature_verification_ready: providerStatus.webhook_signature_verification_ready,
+    webhook_consumption_enabled: false,
+    provider_event_ingestion_enabled: false,
+    real_provider_acknowledgement_enabled: false,
+    real_provider_acknowledgement_verified: false,
+    latest_real_acknowledgement_status: "none",
+    latest_sandbox_acknowledgement_status: latestAcknowledgement?.acknowledgement_status ?? "none",
+    sandbox_delivery_verified: sandboxDeliveryVerified,
+    sandbox_acknowledgement_verified: sandboxDeliveryVerified,
+    real_sent_transition_enabled: false,
+    sent_transition_enabled: false,
+    quote_status_after_sandbox: "approved",
+    quote_sent: false,
+    provider_secret_returned: false,
+    provider_raw_payload_returned: false,
+    webhook_secret_returned: false,
+    webhook_signature_returned: false,
+    provider_message_id_available: false,
+    blocked_reason: blockedReason,
+    deferred_actions: [
+      "real_provider_delivery",
+      "real_provider_webhook_consumption",
+      "real_provider_acknowledgement",
+      "quote_sent_transition",
+      "production_package"
+    ]
+  };
+}
+
 export async function listQuoteDeliveryAttempts(
   context: TrustedRepositoryContext,
   quoteRevisionId: string
@@ -2869,18 +2973,27 @@ function boundedProviderStatus(value: unknown): ProviderStatus {
 }
 
 function boundedProviderAdapter(value: unknown): ProviderAdapter {
+  if (asString(value) === "real_provider_adapter_v1") {
+    return "real_provider_adapter_v1";
+  }
   return asString(value) === "sandbox_provider_adapter_v1"
     ? "sandbox_provider_adapter_v1"
     : "disabled_provider_adapter_v1";
 }
 
 function boundedProviderConfigVersion(value: unknown): ProviderConfigVersion {
+  if (asString(value) === "real-provider-config-boundary-v1.0.0") {
+    return "real-provider-config-boundary-v1.0.0";
+  }
   return asString(value) === "sandbox-provider-config-v1.0.0"
     ? "sandbox-provider-config-v1.0.0"
     : "provider-config-boundary-v1.0.0";
 }
 
 function boundedProviderAdapterVersion(value: unknown): ProviderAdapterVersion {
+  if (asString(value) === "real-provider-adapter-v1.0.0") {
+    return "real-provider-adapter-v1.0.0";
+  }
   return asString(value) === "sandbox-provider-adapter-v1.0.0"
     ? "sandbox-provider-adapter-v1.0.0"
     : "disabled-provider-adapter-v1.0.0";

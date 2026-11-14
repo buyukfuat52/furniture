@@ -1,6 +1,6 @@
 # MobilyaOS Status
 
-Current status: P12 provider configuration boundary, delivery attempt ledger, and guarded sent-state design are complete locally on the Supabase Cloud path. Supabase Cloud validation, local-demo session routing, Supabase-backed customer/project/quote draft/configuration draft routes, deterministic wardrobe BOM/cost snapshot persistence, frozen HTML quote document generation, revision fork/diff, admin-only approval-gate preparation, guarded approval-token finalization, customer-safe approval UI, private object-storage-backed HTML/PDF artifact storage/download, audited send-intent preparation, provider-deferred delivery outbox preparation, provider configuration status, append-only blocked delivery attempts, disabled sent-state RPC, read-only send-gate status, delegated security/QA checks, durable Supabase-backed idempotency, read-only project/revision/document/artifact/PDF/approval/send-gate/delivery/provider/attempt policy surfaces, runtime agent tool-gateway policy skeleton, read-only Supabase-backed web agent chat, second-tenant negative tests, read-only authenticated RLS, tracked-file secret scan, and release documentation are verified by live Supabase checks and local non-Docker gates.
+Current status: P14 real-provider delivery boundary, webhook readiness, and guarded real-sent deferral are in implementation on the Supabase Cloud path. Supabase Cloud validation, local-demo session routing, Supabase-backed customer/project/quote draft/configuration draft routes, deterministic wardrobe BOM/cost snapshot persistence, frozen HTML quote document generation, revision fork/diff, admin-only approval-gate preparation, guarded approval-token finalization, customer-safe approval UI, private object-storage-backed HTML/PDF artifact storage/download, audited send-intent preparation, provider-deferred delivery outbox preparation, provider configuration status, append-only sandbox delivery attempts and acknowledgements, disabled sent-state RPCs, read-only send-gate status, delegated security/QA checks, durable Supabase-backed idempotency, read-only project/revision/document/artifact/PDF/approval/send-gate/delivery/provider/webhook/attempt policy surfaces, runtime agent tool-gateway policy skeleton, read-only Supabase-backed web agent chat, second-tenant negative tests, read-only authenticated RLS, tracked-file secret scan, and release documentation are verified or pending final P14 validation by live Supabase checks and local non-Docker gates.
 
 Docker Desktop is not available on this machine, so the local Docker Compose path is not active. Supabase Cloud migrations, RLS policies, Storage bucket setup SQL, env validation, migration, seed, and verify scripts are prepared and verified live.
 
@@ -40,7 +40,9 @@ The Next.js app now includes server-side Supabase routes for demo data reads, de
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/send-intents`
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/delivery-outbox`
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/provider-status`
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/webhook-readiness`
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/delivery-attempts`
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/delivery-acknowledgements`
 - `POST /api/supabase/approval-tokens/consume`
 - `POST /api/supabase/agent-chat`
 - `/customer-approval` customer-safe approval entry page
@@ -93,6 +95,12 @@ Remaining application gaps:
 ## P13 Sandbox Provider Adapter, Delivery Acknowledgement, And Guarded Sent Boundary
 
 Current result: complete for the sandbox scope. P13 adds a no-secret sandbox provider adapter path, a durable tenant-scoped sandbox delivery acknowledgement model, replay/stale/duplicate guards, sanitized acknowledgement reads, updated send-gate/provider status, and read-only chat explanations for sandbox acknowledgement state.
+
+## P14 Real Provider Delivery Boundary
+
+Current result: implementation in progress pending final validation. P14 adds a server-only real-provider configuration boundary, sanitized provider/webhook readiness reads, fail-closed real provider webhook and acknowledgement tables, a service-role-only real-sent transition RPC that intentionally raises, read-only chat explanations for real-provider deferral, and idempotency request hashes bound to target resources.
+
+P14 intentionally does not send email, consume provider webhooks, verify real provider acknowledgement, set `sent_at`, mutate approved revisions to `sent`, or create production packages. Sandbox acknowledgement remains separate from real provider delivery.
 
 The safer sent-state option was selected: verified sandbox acknowledgement does not set `quote_revisions.status = 'sent'`. The approved revision remains `approved`; the application reports `sandbox_delivery_verified` separately while real provider acknowledgement, real external delivery, sent timestamp, quote-send transition, and production package creation remain false/deferred.
 

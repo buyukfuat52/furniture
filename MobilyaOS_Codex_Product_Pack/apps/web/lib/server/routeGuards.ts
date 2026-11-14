@@ -3,6 +3,7 @@ import {
   idempotencyKeyFromRequest,
   reserveIdempotency,
   storeIdempotencyResult,
+  type IdempotencyResource,
   type IdempotencyReplay,
   type IdempotencyReservation
 } from "./idempotency";
@@ -57,7 +58,10 @@ export async function withMutationSession(
   request: Request,
   kind: PlannedMutationKind,
   action: string,
-  handler: (context: ApiHandlerContext, body: Record<string, unknown>, reservation: IdempotencyReservation | null) => Promise<NextResponse>
+  handler: (context: ApiHandlerContext, body: Record<string, unknown>, reservation: IdempotencyReservation | null) => Promise<NextResponse>,
+  options?: {
+    resource?: IdempotencyResource | ((context: ApiHandlerContext, body: Record<string, unknown>) => IdempotencyResource);
+  }
 ): Promise<NextResponse> {
   const session = await requireSession(request);
   if (session instanceof NextResponse) {
@@ -82,6 +86,9 @@ export async function withMutationSession(
   if (!idempotencyKey) {
     return safeError(422, "Idempotency key required", "A durable idempotency key is required for this mutation.");
   }
+  const resource = typeof options?.resource === "function"
+    ? options.resource({ session }, body)
+    : options?.resource;
   let idempotency: IdempotencyReplay | IdempotencyReservation | null;
   try {
     idempotency = await reserveIdempotency({
@@ -89,7 +96,8 @@ export async function withMutationSession(
       companyId: session.mutationScope.companyId,
       appUserId: session.mutationScope.appUserId,
       action,
-      body
+      body,
+      resource
     });
   } catch {
     return safeError(503, "Idempotency unavailable", "The mutation could not be safely reserved.");

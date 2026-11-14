@@ -40,6 +40,8 @@ REQUIRED_TABLES = [
     "quote_delivery_outbox",
     "quote_delivery_attempts",
     "quote_delivery_acknowledgements",
+    "quote_provider_webhook_events",
+    "quote_real_delivery_acknowledgements",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -66,6 +68,8 @@ TENANT_TABLES = [
     "quote_delivery_outbox",
     "quote_delivery_attempts",
     "quote_delivery_acknowledgements",
+    "quote_provider_webhook_events",
+    "quote_real_delivery_acknowledgements",
     "audit_entries",
     "agent_runs",
     "tool_invocations",
@@ -365,6 +369,22 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             DEMO_REVISION_ID,
             "quote_revision_id",
         )
+        direct_quote_provider_webhook_events = sensitive_table_rows(
+            env,
+            access_token,
+            "quote_provider_webhook_events",
+            "id,provider_event_id_hash,metadata_json",
+            DEMO_REVISION_ID,
+            "quote_revision_id",
+        )
+        direct_quote_real_delivery_acknowledgements = sensitive_table_rows(
+            env,
+            access_token,
+            "quote_real_delivery_acknowledgements",
+            "id,acknowledgement_hash,metadata_json",
+            DEMO_REVISION_ID,
+            "quote_revision_id",
+        )
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         print(f"Authenticated RLS smoke: failed ({exc.__class__.__name__})")
         return False
@@ -403,6 +423,10 @@ def verify_authenticated_rls(env: dict[str, str]) -> bool:
             and len(direct_quote_delivery_attempts) == 0
             and isinstance(direct_quote_delivery_acknowledgements, list)
             and len(direct_quote_delivery_acknowledgements) == 0
+            and isinstance(direct_quote_provider_webhook_events, list)
+            and len(direct_quote_provider_webhook_events) == 0
+            and isinstance(direct_quote_real_delivery_acknowledgements, list)
+            and len(direct_quote_real_delivery_acknowledgements) == 0
         )
         print(f"Authenticated direct sensitive table read: {'ok' if direct_sensitive_read_blocked else 'failed'}")
         direct_storage_read_blocked = expect_storage_list_no_direct_visibility(
@@ -631,6 +655,62 @@ def verify_p11_database_guards(cur: Any) -> bool:
     return pdf_artifact_guard and delivery_outbox_guard and delivery_attempt_guard and delivery_acknowledgement_guard
 
 
+def verify_p14_database_guards(cur: Any) -> bool:
+    webhook_event_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_provider_webhook_events (
+          company_id, quote_revision_id, provider_event_id_hash, event_status,
+          verification_status, signature_verified, provider_acknowledgement_verified,
+          provider_message_id, quote_sent, sent_at, raw_provider_payload_stored, metadata_json
+        )
+        values (
+          %s, %s, 'guard-forged-webhook-event', 'verification_deferred',
+          'not_verified', true, true, 'forged-provider-message',
+          true, now(), true, '{"webhook": {"raw_payload": "forged"}}'::jsonb
+        )
+        """,
+        (DEMO_COMPANY_ID, DEMO_APPROVED_REVISION_ID),
+        "Real provider webhook event DB guard",
+    )
+    real_acknowledgement_guard = expect_database_guard_rejects(
+        cur,
+        """
+        insert into public.quote_real_delivery_acknowledgements (
+          company_id, quote_revision_id, quote_revision_version, document_hash,
+          snapshot_hash, pdf_artifact_hash, acknowledgement_status,
+          acknowledgement_hash, real_provider_acknowledgement_verified,
+          quote_status_changed, quote_status_after, real_email_sent,
+          production_package_triggered, acknowledged_at, metadata_json
+        )
+        values (
+          %s, %s, 1, %s, %s, %s, 'real_acknowledgement_deferred',
+          'guard-forged-real-ack', true, true, 'sent', true, true, now(),
+          '{"acknowledgement": {"provider_response": "forged"}}'::jsonb
+        )
+        """,
+        (DEMO_COMPANY_ID, DEMO_APPROVED_REVISION_ID, "e" * 64, "f" * 64, "a" * 64),
+        "Real provider acknowledgement DB guard",
+    )
+    sent_rpc_guard = expect_database_guard_rejects(
+        cur,
+        """
+        select public.mark_quote_revision_sent_with_verified_real_provider_acknowledgement(
+          %s, %s, %s, %s, 1, %s
+        )
+        """,
+        (
+            DEMO_COMPANY_ID,
+            DEMO_APPROVED_REVISION_ID,
+            "00000000-0000-4000-8000-000000000006",
+            "00000000-0000-4000-8000-000000000016",
+            "guard-real-sent-request-hash",
+        ),
+        "Real provider sent transition RPC guard",
+    )
+    return webhook_event_guard and real_acknowledgement_guard and sent_rpc_guard
+
+
 def verify_approval_consumption_rpc(cur: Any) -> bool:
     cur.execute(
         """
@@ -681,6 +761,7 @@ def verify_p11_rpc_grants(cur: Any) -> bool:
         "record_sandbox_quote_delivery_attempt_with_idempotency",
         "record_sandbox_delivery_acknowledgement_with_idempotency",
         "mark_quote_revision_sent_with_provider_acknowledgement",
+        "mark_quote_revision_sent_with_verified_real_provider_acknowledgement",
     ]
     ok = True
     for function_name in expected_functions:
@@ -788,6 +869,34 @@ def verify_p11_schema_guards(cur: Any) -> bool:
             "'acknowledgement'::text",
             "!~*",
         ],
+        "quote_provider_webhook_events": [
+            "event_status",
+            "verification_status",
+            "provider_adapter = 'real_provider_adapter_v1'::text",
+            "provider_config_version = 'real-provider-config-boundary-v1.0.0'::text",
+            "adapter_version = 'real-provider-adapter-v1.0.0'::text",
+            "signature_verified = false",
+            "provider_acknowledgement_verified = false",
+            "provider_message_id IS NULL",
+            "quote_sent = false",
+            "sent_at IS NULL",
+            "raw_provider_payload_stored = false",
+            "!~*",
+        ],
+        "quote_real_delivery_acknowledgements": [
+            "acknowledgement_status = 'real_acknowledgement_deferred'::text",
+            "provider_adapter = 'real_provider_adapter_v1'::text",
+            "provider_config_version = 'real-provider-config-boundary-v1.0.0'::text",
+            "adapter_version = 'real-provider-adapter-v1.0.0'::text",
+            "acknowledgement_version = 'real-provider-acknowledgement-v1.0.0'::text",
+            "real_provider_acknowledgement_verified = false",
+            "quote_status_changed = false",
+            "quote_status_after = 'approved'::text",
+            "real_email_sent = false",
+            "production_package_triggered = false",
+            "acknowledged_at IS NULL",
+            "!~*",
+        ],
     }
     ok = True
     cur.execute(
@@ -812,6 +921,21 @@ def verify_p11_schema_guards(cur: Any) -> bool:
     ack_unique_ok = cur.fetchone()[0] >= 2
     print(f"P13 sandbox acknowledgement uniqueness DB guards: {'ok' if ack_unique_ok else 'failed'}")
     ok = ok and ack_unique_ok
+    for table in ("quote_provider_webhook_events", "quote_real_delivery_acknowledgements"):
+        cur.execute(
+            """
+            select count(*)
+            from pg_constraint
+            where conrelid = format('public.%I', %s)::regclass
+              and contype = 'u'
+              and conkey is not null
+            """,
+            (table,),
+        )
+        unique_count = cur.fetchone()[0]
+        unique_ok = unique_count >= 2
+        print(f"P14 {table} uniqueness DB guards: {'ok' if unique_ok else 'failed'}")
+        ok = ok and unique_ok
     for table, markers in expected_constraints.items():
         cur.execute(
             """
@@ -827,7 +951,7 @@ def verify_p11_schema_guards(cur: Any) -> bool:
         )
         defs = "\n".join(row[0] for row in cur.fetchall())
         table_ok = all(marker in defs for marker in markers)
-        print(f"P11/P12/P13 {table} DB guards: {'ok' if table_ok else 'failed'}")
+        print(f"P11/P12/P13/P14 {table} DB guards: {'ok' if table_ok else 'failed'}")
         ok = ok and table_ok
     return ok
 
@@ -862,6 +986,7 @@ def main() -> int:
         print("Verify database connection failed for all configured database URL candidates.")
         return 1
     guard_ok = False
+    p14_guard_ok = False
     try:
         with conn:
             with conn.cursor() as cur:
@@ -991,6 +1116,7 @@ def main() -> int:
                 p11_schema_guards_ok = verify_p11_schema_guards(cur)
                 guard_ok = verify_configuration_database_guards(cur)
                 p11_guard_ok = verify_p11_database_guards(cur)
+                p14_guard_ok = verify_p14_database_guards(cur)
     except Exception as exc:
         print(f"Cannot verify Supabase database: {safe_exception_label(exc)}")
         return 1
@@ -1031,6 +1157,8 @@ def main() -> int:
     if not p11_schema_guards_ok:
         failed = True
     if not p11_guard_ok:
+        failed = True
+    if not p14_guard_ok:
         failed = True
     if not verify_authenticated_rls(env):
         failed = True

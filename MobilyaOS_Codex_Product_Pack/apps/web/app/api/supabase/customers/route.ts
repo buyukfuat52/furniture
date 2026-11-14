@@ -13,22 +13,28 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  return withMutationSession(request, "create_customer", "customer_created", async ({ session }, body, reservation) => {
-    const customer = await createCustomer(session.mutationScope, {
-      name: typeof body.name === "string" ? body.name : "",
-      email: typeof body.email === "string" ? body.email : null,
-      phone: typeof body.phone === "string" ? body.phone : null
-    });
-    await appendAuditEntry(session.mutationScope, {
-      action: "customer_created",
-      target_type: "customer",
-      target_id: customer.id,
-      metadata: {
-        route: "customers",
-        idempotency: Boolean(reservation),
-        idempotency_mode: "durable_supabase_scoped"
-      }
-    });
-    return NextResponse.json({ customer }, { status: 201 });
-  });
+  return withMutationSession(
+    request,
+    "create_customer",
+    "customer_created",
+    async ({ session }, body, reservation) => {
+      const customer = await createCustomer(session.mutationScope, {
+        name: typeof body.name === "string" ? body.name : "",
+        email: typeof body.email === "string" ? body.email : null,
+        phone: typeof body.phone === "string" ? body.phone : null
+      });
+      await appendAuditEntry(session.mutationScope, {
+        action: "customer_created",
+        target_type: "customer",
+        target_id: customer.id,
+        metadata: {
+          route: "customers",
+          idempotency: Boolean(reservation),
+          idempotency_mode: "durable_supabase_scoped"
+        }
+      });
+      return NextResponse.json({ customer }, { status: 201 });
+    },
+    { resource: { type: "customer_collection", id: "customers", version: "customer-create-v1.0.0" } }
+  );
 }

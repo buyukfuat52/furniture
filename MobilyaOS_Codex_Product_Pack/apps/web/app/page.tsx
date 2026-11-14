@@ -21,6 +21,7 @@ import {
   SupabaseQuoteDocumentPreview,
   SupabaseQuoteDeliveryAcknowledgement,
   SupabaseQuoteForkResponse,
+  SupabaseProviderWebhookReadiness,
   SupabaseQuoteProviderStatus,
   SupabaseQuoteRevisionDetail,
   SupabaseQuoteRevisionDiff,
@@ -72,6 +73,7 @@ export default function HomePage() {
   const [cloudSendIntent, setCloudSendIntent] = useState<SupabaseQuoteSendIntent | null>(null);
   const [cloudDeliveryOutbox, setCloudDeliveryOutbox] = useState<SupabaseQuoteDeliveryOutbox[]>([]);
   const [cloudProviderStatus, setCloudProviderStatus] = useState<SupabaseQuoteProviderStatus | null>(null);
+  const [cloudWebhookReadiness, setCloudWebhookReadiness] = useState<SupabaseProviderWebhookReadiness | null>(null);
   const [cloudDeliveryAttempts, setCloudDeliveryAttempts] = useState<SupabaseQuoteDeliveryAttempt[]>([]);
   const [cloudDeliveryAcknowledgements, setCloudDeliveryAcknowledgements] = useState<SupabaseQuoteDeliveryAcknowledgement[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
@@ -191,6 +193,11 @@ export default function HomePage() {
       setCloudApprovalGate(null);
       setCloudSendGate(null);
       setCloudSendIntent(null);
+      setCloudDeliveryOutbox([]);
+      setCloudProviderStatus(null);
+      setCloudWebhookReadiness(null);
+      setCloudDeliveryAttempts([]);
+      setCloudDeliveryAcknowledgements([]);
       setSeedSummary("");
       setStep("login");
     } finally {
@@ -307,6 +314,7 @@ export default function HomePage() {
         loadSupabaseSendGateStatus(quoteRevisionId, false),
         loadSupabaseDeliveryOutbox(quoteRevisionId, false),
         loadSupabaseProviderStatus(quoteRevisionId, false),
+        loadSupabaseProviderWebhookReadiness(quoteRevisionId, false),
         loadSupabaseDeliveryAttempts(quoteRevisionId, false),
         loadSupabaseDeliveryAcknowledgements(quoteRevisionId, false)
       ]);
@@ -428,6 +436,25 @@ export default function HomePage() {
       setCloudProviderStatus(result.provider_status);
     } catch {
       setCloudProviderStatus(null);
+    } finally {
+      if (setBusy) {
+        setCloudBusy(false);
+      }
+    }
+  }
+
+  async function loadSupabaseProviderWebhookReadiness(quoteRevisionId: string, setBusy = true) {
+    if (setBusy) {
+      setCloudBusy(true);
+    }
+    setError("");
+    try {
+      const result = await supabaseGet<{ webhook_readiness: SupabaseProviderWebhookReadiness }>(
+        `/api/supabase/quote-revisions/${quoteRevisionId}/webhook-readiness`
+      );
+      setCloudWebhookReadiness(result.webhook_readiness);
+    } catch {
+      setCloudWebhookReadiness(null);
     } finally {
       if (setBusy) {
         setCloudBusy(false);
@@ -787,6 +814,7 @@ export default function HomePage() {
       await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseProviderWebhookReadiness(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
       await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
@@ -814,6 +842,7 @@ export default function HomePage() {
       await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseProviderWebhookReadiness(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
       await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
@@ -841,6 +870,7 @@ export default function HomePage() {
       await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseProviderWebhookReadiness(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
       await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
@@ -868,6 +898,7 @@ export default function HomePage() {
       await loadSupabaseDeliveryOutbox(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseProviderWebhookReadiness(revisionId, false);
       await loadSupabaseDeliveryAttempts(revisionId, false);
       await loadSupabaseDeliveryAcknowledgements(revisionId, false);
     } catch (caught) {
@@ -895,6 +926,7 @@ export default function HomePage() {
       await loadSupabaseDeliveryAttempts(revisionId, false);
       await loadSupabaseDeliveryAcknowledgements(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseProviderWebhookReadiness(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
     } catch (caught) {
       setError(String(caught instanceof Error ? caught.message : caught));
@@ -922,6 +954,7 @@ export default function HomePage() {
       await loadSupabaseDeliveryAttempts(revisionId, false);
       await loadSupabaseDeliveryAcknowledgements(revisionId, false);
       await loadSupabaseProviderStatus(revisionId, false);
+      await loadSupabaseProviderWebhookReadiness(revisionId, false);
       await loadSupabaseSendGateStatus(revisionId, false);
       await loadSupabaseQuoteRevisionDetail(revisionId, false);
     } catch (caught) {
@@ -1163,6 +1196,7 @@ export default function HomePage() {
             onRecordDeliveryAttempt={recordSupabaseDeliveryAttempt}
             projectDetail={cloudProjectDetail}
             providerStatus={cloudProviderStatus}
+            providerWebhookReadiness={cloudWebhookReadiness}
             quoteSnapshot={cloudQuoteSnapshot}
             revisionDiff={cloudRevisionDiff}
             revisionDetail={cloudRevisionDetail}
@@ -1464,6 +1498,7 @@ function SupabaseTimelinePanel({
   onSaveConfigurationDraft,
   projectDetail,
   providerStatus,
+  providerWebhookReadiness,
   quoteSnapshot,
   revisionDiff,
   revisionDetail,
@@ -1496,6 +1531,7 @@ function SupabaseTimelinePanel({
   onSaveConfigurationDraft: (event: FormEvent<HTMLFormElement>) => void;
   projectDetail: SupabaseProjectDetail | null;
   providerStatus: SupabaseQuoteProviderStatus | null;
+  providerWebhookReadiness: SupabaseProviderWebhookReadiness | null;
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDiff: SupabaseQuoteRevisionDiff | null;
   revisionDetail: SupabaseQuoteRevisionDetail | null;
@@ -1613,6 +1649,7 @@ function SupabaseTimelinePanel({
               onPrepareSendIntent={onPrepareSendIntent}
               onRecordDeliveryAttempt={onRecordDeliveryAttempt}
               providerStatus={providerStatus}
+              providerWebhookReadiness={providerWebhookReadiness}
               quoteSnapshot={quoteSnapshot}
               revisionDiff={revisionDiff}
               revisionDetail={revisionDetail}
@@ -1663,6 +1700,7 @@ function SupabaseQuoteLifecyclePanel({
   onPrepareSendIntent,
   onRecordDeliveryAttempt,
   providerStatus,
+  providerWebhookReadiness,
   quoteSnapshot,
   revisionDiff,
   revisionDetail,
@@ -1690,6 +1728,7 @@ function SupabaseQuoteLifecyclePanel({
   onPrepareSendIntent: () => void;
   onRecordDeliveryAttempt: () => void;
   providerStatus: SupabaseQuoteProviderStatus | null;
+  providerWebhookReadiness: SupabaseProviderWebhookReadiness | null;
   quoteSnapshot: SupabaseQuoteSnapshotResponse | null;
   revisionDiff: SupabaseQuoteRevisionDiff | null;
   revisionDetail: SupabaseQuoteRevisionDetail;
@@ -1730,6 +1769,7 @@ function SupabaseQuoteLifecyclePanel({
         <SummaryCard title="Onay kapisi" value={approvalGate?.status ?? "not_prepared"} />
         <SummaryCard title="Gonderim kapisi" value={sendGate?.status ?? "not_ready"} />
         <SummaryCard title="Provider" value={providerStatus?.provider_status ?? "provider_missing"} />
+        <SummaryCard title="Webhook" value={providerWebhookReadiness?.blocked_reason ?? "not_ready"} />
         <SummaryCard title="Deneme ledger" value={`${deliveryAttempts.length} kayit`} />
         <SummaryCard title="Sandbox ack" value={latestDeliveryAcknowledgement?.acknowledgement_status ?? "not_verified"} />
         <SummaryCard title="Teklif sent" value={sendGate?.quote_status_changed_by_sandbox ? "sent" : "approved/sandbox"} />
@@ -1938,6 +1978,29 @@ function SupabaseQuoteLifecyclePanel({
             sandbox ack: {String(providerStatus.sandbox_acknowledgement_verified)} /
             real ack: {String(providerStatus.provider_acknowledgement_verified)} /
             sent gecisi: {String(providerStatus.sent_transition_enabled)}
+          </p>
+        </div>
+      ) : null}
+      {providerWebhookReadiness ? (
+        <div className="approvalBox">
+          <strong>Real provider webhook: {providerWebhookReadiness.blocked_reason}</strong>
+          <p>
+            Mod: {providerWebhookReadiness.provider_mode} /
+            real config: {String(providerWebhookReadiness.real_provider_configured)} /
+            valid: {String(providerWebhookReadiness.real_provider_config_valid)} /
+            enable flag: {String(providerWebhookReadiness.real_provider_enable_requested)}
+          </p>
+          <p className="smallNote">
+            Webhook hazir: {String(providerWebhookReadiness.webhook_signature_verification_ready)} /
+            tuketim: {String(providerWebhookReadiness.webhook_consumption_enabled)} /
+            real ack enabled: {String(providerWebhookReadiness.real_provider_acknowledgement_enabled)} /
+            real ack verified: {String(providerWebhookReadiness.real_provider_acknowledgement_verified)}
+          </p>
+          <p className="smallNote">
+            Sandbox ack: {providerWebhookReadiness.latest_sandbox_acknowledgement_status} /
+            real ack: {providerWebhookReadiness.latest_real_acknowledgement_status} /
+            real sent gecisi: {String(providerWebhookReadiness.real_sent_transition_enabled)} /
+            quote sent: {String(providerWebhookReadiness.quote_sent)}
           </p>
         </div>
       ) : null}

@@ -30,51 +30,63 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   const { quoteRevisionId } = await context.params;
-  return withMutationSession(request, "create_quote_configuration_draft", "quote_configuration_created", async ({ session }, body, reservation) => {
-    const configuration_draft = await createQuoteConfigurationDraft(session.mutationScope, quoteRevisionId, body);
-    await appendAuditEntry(session.mutationScope, {
-      action: "quote_configuration_created",
-      target_type: "quote_configuration_draft",
-      target_id: configuration_draft.id,
-      metadata: {
-        route: "quote_configuration_drafts",
-        revision_id: configuration_draft.quote_revision_id,
-        idempotency: Boolean(reservation),
-        idempotency_mode: "durable_supabase_scoped",
-        calculated: false
-      }
-    });
-    return NextResponse.json(
-      {
-        configuration_draft,
-        calculation_status: "not_calculated",
-        deferred_actions: deferredActions
-      },
-      { status: 201 }
-    );
-  });
+  return withMutationSession(
+    request,
+    "create_quote_configuration_draft",
+    "quote_configuration_created",
+    async ({ session }, body, reservation) => {
+      const configuration_draft = await createQuoteConfigurationDraft(session.mutationScope, quoteRevisionId, body);
+      await appendAuditEntry(session.mutationScope, {
+        action: "quote_configuration_created",
+        target_type: "quote_configuration_draft",
+        target_id: configuration_draft.id,
+        metadata: {
+          route: "quote_configuration_drafts",
+          revision_id: configuration_draft.quote_revision_id,
+          idempotency: Boolean(reservation),
+          idempotency_mode: "durable_supabase_scoped",
+          calculated: false
+        }
+      });
+      return NextResponse.json(
+        {
+          configuration_draft,
+          calculation_status: "not_calculated",
+          deferred_actions: deferredActions
+        },
+        { status: 201 }
+      );
+    },
+    { resource: { type: "quote_revision", id: quoteRevisionId, version: "quote-configuration-create-v1.0.0" } }
+  );
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
   const { quoteRevisionId } = await context.params;
-  return withMutationSession(request, "update_quote_configuration_draft", "quote_configuration_updated", async ({ session }, body, reservation) => {
-    const configuration_draft = await updateQuoteConfigurationDraft(session.mutationScope, quoteRevisionId, body);
-    await appendAuditEntry(session.mutationScope, {
-      action: "quote_configuration_updated",
-      target_type: "quote_configuration_draft",
-      target_id: configuration_draft.id,
-      metadata: {
-        route: "quote_configuration_drafts",
-        revision_id: configuration_draft.quote_revision_id,
-        idempotency: Boolean(reservation),
-        idempotency_mode: "durable_supabase_scoped",
-        calculated: false
-      }
-    });
-    return NextResponse.json({
-      configuration_draft,
-      calculation_status: "not_calculated",
-      deferred_actions: deferredActions
-    });
-  });
+  return withMutationSession(
+    request,
+    "update_quote_configuration_draft",
+    "quote_configuration_updated",
+    async ({ session }, body, reservation) => {
+      const configuration_draft = await updateQuoteConfigurationDraft(session.mutationScope, quoteRevisionId, body);
+      await appendAuditEntry(session.mutationScope, {
+        action: "quote_configuration_updated",
+        target_type: "quote_configuration_draft",
+        target_id: configuration_draft.id,
+        metadata: {
+          route: "quote_configuration_drafts",
+          revision_id: configuration_draft.quote_revision_id,
+          idempotency: Boolean(reservation),
+          idempotency_mode: "durable_supabase_scoped",
+          calculated: false
+        }
+      });
+      return NextResponse.json({
+        configuration_draft,
+        calculation_status: "not_calculated",
+        deferred_actions: deferredActions
+      });
+    },
+    { resource: { type: "quote_revision", id: quoteRevisionId, version: "quote-configuration-update-v1.0.0" } }
+  );
 }

@@ -33,6 +33,16 @@ channels:
     messages:
       quoteSandboxDeliveryAcknowledged:
         $ref: "#/components/messages/QuoteSandboxDeliveryAcknowledged"
+  quoteRealProviderWebhookDeferred:
+    address: quote.provider_webhook.deferred.v1
+    messages:
+      quoteRealProviderWebhookDeferred:
+        $ref: "#/components/messages/QuoteRealProviderWebhookDeferred"
+  quoteRealProviderAcknowledgementDeferred:
+    address: quote.delivery_acknowledgement.real_deferred.v1
+    messages:
+      quoteRealProviderAcknowledgementDeferred:
+        $ref: "#/components/messages/QuoteRealProviderAcknowledgementDeferred"
   quoteSent:
     address: quote.sent.v1
     messages:
@@ -55,6 +65,14 @@ operations:
     action: send
     channel:
       $ref: "#/channels/quoteSandboxDeliveryAcknowledged"
+  publishQuoteRealProviderWebhookDeferred:
+    action: send
+    channel:
+      $ref: "#/channels/quoteRealProviderWebhookDeferred"
+  publishQuoteRealProviderAcknowledgementDeferred:
+    action: send
+    channel:
+      $ref: "#/channels/quoteRealProviderAcknowledgementDeferred"
 components:
   messages:
     ProjectCreated:
@@ -84,9 +102,19 @@ components:
       summary: Server-owned sandbox acknowledgement recorded for a delivery attempt; quote status remains approved and real quote-sent transition remains deferred.
       payload:
         $ref: "#/components/schemas/CloudEvent"
+    QuoteRealProviderWebhookDeferred:
+      name: quote.provider_webhook.deferred.v1
+      summary: Deferred real-provider webhook boundary event. P14 does not consume provider webhooks or store raw provider payloads; any future event must be signature-verified, replay-protected, tenant-scoped, and redacted.
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
+    QuoteRealProviderAcknowledgementDeferred:
+      name: quote.delivery_acknowledgement.real_deferred.v1
+      summary: Deferred real-provider acknowledgement boundary event. It cannot mark a quote sent until a verified acknowledgement workflow atomically binds provider evidence, quote version, document/PDF hashes, audit, and idempotency.
+      payload:
+        $ref: "#/components/schemas/CloudEvent"
     QuoteSent:
       name: quote.sent.v1
-      summary: Deferred until a real provider acknowledgement workflow can atomically verify external delivery and transition approved quote revisions to sent.
+      summary: Deferred until a verified real provider acknowledgement workflow can atomically verify external delivery and transition approved quote revisions to sent.
       payload:
         $ref: "#/components/schemas/CloudEvent"
   schemas:

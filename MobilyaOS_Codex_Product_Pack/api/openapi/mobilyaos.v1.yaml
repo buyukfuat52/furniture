@@ -504,7 +504,7 @@ paths:
   /supabase/quote-revisions/{revision_id}/provider-status:
     get:
       summary: Read provider configuration boundary status
-      description: Returns sanitized tenant-scoped provider boundary status. P13 exposes a no-secret sandbox provider adapter and sandbox acknowledgement booleans only. Real external delivery and quote-sent transition remain disabled until a verified real provider acknowledgement workflow is implemented.
+      description: Returns sanitized tenant-scoped provider boundary status. P14 can detect server-only real-provider configuration signals but still keeps real external delivery, webhook consumption, verified real acknowledgement, quote-sent transition, and production-package creation disabled.
       security:
         - bearerAuth: []
       parameters:
@@ -524,6 +524,33 @@ paths:
                 properties:
                   provider_status:
                     $ref: "#/components/schemas/QuoteProviderStatus"
+        "401":
+          description: Session required.
+        "404":
+          description: Tenant-scoped quote revision was not found.
+  /supabase/quote-revisions/{revision_id}/webhook-readiness:
+    get:
+      summary: Read real provider webhook readiness
+      description: Returns sanitized tenant-scoped readiness for a future real provider webhook flow. It exposes only booleans/status labels and never exposes provider secrets, webhook signatures, provider message IDs, raw payloads, recipient email, storage paths, or sent-state authority.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: revision_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Sanitized provider webhook readiness.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [webhook_readiness]
+                properties:
+                  webhook_readiness:
+                    $ref: "#/components/schemas/ProviderWebhookReadiness"
         "401":
           description: Session required.
         "404":
@@ -1218,19 +1245,33 @@ components:
         - revision_id
         - quote_status
         - tenant_scoped
+        - provider_mode
         - provider_status
         - provider_adapter
         - provider_configured
+        - real_provider_configured
+        - real_provider_config_valid
+        - real_provider_enable_requested
+        - real_provider_adapter_available
         - email_provider_configured
         - real_delivery_enabled
         - sandbox_delivery_enabled
         - sandbox_delivery_verified
         - sent_transition_enabled
+        - real_sent_transition_enabled
         - provider_acknowledgement_required
         - provider_acknowledgement_verified
+        - real_provider_acknowledgement_enabled
+        - real_provider_acknowledgement_verified
         - sandbox_acknowledgement_verified
+        - webhook_configured
+        - webhook_enable_requested
+        - webhook_signature_verification_ready
+        - webhook_consumption_enabled
         - provider_secret_returned
         - provider_raw_payload_returned
+        - webhook_secret_returned
+        - webhook_signature_returned
         - provider_message_id_available
         - provider_config_version
         - adapter_version
@@ -1245,13 +1286,24 @@ components:
         tenant_scoped:
           type: boolean
           const: true
+        provider_mode:
+          type: string
+          enum: [sandbox_only, real_configured_disabled, real_configured_invalid]
         provider_status:
           type: string
           enum: [provider_missing, provider_configured_unverified, sandbox_provider_available]
         provider_adapter:
           type: string
-          enum: [disabled_provider_adapter_v1, sandbox_provider_adapter_v1]
+          enum: [disabled_provider_adapter_v1, sandbox_provider_adapter_v1, real_provider_adapter_v1]
         provider_configured:
+          type: boolean
+        real_provider_configured:
+          type: boolean
+        real_provider_config_valid:
+          type: boolean
+        real_provider_enable_requested:
+          type: boolean
+        real_provider_adapter_available:
           type: boolean
         email_provider_configured:
           type: boolean
@@ -1266,18 +1318,42 @@ components:
         sent_transition_enabled:
           type: boolean
           const: false
+        real_sent_transition_enabled:
+          type: boolean
+          const: false
         provider_acknowledgement_required:
           type: boolean
           const: true
         provider_acknowledgement_verified:
           type: boolean
           const: false
+        real_provider_acknowledgement_enabled:
+          type: boolean
+          const: false
+        real_provider_acknowledgement_verified:
+          type: boolean
+          const: false
         sandbox_acknowledgement_verified:
           type: boolean
+        webhook_configured:
+          type: boolean
+        webhook_enable_requested:
+          type: boolean
+        webhook_signature_verification_ready:
+          type: boolean
+        webhook_consumption_enabled:
+          type: boolean
+          const: false
         provider_secret_returned:
           type: boolean
           const: false
         provider_raw_payload_returned:
+          type: boolean
+          const: false
+        webhook_secret_returned:
+          type: boolean
+          const: false
+        webhook_signature_returned:
           type: boolean
           const: false
         provider_message_id_available:
@@ -1289,7 +1365,144 @@ components:
           type: string
         blocked_reason:
           type: string
-          enum: [provider_missing, provider_not_verified, real_provider_deferred]
+          enum:
+            - provider_missing
+            - provider_not_verified
+            - real_provider_deferred
+            - real_provider_missing
+            - real_provider_incomplete
+            - real_provider_invalid_format
+            - real_delivery_enable_flag_missing
+            - webhook_signature_required
+            - real_sent_transition_deferred
+        deferred_actions:
+          type: array
+          items:
+            type: string
+    ProviderWebhookReadiness:
+      type: object
+      required:
+        - revision_id
+        - quote_status
+        - tenant_scoped
+        - provider_status
+        - provider_mode
+        - real_provider_configured
+        - real_provider_config_valid
+        - real_provider_enable_requested
+        - real_delivery_enabled
+        - webhook_configured
+        - webhook_enable_requested
+        - webhook_signature_verification_ready
+        - webhook_consumption_enabled
+        - provider_event_ingestion_enabled
+        - real_provider_acknowledgement_enabled
+        - real_provider_acknowledgement_verified
+        - latest_real_acknowledgement_status
+        - latest_sandbox_acknowledgement_status
+        - sandbox_delivery_verified
+        - sandbox_acknowledgement_verified
+        - real_sent_transition_enabled
+        - sent_transition_enabled
+        - quote_status_after_sandbox
+        - quote_sent
+        - provider_secret_returned
+        - provider_raw_payload_returned
+        - webhook_secret_returned
+        - webhook_signature_returned
+        - provider_message_id_available
+        - blocked_reason
+        - deferred_actions
+      properties:
+        revision_id:
+          type: string
+          format: uuid
+        quote_status:
+          type: string
+        tenant_scoped:
+          type: boolean
+          const: true
+        provider_status:
+          type: string
+          enum: [provider_missing, provider_configured_unverified, sandbox_provider_available]
+        provider_mode:
+          type: string
+          enum: [sandbox_only, real_configured_disabled, real_configured_invalid]
+        real_provider_configured:
+          type: boolean
+        real_provider_config_valid:
+          type: boolean
+        real_provider_enable_requested:
+          type: boolean
+        real_delivery_enabled:
+          type: boolean
+          const: false
+        webhook_configured:
+          type: boolean
+        webhook_enable_requested:
+          type: boolean
+        webhook_signature_verification_ready:
+          type: boolean
+        webhook_consumption_enabled:
+          type: boolean
+          const: false
+        provider_event_ingestion_enabled:
+          type: boolean
+          const: false
+        real_provider_acknowledgement_enabled:
+          type: boolean
+          const: false
+        real_provider_acknowledgement_verified:
+          type: boolean
+          const: false
+        latest_real_acknowledgement_status:
+          type: string
+          enum: [none, deferred]
+        latest_sandbox_acknowledgement_status:
+          type: string
+          enum: [none, sandbox_acknowledged]
+        sandbox_delivery_verified:
+          type: boolean
+        sandbox_acknowledgement_verified:
+          type: boolean
+        real_sent_transition_enabled:
+          type: boolean
+          const: false
+        sent_transition_enabled:
+          type: boolean
+          const: false
+        quote_status_after_sandbox:
+          type: string
+          const: approved
+        quote_sent:
+          type: boolean
+          const: false
+        provider_secret_returned:
+          type: boolean
+          const: false
+        provider_raw_payload_returned:
+          type: boolean
+          const: false
+        webhook_secret_returned:
+          type: boolean
+          const: false
+        webhook_signature_returned:
+          type: boolean
+          const: false
+        provider_message_id_available:
+          type: boolean
+          const: false
+        blocked_reason:
+          type: string
+          enum:
+            - provider_missing
+            - real_provider_deferred
+            - real_provider_incomplete
+            - real_provider_invalid_format
+            - real_delivery_enable_flag_missing
+            - webhook_signature_required
+            - real_provider_acknowledgement_not_verified
+            - real_sent_transition_deferred
         deferred_actions:
           type: array
           items:

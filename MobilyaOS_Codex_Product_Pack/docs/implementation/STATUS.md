@@ -1,7 +1,7 @@
 # MobilyaOS Implementation Status
 
 Run ID: `20260715T040315+0300`
-Current scope: P12 provider configuration boundary, delivery attempt ledger, and guarded sent-state design on the Supabase Cloud path
+Current scope: P14 real-provider delivery boundary, webhook readiness, and guarded real-sent deferral on the Supabase Cloud path
 Parent orchestrator: `parent_codex`
 Created: 2026-07-15
 
@@ -25,6 +25,29 @@ Created: 2026-07-15
 | P10 - Deterministic artifact storage and send intent | P10 | Passed | Deterministic approved HTML artifact storage, controlled artifact download, audited send-intent preparation, P10 Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
 | P11 - Deterministic binary PDF and provider-safe delivery workflow | P11 | Passed | Deterministic PDF artifact storage/download, provider-deferred delivery outbox, read-only PDF/delivery chat facts, P11 Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
 | P12 - Provider boundary, delivery attempt ledger, guarded sent-state | P12 | Passed | Server-only provider configuration status, append-only delivery attempt ledger, disabled sent-state RPC, P12 Supabase verifier guards, web smokes, compute tests, pack validation, Docker context hardening, and secret scan passed. |
+| P13 - Sandbox provider acknowledgement boundary | P13 | Passed | Sandbox delivery attempt/acknowledgement ledger, duplicate/replay/stale guards, approved-status preservation, read-only acknowledgement chat facts, live Supabase verifier guards, web smokes, compute tests, pack validation, and secret scan passed. |
+| P14 - Real provider delivery boundary and webhook readiness | P14 | In progress | Server-only real-provider readiness, webhook-readiness route, fail-closed real webhook/ack tables, guarded real-sent RPC, idempotency resource binding, UI/chat/tool policy/docs updates, and validation are in progress. |
+
+## P14 Real Provider Delivery Boundary, Webhook Readiness, And Guarded Sent Deferral
+
+Run ID: `20260719T-p14`
+
+Sidecar assignments:
+
+- `domain_architect`: read-only review of real sent preconditions, provider/webhook boundary semantics, sandbox versus real delivery, production deferral, and LLM non-authority.
+- `security_reviewer`: read-only review of real provider config leakage, webhook/signature/payload handling, sent-state forgery, tenant/IDOR, idempotency target binding, prompt injection, and tool whitelist drift.
+- `qa_reviewer`: read-only review of route coverage, webhook readiness behavior, live DB guard coverage, no-send behavior, idempotency replay/conflict, and validation gaps.
+
+Current result: implementation in progress pending final validation. P14 adds a server-only real-provider boundary that reports only configuration/readiness booleans, a read-only webhook readiness route, fail-closed real provider webhook and acknowledgement tables, a service-role-only real sent RPC that intentionally raises, read-only chat explanations for real delivery deferral, and resource-bound idempotency request hashes.
+
+Corrective tasks in scope:
+
+- Critical: real provider delivery, real webhook consumption, real acknowledgement verification, quote-sent transition, and production package creation must remain blocked until a verified workflow exists.
+- High: idempotency request hashes now include target resource identity/version to prevent same-key/same-body replay across quote revisions or delivery attempts.
+- High: webhook readiness and real provider status must be tenant-scoped, read-only, and covered by static/session/mutation/live verifier checks.
+- Medium: provider configuration detection must remain server-only and return configured/valid/status booleans only.
+
+P14 command log will be finalized after validation.
 
 ## P12 Provider Boundary, Delivery Attempt Ledger, And Guarded Sent-State
 

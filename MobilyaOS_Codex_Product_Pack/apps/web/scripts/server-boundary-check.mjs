@@ -22,20 +22,24 @@ const forbidden = [
   "smtp_password",
   "provider_message_id",
   "provider_response",
+  "provider_event_id_hash",
   "delivery_status",
   "delivery_verified",
   "provider_acknowledgement",
+  "real_provider_acknowledgement",
+  "real_sent_transition",
   "acknowledgement_hash",
   "raw_provider_payload",
   "sandbox_raw_payload",
   "sandbox_ack_secret",
   "sent_at",
-  "webhook_secret"
+  "webhook_secret",
+  "webhook_signature"
 ];
 
 const riskyRouteMethods = ["PUT", "PATCH", "DELETE"];
 const riskyQuoteRouteMethods = ["POST", ...riskyRouteMethods];
-const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|delivery_status|delivery_verified|provider_acknowledged|provider_acknowledgement|acknowledgement_hash|raw_provider_payload|sandbox_raw_payload|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|provider_message_id|provider_response|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
+const forbiddenRouteBodyAuthority = /\bbody\.(company_id|companyId|role|roles|tenant|tenant_id|user_id|actor_id|actor_app_user_id|auth_user_id|app_user_id|status|decision|metadata|created_at|approved_at|sent_at|delivery_status|delivery_verified|provider_acknowledged|provider_acknowledgement|real_provider_acknowledgement|acknowledgement_hash|provider_event_id_hash|webhook_signature|raw_provider_payload|sandbox_raw_payload|storage_bucket|storage_path|raw_storage_path|snapshot_hash|document_hash|source_document_hash|sha256|artifact_id|quote_artifact_id|recipient_email|provider_secret|provider_status|provider_message_id|provider_response|email_provider_configured|external_delivery_attempted|quote_sent|cost_snapshot|diff_entries|approval_token|access_token|refresh_token|service_role|database_password)\b/i;
 
 function walk(dir) {
   const entries = [];
@@ -208,6 +212,7 @@ requireMarker(mutationBoundaryText, "generate_quote_pdf_artifact", "server mutat
 requireMarker(mutationBoundaryText, "prepare_quote_send_intent", "server mutation boundary must register prepare_quote_send_intent");
 requireMarker(mutationBoundaryText, "prepare_quote_delivery_outbox", "server mutation boundary must register prepare_quote_delivery_outbox");
 requireMarker(mutationBoundaryText, "read_provider_status", "server mutation boundary must register read_provider_status as read-only");
+requireMarker(mutationBoundaryText, "read_webhook_readiness", "server mutation boundary must register read_webhook_readiness as read-only");
 requireMarker(mutationBoundaryText, "read_quote_delivery_attempt", "server mutation boundary must register read_quote_delivery_attempt as read-only");
 requireMarker(mutationBoundaryText, "record_quote_delivery_attempt", "server mutation boundary must register record_quote_delivery_attempt");
 requireMarker(mutationBoundaryText, "read_quote_artifact", "server mutation boundary must register read_quote_artifact as read-only");
@@ -247,6 +252,7 @@ for (const marker of [
   "appUserId: session.mutationScope.appUserId",
   "action,",
   "body",
+  "resource",
   "await storeIdempotencyResult"
 ]) {
   requireMarker(routeGuardsText, marker, `idempotency guard is missing scoped marker ${marker}`);
@@ -263,6 +269,7 @@ for (const marker of [
 ]) {
   requireMarker(idempotencyText, marker, `durable idempotency implementation is missing ${marker}`);
 }
+requireMarker(idempotencyText, "{ body: input.body, resource: input.resource }", "durable idempotency hash must bind the target resource");
 requireNoMarker(idempotencyText, "cache = new Map", "idempotency must not use process-local memory as the durable store");
 
 const p7MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0008_quote_document_revision_approval_gate.sql"), "utf8");
@@ -399,6 +406,27 @@ for (const marker of [
   requireMarker(p13MigrationText, marker, `P13 migration is missing sandbox acknowledgement marker ${marker}`);
 }
 
+const p14MigrationText = readFileSync(join(root, "..", "..", "supabase/migrations/0015_real_provider_delivery_boundary.sql"), "utf8");
+for (const marker of [
+  "quote_provider_webhook_events",
+  "quote_real_delivery_acknowledgements",
+  "tenant quote_provider_webhook_events no direct read",
+  "tenant quote_real_delivery_acknowledgements no direct read",
+  "signature_verified = false",
+  "provider_acknowledgement_verified = false",
+  "real_provider_acknowledgement_verified = false",
+  "quote_sent = false",
+  "real_email_sent = false",
+  "production_package_triggered = false",
+  "raw_provider_payload_stored = false",
+  "mark_quote_revision_sent_with_verified_real_provider_acknowledgement",
+  "real quote sent transition requires verified real provider acknowledgement workflow",
+  "revoke all on function public.mark_quote_revision_sent_with_verified_real_provider_acknowledgement",
+  "to service_role"
+]) {
+  requireMarker(p14MigrationText, marker, `P14 migration is missing real provider boundary marker ${marker}`);
+}
+
 const mutationRouteChecks = [
   ["app/api/supabase/customers/route.ts", ["GET", "POST"], ["withMutationSession", "create_customer", "appendAuditEntry", "customer_created"]],
   ["app/api/supabase/projects/route.ts", ["GET", "POST"], ["withMutationSession", "create_project", "appendAuditEntry", "project_created"]],
@@ -423,12 +451,13 @@ const mutationRouteChecks = [
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/send-intents/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_send_intent", "prepare_quote_send_intent", "listQuoteSendIntents", "prepareQuoteSendIntent", "reserveIdempotency", "quote_send_intent_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-outbox/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_delivery_outbox", "prepare_quote_delivery_outbox", "listQuoteDeliveryOutbox", "prepareQuoteDeliveryOutbox", "reserveIdempotency", "quote_delivery_outbox_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/provider-status/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_provider_status", "getQuoteProviderStatusForRevision"]],
+  ["app/api/supabase/quote-revisions/[quoteRevisionId]/webhook-readiness/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_webhook_readiness", "getProviderWebhookReadinessForRevision"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-attempts/route.ts", ["GET", "POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "read_quote_delivery_attempt", "record_quote_delivery_attempt", "listQuoteDeliveryAttempts", "recordQuoteDeliveryAttempt", "reserveIdempotency", "quote_delivery_attempt_recorded", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/delivery-acknowledgements/route.ts", ["GET"], ["requireSession", "requireBoundary", "read_quote_delivery_acknowledgement", "listQuoteDeliveryAcknowledgements"]],
   ["app/api/supabase/delivery-attempts/[deliveryAttemptId]/sandbox-acknowledgement/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "acknowledge_sandbox_delivery", "acknowledgeSandboxDeliveryAttempt", "reserveIdempotency", "quote_sandbox_delivery_acknowledged", "rejectBrowserAuthority"]],
   ["app/api/supabase/quote-revisions/[quoteRevisionId]/approval-token/route.ts", ["POST"], ["requireSession", "requireBoundary", "requireMutationRequestSafety", "prepare_quote_approval_token", "prepareApprovalGate", "reserveIdempotency", "quote_approval_gate_prepared", "rejectBrowserAuthority"]],
   ["app/api/supabase/approval-tokens/consume/route.ts", ["POST"], ["requireSameOriginMutation", "allowedBodyKeys", "requireApprovalTokenConsumeRateLimit", "consumeApprovalToken", "token_secret_returned", "quote_status_changed", "quote_send_triggered", "production_package_triggered"]],
-  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "listQuoteArtifacts", "listQuoteDeliveryOutbox", "listQuoteDeliveryAttempts", "getQuoteProviderStatusForRevision", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments", "get_pdf_artifact_status", "get_delivery_status", "get_provider_status", "get_delivery_attempt_status", "explain_why_quote_is_not_sent"]]
+  ["app/api/supabase/agent-chat/route.ts", ["POST"], ["withReadSession", "read_only_agent_gateway", "prompt_injection_blocked", "mutation_tool_blocked", "listProjects", "getProjectDetail", "getQuoteRevisionDetail", "getQuoteConfigurationDraft", "getQuoteSnapshot", "getApprovalGateStatus", "getQuoteSendGateStatus", "listQuoteArtifacts", "listQuoteDeliveryOutbox", "listQuoteDeliveryAttempts", "getQuoteProviderStatusForRevision", "getProviderWebhookReadinessForRevision", "getQuoteDocument", "getQuoteRevisionDiff", "listQuoteDocuments", "get_pdf_artifact_status", "get_delivery_status", "get_provider_status", "get_webhook_readiness", "explain_webhook_readiness", "explain_real_delivery_status", "explain_why_real_sent_is_deferred", "explain_sandbox_vs_real_delivery", "get_delivery_attempt_status", "explain_why_quote_is_not_sent"]]
 ];
 for (const [route, allowedMethods, markers] of mutationRouteChecks) {
   const text = readFileSync(join(root, route), "utf8");
@@ -628,10 +657,16 @@ requireMarker(prepareQuoteDeliveryOutboxBlock, "candidate.recipient_available", 
 requireNoRegex(prepareQuoteDeliveryOutboxBlock, /\binput\.(status|recipient|recipient_email|email_provider_configured|external_delivery_attempted|quote_sent|provider_status|provider_message_id|delivery_status|delivery_verified)\b/i, "prepareQuoteDeliveryOutbox must not trust browser delivery fields");
 
 const providerConfigText = readFileSync(join(root, "lib/server/providerConfig.ts"), "utf8");
+const realProviderBoundaryText = readFileSync(join(root, "lib/server/realProviderBoundary.ts"), "utf8");
 for (const marker of [
   "provider_secret_returned: false",
   "provider_raw_payload_returned: false",
   "provider_message_id_available: false",
+  "real_provider_configured",
+  "real_provider_config_valid",
+  "real_sent_transition_enabled: false",
+  "webhook_consumption_enabled: false",
+  "webhook_signature_verification_ready",
   "real_delivery_enabled: false",
   "sent_transition_enabled: false",
   "provider_acknowledgement_verified: false",
@@ -643,6 +678,23 @@ for (const marker of [
   requireMarker(providerConfigText, marker, `provider config boundary is missing ${marker}`);
 }
 requireNoRegex(providerConfigText, /console\.(log|error|warn)|return process\.env/i, "provider config boundary must not print or return provider env values");
+for (const marker of [
+  "QUOTE_EMAIL_PROVIDER",
+  "EMAIL_PROVIDER",
+  "QUOTE_EMAIL_PROVIDER_API_KEY",
+  "QUOTE_REAL_PROVIDER_DELIVERY_ENABLED",
+  "QUOTE_PROVIDER_WEBHOOKS_ENABLED",
+  "QUOTE_PROVIDER_WEBHOOK_SECRET",
+  "real_delivery_enabled: false",
+  "webhook_consumption_enabled: false",
+  "real_provider_acknowledgement_verified: false",
+  "provider_secret_returned: false",
+  "webhook_secret_returned: false",
+  "send: async () =>"
+]) {
+  requireMarker(realProviderBoundaryText, marker, `real provider boundary is missing ${marker}`);
+}
+requireNoRegex(realProviderBoundaryText, /console\.(log|error|warn)|return process\.env/i, "real provider boundary must not print or return provider env values");
 
 const recordQuoteDeliveryAttemptBlock = sourceBlock(repositoryText, "recordQuoteDeliveryAttempt");
 requireMarker(recordQuoteDeliveryAttemptBlock, "getQuoteProviderStatus()", "recordQuoteDeliveryAttempt must derive provider config server-side");

@@ -22,6 +22,11 @@ SUPABASE_SECRET_KEY=
 DATABASE_URL=
 DIRECT_DATABASE_URL=
 DEMO_SEED_PASSWORD=
+QUOTE_EMAIL_PROVIDER=
+QUOTE_EMAIL_PROVIDER_API_KEY=
+QUOTE_REAL_PROVIDER_DELIVERY_ENABLED=false
+QUOTE_PROVIDER_WEBHOOKS_ENABLED=false
+QUOTE_PROVIDER_WEBHOOK_SECRET=
 ```
 
 `DEMO_SEED_PASSWORD` is optional. If omitted, the seed script uses the documented demo password.
@@ -94,10 +99,12 @@ The current web wiring reads seeded Supabase data, validates the local-demo sess
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/send-intents`
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/delivery-outbox`
 - `GET /api/supabase/quote-revisions/[quoteRevisionId]/provider-status`
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/webhook-readiness`
 - `GET/POST /api/supabase/quote-revisions/[quoteRevisionId]/delivery-attempts`
+- `GET /api/supabase/quote-revisions/[quoteRevisionId]/delivery-acknowledgements`
 - `POST /api/supabase/agent-chat`
 
-`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, create/update draft quote configuration inputs, run the narrow deterministic wardrobe snapshot calculation, generate frozen HTML quote documents, fork revisions, store approved HTML/PDF artifacts, prepare audited non-delivering send intents, prepare provider-deferred delivery outbox records, and record blocked delivery-attempt ledger rows. Approval-gate preparation is `admin` only. Approval-token consumption is a strict unauthenticated POST-body endpoint intended for external token flows; it returns only sanitized invalid/replay/expiry/stale/approved status. In P9, a valid pending token can approve the bound draft revision only after the service-role RPC rechecks token hash, expiry, replay state, company, revision version, current configuration provenance, cost snapshot hash, frozen document id, and document hash. In P10, HTML artifact storage requires approved revision, approved approval gate, frozen document binding, source document hash, content type, size, server-derived object path, and durable idempotency. In P11, PDF artifact storage additionally requires the stored HTML artifact, trusted persisted cost snapshot total, deterministic server-generated PDF bytes, distinct PDF hash, and service-role RPC binding. Send-intent preparation requires approved revision plus stored artifact binding, delivery-outbox preparation requires safe send intent plus stored PDF binding, and P12 delivery-attempt recording requires a prepared delivery outbox plus disabled provider boundary. These routes do not send quotes, mark quotes sent, verify provider acknowledgement, or create production packages.
+`viewer` can read only. `sales` and `admin` can create customers, draft projects, draft quote revision shells, create/update draft quote configuration inputs, run the narrow deterministic wardrobe snapshot calculation, generate frozen HTML quote documents, fork revisions, store approved HTML/PDF artifacts, prepare audited non-delivering send intents, prepare provider-deferred delivery outbox records, and record sandbox delivery-attempt ledger rows. Approval-gate preparation is `admin` only. Approval-token consumption is a strict unauthenticated POST-body endpoint intended for external token flows; it returns only sanitized invalid/replay/expiry/stale/approved status. In P9, a valid pending token can approve the bound draft revision only after the service-role RPC rechecks token hash, expiry, replay state, company, revision version, current configuration provenance, cost snapshot hash, frozen document id, and document hash. In P10, HTML artifact storage requires approved revision, approved approval gate, frozen document binding, source document hash, content type, size, server-derived object path, and durable idempotency. In P11, PDF artifact storage additionally requires the stored HTML artifact, trusted persisted cost snapshot total, deterministic server-generated PDF bytes, distinct PDF hash, and service-role RPC binding. Send-intent preparation requires approved revision plus stored artifact binding, delivery-outbox preparation requires safe send intent plus stored PDF binding, P12/P13 delivery-attempt and sandbox acknowledgement recording require prepared delivery state plus sandbox provider boundary, and P14 webhook readiness is read-only. These routes do not send quotes, mark quotes sent, verify real provider acknowledgement, consume real provider webhooks, or create production packages.
 
 Successful mutations append server-side audit entries using trusted session context. Browser-provided company, tenant, actor, role, status, approval, price, cost, or calculation values are not authority. Mutations require durable Supabase-backed idempotency scoped by company, app user, action, and hashed idempotency key. Raw idempotency keys are not stored.
 
@@ -114,6 +121,8 @@ P10 deterministic artifact storage and send-intent hardening uses `supabase/migr
 P11 deterministic PDF artifact and provider-safe delivery outbox uses `supabase/migrations/0012_quote_pdf_artifact_delivery_outbox.sql`. It extends `quote_artifacts` with type-specific HTML/PDF constraints, stores deterministic PDF artifacts under server-owned private object paths, makes the PDF hash distinct from the source HTML document hash, hardens idempotency direct access, adds service-role-only RPCs for PDF persistence and delivery-outbox preparation, and adds tenant-owned `quote_delivery_outbox` rows with a disabled provider adapter. Delivery outbox DTOs do not expose recipient email, provider message IDs, provider responses, provider secrets, storage paths, or signed URL internals.
 
 P12 provider boundary and delivery-attempt ledger uses `supabase/migrations/0013_provider_boundary_delivery_attempts.sql`. It adds a server-owned provider configuration boundary, a unique send-intent preparation constraint, tenant-owned `quote_delivery_attempts`, service-role-only `record_quote_delivery_attempt_with_idempotency`, and a fail-closed `mark_quote_revision_sent_with_provider_acknowledgement` RPC. The current provider adapter remains disabled, so delivery attempts record a sanitized `blocked_provider_missing` ledger entry only. Browser/API responses do not expose provider secrets, raw provider payloads, provider message IDs, recipient email, sent timestamps, storage locators, or acknowledgement authority.
+
+P14 real-provider delivery boundary uses `supabase/migrations/0015_real_provider_delivery_boundary.sql`. It adds fail-closed `quote_provider_webhook_events` and `quote_real_delivery_acknowledgements` tables with no direct authenticated reads and constraints that keep signature verification, real acknowledgement verification, raw provider payload storage, real email sent, quote sent, sent timestamp, and production package flags false/null. The service-role-only `mark_quote_revision_sent_with_verified_real_provider_acknowledgement` RPC intentionally raises until a verified real provider acknowledgement workflow exists. Provider configuration and webhook readiness routes return only sanitized booleans/status labels.
 
 The seed includes a second tenant (`tenantb-sales@demo.local`) for live isolation checks. Authenticated Supabase public-key access is read-only for app data after `0006_authenticated_read_only_rls.sql`; direct sales/viewer writes are denied so browser clients cannot bypass server-side idempotency, validation, or audit.
 
@@ -152,11 +161,12 @@ After env values are configured, `verify_supabase_connection.py` checks:
 - authenticated RLS access with the demo sales user
 - direct authenticated write denial/no-effect checks
 - direct authenticated sensitive generated-document, approval, quote-artifact, quote-send-intent, quote-delivery-outbox, and quote-delivery-attempt read denial
+- direct authenticated sensitive provider-webhook and real-delivery-acknowledgement read denial
 - direct quote-documents storage list metadata non-visibility
 - approval-consumption RPC existence and service-role-only execute grants
-- artifact-storage, PDF-artifact, send-intent, delivery-outbox, delivery-attempt, disabled sent-state, and idempotency RPC existence and service-role-only execute grants
-- P12 table constraints for HTML/PDF artifact hash/content-type/path metadata and no provider/send-state/delivery/acknowledgement forgery
-- database guards for quote revision status changes, approved-revision configuration drafts, approved-revision quote HTML document generation, invalid configuration draft shapes, forged PDF artifacts, forged delivery outbox state, and forged delivery attempt state
+- artifact-storage, PDF-artifact, send-intent, delivery-outbox, delivery-attempt, sandbox acknowledgement, real sent-state, and idempotency RPC existence and service-role-only execute grants
+- P12-P14 table constraints for HTML/PDF artifact hash/content-type/path metadata and no provider/send-state/delivery/acknowledgement/webhook forgery
+- database guards for quote revision status changes, approved-revision configuration drafts, approved-revision quote HTML document generation, invalid configuration draft shapes, forged PDF artifacts, forged delivery outbox state, forged delivery attempt state, forged real provider webhook state, forged real acknowledgement state, and fail-closed real sent RPC behavior
 
 ## P13 Sandbox Acknowledgement Verification
 
@@ -174,5 +184,13 @@ py -3.12 scripts/verify_supabase_connection.py
 The verifier checks the new acknowledgement table, service-role-only sandbox attempt and acknowledgement RPC grants, acknowledgement uniqueness guards, direct sensitive acknowledgement read denial, zero public/anon policies, sandbox attempt/acknowledgement DB guards, and the existing tenant/RLS/direct-write denial matrix.
 
 The new acknowledgement policy must name its role explicitly. A no-direct-read policy without `to authenticated` defaults to `public` in PostgreSQL policy metadata and must be treated as a failed security gate.
+
+## P14 Real Provider Boundary Verification
+
+The Supabase Cloud path now includes `0015_real_provider_delivery_boundary.sql`.
+
+After applying P14, run the same safe check/migrate/seed/verify sequence. The verifier checks the new real provider webhook and real acknowledgement tables, direct sensitive read denial, uniqueness guards, fail-closed constraints, service-role-only real sent RPC grants, forged webhook/acknowledgement DB guards, and the intentionally failing real sent transition RPC.
+
+Optional provider values may be kept in ignored `.env.local`; scripts and routes must never print or return those values. P14 reports only configured/valid/readiness booleans and blocked reasons.
 
 Do not print or paste `.env.local` values, database URLs, Supabase keys, passwords, JWT/session keys, acknowledgement hashes, provider internals, storage paths, signed URLs, or token material while running these checks.

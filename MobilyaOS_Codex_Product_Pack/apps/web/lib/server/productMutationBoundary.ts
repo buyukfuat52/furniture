@@ -30,6 +30,7 @@ export type PlannedMutationKind =
   | "record_quote_delivery_attempt"
   | "read_quote_delivery_acknowledgement"
   | "acknowledge_sandbox_delivery"
+  | "read_webhook_readiness"
   | "read_quote_revision"
   | "list_project_quote_revisions"
   | "append_audit_entry"
@@ -93,7 +94,8 @@ export function planProductMutationBoundary(
     kind === "read_quote_delivery_outbox" ||
     kind === "read_provider_status" ||
     kind === "read_quote_delivery_attempt" ||
-    kind === "read_quote_delivery_acknowledgement"
+    kind === "read_quote_delivery_acknowledgement" ||
+    kind === "read_webhook_readiness"
   ) {
     return {
       kind,

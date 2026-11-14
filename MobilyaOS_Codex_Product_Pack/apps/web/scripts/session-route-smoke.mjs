@@ -26,15 +26,19 @@ const forbiddenPayloadKeys = [
   "database_password",
   "provider_message_id",
   "provider_response",
+  "provider_event_id_hash",
   "delivery_status",
   "delivery_verified",
   "provider_acknowledgement",
+  "real_provider_acknowledgement",
+  "real_sent_transition",
   "acknowledgement_hash",
   "sandbox_raw_payload",
   "sandbox_ack_secret",
   "raw_provider_payload",
   "sent_at",
   "webhook_secret",
+  "webhook_signature",
   "recipient_email"
 ];
 
@@ -401,13 +405,16 @@ async function main() {
         signed_url: "browser-supplied",
         email_provider_configured: true,
         provider_message_id: "browser-supplied",
+        provider_event_id_hash: "browser-supplied",
         provider_acknowledged: true,
         acknowledgement_hash: "browser-supplied",
+        real_provider_acknowledgement: "browser-supplied",
         sandbox_raw_payload: "browser-supplied",
         sandbox_ack_secret: "browser-supplied",
         delivery_status: "sent",
         sent_at: "browser-supplied",
         raw_provider_payload: "browser-supplied",
+        webhook_signature: "browser-supplied",
         recipient_email: "browser@example.invalid"
       })
     });
@@ -420,12 +427,47 @@ async function main() {
     requireToolAction(artifactAgentPayload, "get_send_gate_status", "Quote artifact send-gate explanation");
     requireToolAction(artifactAgentPayload, "get_delivery_status", "Quote delivery agent explanation");
     requireToolAction(artifactAgentPayload, "get_provider_status", "Quote provider boundary explanation");
+    requireToolAction(artifactAgentPayload, "get_webhook_readiness", "Quote webhook readiness explanation");
+    requireToolAction(artifactAgentPayload, "explain_webhook_readiness", "Quote webhook boundary explanation");
+    requireToolAction(artifactAgentPayload, "explain_real_delivery_status", "Real provider delivery explanation");
+    requireToolAction(artifactAgentPayload, "explain_why_real_sent_is_deferred", "Real sent deferral explanation");
+    requireToolAction(artifactAgentPayload, "explain_sandbox_vs_real_delivery", "Sandbox versus real delivery explanation");
     requireToolAction(artifactAgentPayload, "get_delivery_attempt_status", "Quote delivery attempt explanation");
     requireToolAction(artifactAgentPayload, "get_delivery_acknowledgement_status", "Quote delivery acknowledgement explanation");
     requireToolAction(artifactAgentPayload, "explain_why_quote_is_not_sent", "Quote not-sent explanation");
     requireSafe(
       !JSON.stringify(artifactAgentPayload).includes("browser-supplied"),
       "Artifact agent must not echo browser-supplied artifact/provider fields."
+    );
+    requireSafe(
+      factValue(artifactAgentPayload, "Real sent gecisi") === false,
+      "Artifact agent must keep real sent transition disabled."
+    );
+
+    response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookieHeader },
+      body: JSON.stringify({
+        message: "Real provider webhook hazirligini ve sandbox ile real ack farkini acikla",
+        project_id: selectedProject.id,
+        quote_revision_id: selectedRevision.id
+      })
+    });
+    requireSafe(response.ok, "Webhook readiness agent request must be handled safely.");
+    const webhookAgentPayload = await readJson(response, "webhook readiness agent payload");
+    assertSafeAgentPayload("webhook readiness agent payload", webhookAgentPayload);
+    requireSafe(webhookAgentPayload.agent_id === "quote_document", "Webhook readiness request must route to quote_document.");
+    requireToolAction(webhookAgentPayload, "get_webhook_readiness", "Webhook readiness read");
+    requireToolAction(webhookAgentPayload, "explain_webhook_readiness", "Webhook readiness explanation");
+    requireToolAction(webhookAgentPayload, "explain_why_real_sent_is_deferred", "Real sent deferral explanation");
+    requireToolAction(webhookAgentPayload, "explain_sandbox_vs_real_delivery", "Sandbox versus real explanation");
+    requireSafe(
+      factValue(webhookAgentPayload, "Webhook consumption") === false,
+      "Webhook readiness agent must report webhook consumption as disabled."
+    );
+    requireSafe(
+      factValue(webhookAgentPayload, "Quote sent") === false,
+      "Webhook readiness agent must report quote sent as false."
     );
 
     response = await fetch(`${baseUrl}/api/supabase/agent-chat`, {

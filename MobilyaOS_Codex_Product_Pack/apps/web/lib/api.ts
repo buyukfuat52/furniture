@@ -314,12 +314,23 @@ export type SupabaseSendGateStatus = {
   latest_delivery_acknowledgement_status: "none" | "sandbox_acknowledged";
   provider_status: "provider_missing" | "provider_configured_unverified" | "sandbox_provider_available";
   provider_configured: boolean;
+  real_provider_configured: boolean;
+  real_provider_config_valid: boolean;
+  real_provider_enable_requested: boolean;
+  real_provider_adapter_available: boolean;
   real_delivery_enabled: false;
   sandbox_delivery_enabled: boolean;
   sandbox_delivery_verified: boolean;
   sent_transition_enabled: false;
+  real_sent_transition_enabled: false;
   provider_acknowledgement_verified: false;
+  real_provider_acknowledgement_enabled: false;
+  real_provider_acknowledgement_verified: false;
   sandbox_acknowledgement_verified: boolean;
+  webhook_configured: boolean;
+  webhook_enable_requested: boolean;
+  webhook_signature_verification_ready: boolean;
+  webhook_consumption_enabled: false;
   quote_status_changed_by_sandbox: false;
   quote_status_after_sandbox: "approved";
   quote_send_triggered: false;
@@ -371,23 +382,88 @@ export type SupabaseQuoteProviderStatus = {
   revision_id: string;
   quote_status: string;
   tenant_scoped: true;
+  provider_mode: "sandbox_only" | "real_configured_disabled" | "real_configured_invalid";
   provider_status: "provider_missing" | "provider_configured_unverified" | "sandbox_provider_available";
-  provider_adapter: "disabled_provider_adapter_v1" | "sandbox_provider_adapter_v1";
+  provider_adapter: "disabled_provider_adapter_v1" | "sandbox_provider_adapter_v1" | "real_provider_adapter_v1";
   provider_configured: boolean;
+  real_provider_configured: boolean;
+  real_provider_config_valid: boolean;
+  real_provider_enable_requested: boolean;
+  real_provider_adapter_available: boolean;
   email_provider_configured: false;
   real_delivery_enabled: false;
   sandbox_delivery_enabled: boolean;
   sandbox_delivery_verified: boolean;
   sent_transition_enabled: false;
+  real_sent_transition_enabled: false;
   provider_acknowledgement_required: true;
   provider_acknowledgement_verified: boolean;
+  real_provider_acknowledgement_enabled: false;
+  real_provider_acknowledgement_verified: false;
   sandbox_acknowledgement_verified: boolean;
+  webhook_configured: boolean;
+  webhook_enable_requested: boolean;
+  webhook_signature_verification_ready: boolean;
+  webhook_consumption_enabled: false;
   provider_secret_returned: false;
   provider_raw_payload_returned: false;
+  webhook_secret_returned: false;
+  webhook_signature_returned: false;
   provider_message_id_available: false;
-  provider_config_version: "provider-config-boundary-v1.0.0" | "sandbox-provider-config-v1.0.0";
-  adapter_version: "disabled-provider-adapter-v1.0.0" | "sandbox-provider-adapter-v1.0.0";
-  blocked_reason: "provider_missing" | "provider_not_verified" | "real_provider_deferred";
+  provider_config_version: "provider-config-boundary-v1.0.0" | "sandbox-provider-config-v1.0.0" | "real-provider-config-boundary-v1.0.0";
+  adapter_version: "disabled-provider-adapter-v1.0.0" | "sandbox-provider-adapter-v1.0.0" | "real-provider-adapter-v1.0.0";
+  blocked_reason:
+    | "provider_missing"
+    | "provider_not_verified"
+    | "real_provider_deferred"
+    | "real_provider_missing"
+    | "real_provider_incomplete"
+    | "real_provider_invalid_format"
+    | "real_delivery_enable_flag_missing"
+    | "webhook_signature_required"
+    | "real_sent_transition_deferred";
+  deferred_actions: string[];
+};
+
+export type SupabaseProviderWebhookReadiness = {
+  revision_id: string;
+  quote_status: string;
+  tenant_scoped: true;
+  provider_status: SupabaseQuoteProviderStatus["provider_status"];
+  provider_mode: "sandbox_only" | "real_configured_disabled" | "real_configured_invalid";
+  real_provider_configured: boolean;
+  real_provider_config_valid: boolean;
+  real_provider_enable_requested: boolean;
+  real_delivery_enabled: false;
+  webhook_configured: boolean;
+  webhook_enable_requested: boolean;
+  webhook_signature_verification_ready: boolean;
+  webhook_consumption_enabled: false;
+  provider_event_ingestion_enabled: false;
+  real_provider_acknowledgement_enabled: false;
+  real_provider_acknowledgement_verified: false;
+  latest_real_acknowledgement_status: "none" | "deferred";
+  latest_sandbox_acknowledgement_status: "none" | "sandbox_acknowledged";
+  sandbox_delivery_verified: boolean;
+  sandbox_acknowledgement_verified: boolean;
+  real_sent_transition_enabled: false;
+  sent_transition_enabled: false;
+  quote_status_after_sandbox: "approved";
+  quote_sent: false;
+  provider_secret_returned: false;
+  provider_raw_payload_returned: false;
+  webhook_secret_returned: false;
+  webhook_signature_returned: false;
+  provider_message_id_available: false;
+  blocked_reason:
+    | "provider_missing"
+    | "real_provider_deferred"
+    | "real_provider_incomplete"
+    | "real_provider_invalid_format"
+    | "real_delivery_enable_flag_missing"
+    | "webhook_signature_required"
+    | "real_provider_acknowledgement_not_verified"
+    | "real_sent_transition_deferred";
   deferred_actions: string[];
 };
 
@@ -400,7 +476,7 @@ export type SupabaseQuoteDeliveryAttempt = {
   generated_document_id: string;
   status: "provider_deferred" | "blocked_provider_missing" | "sandbox_delivery_attempted" | "sandbox_acknowledged";
   provider_status: "provider_missing" | "provider_configured_unverified" | "sandbox_provider_available";
-  provider_adapter: "disabled_provider_adapter_v1" | "sandbox_provider_adapter_v1";
+  provider_adapter: "disabled_provider_adapter_v1" | "sandbox_provider_adapter_v1" | "real_provider_adapter_v1";
   recipient_source: "project_customer" | "missing_customer_email";
   recipient_available: boolean;
   email_provider_configured: false;
@@ -412,8 +488,8 @@ export type SupabaseQuoteDeliveryAttempt = {
   real_email_sent: false;
   production_package_triggered: false;
   attempt_version: "quote-delivery-attempt-v1.0.0" | "sandbox-delivery-attempt-v1.0.0";
-  provider_config_version: "provider-config-boundary-v1.0.0" | "sandbox-provider-config-v1.0.0";
-  adapter_version: "disabled-provider-adapter-v1.0.0" | "sandbox-provider-adapter-v1.0.0";
+  provider_config_version: "provider-config-boundary-v1.0.0" | "sandbox-provider-config-v1.0.0" | "real-provider-config-boundary-v1.0.0";
+  adapter_version: "disabled-provider-adapter-v1.0.0" | "sandbox-provider-adapter-v1.0.0" | "real-provider-adapter-v1.0.0";
   created_at: string;
   deferred_actions: string[];
 };

@@ -75,7 +75,8 @@ export async function POST(request: Request, context: RouteContext) {
     companyId: session.mutationScope.companyId,
     appUserId: session.mutationScope.appUserId,
     action: "quote_sandbox_delivery_acknowledged",
-    body
+    body,
+    resource: { type: "quote_delivery_attempt", id: deliveryAttemptId, version: "sandbox-acknowledgement-v1.0.0" }
   }).catch(() => null);
   if (!reserved) {
     return safeError(503, "Idempotency unavailable", "The sandbox acknowledgement could not be safely reserved.");

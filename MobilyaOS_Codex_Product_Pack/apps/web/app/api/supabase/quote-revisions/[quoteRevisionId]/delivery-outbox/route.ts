@@ -86,7 +86,8 @@ export async function POST(request: Request, context: RouteContext) {
     companyId: session.mutationScope.companyId,
     appUserId: session.mutationScope.appUserId,
     action: "quote_delivery_outbox_prepared",
-    body
+    body,
+    resource: { type: "quote_revision", id: quoteRevisionId, version: "quote-delivery-outbox-v1.0.0" }
   }).catch(() => null);
   if (!reserved) {
     return safeError(503, "Idempotency unavailable", "The delivery outbox preparation could not be safely reserved.");

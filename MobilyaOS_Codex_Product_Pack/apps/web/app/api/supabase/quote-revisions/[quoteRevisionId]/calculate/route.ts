@@ -116,7 +116,8 @@ export async function POST(request: Request, context: RouteContext) {
         companyId: session.mutationScope.companyId,
         appUserId: session.mutationScope.appUserId,
         action: "quote_snapshot_calculated",
-        body
+        body,
+        resource: { type: "quote_revision", id: quoteRevisionId, version: expectedConfigurationVersion }
       });
     } catch {
       return safeError(503, "Idempotency unavailable", "The calculation could not be safely reserved.");

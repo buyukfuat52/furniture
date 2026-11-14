@@ -71,7 +71,8 @@ export async function POST(request: Request, context: RouteContext) {
     companyId: session.mutationScope.companyId,
     appUserId: session.mutationScope.appUserId,
     action: "quote_pdf_artifact_generated",
-    body
+    body,
+    resource: { type: "quote_revision", id: quoteRevisionId, version: "quote-pdf-artifact-v1.0.0" }
   }).catch(() => null);
   if (!reserved) {
     return safeError(503, "Idempotency unavailable", "The PDF artifact generation could not be safely reserved.");

@@ -180,3 +180,13 @@ Mock data may support the demo experience, but it must be labeled and handled as
 - P13 sandbox acknowledgement must not mutate an approved revision to `sent`. The domain-safe state is `approved` plus separate `sandbox_delivery_verified` metadata until a real provider acknowledgement workflow exists.
 - A real sent transition requires real external delivery evidence, verified provider acknowledgement or webhook provenance, server-owned recipient/customer intent, version/hash bindings, audit, and idempotency in one guarded backend command.
 - Runtime agents may explain persisted sandbox delivery facts only. They cannot send, acknowledge, retry delivery, mark sent, create production packages, or calculate authoritative costs/totals.
+
+## P14 Real Provider Boundary Invariants
+
+- Real-provider environment configuration is server-only. Application responses may expose only configured/valid/readiness booleans, mode labels, adapter/config versions, blocked reasons, and deferred actions.
+- Real provider secrets, webhook secrets, signatures, provider event IDs, provider message IDs, raw payloads, recipient email, connection details, storage paths, signed URLs, and service credentials must never be returned to browser or chat responses.
+- Webhook readiness is read-only in P14. Browser requests cannot record provider webhook events, supply signatures, supply acknowledgement hashes, verify real acknowledgements, or mark a quote sent.
+- `quote_provider_webhook_events` and `quote_real_delivery_acknowledgements` are fail-closed future-facing boundaries; until real verification exists, signature verification, real acknowledgement verification, raw provider payload storage, real email sent, quote sent, sent timestamp, and production flags stay false/null.
+- Sandbox delivery verification is not real customer delivery. A sandbox acknowledgement can update sandbox metadata only; it cannot satisfy real acknowledgement or sent preconditions.
+- The real sent transition RPC is intentionally disabled and service-role-only. A future implementation must atomically bind tenant, actor/customer intent, approved revision version, document hash, snapshot hash, PDF artifact hash, provider config version, verified provider evidence, audit, and idempotency before any `sent` status change.
+- Durable idempotency request hashes must include the target resource identity/version so a key cannot be replayed against a different quote revision or delivery attempt.

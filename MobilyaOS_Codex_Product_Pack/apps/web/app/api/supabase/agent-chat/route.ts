@@ -10,6 +10,7 @@ import {
   getQuoteSendGateStatus,
   getQuoteSnapshot,
   getQuoteProviderStatusForRevision,
+  getProviderWebhookReadinessForRevision,
   listQuoteDeliveryOutbox,
   listQuoteDeliveryAcknowledgements,
   listQuoteDeliveryAttempts,
@@ -25,6 +26,7 @@ import {
   type QuoteDocumentRecord,
   type QuoteDeliveryAttemptRecord,
   type QuoteDeliveryOutboxRecord,
+  type ProviderWebhookReadinessRecord,
   type QuoteRevisionProviderStatusRecord,
   type QuoteRevisionDetailRecord,
   type QuoteRevisionDiffResponse,
@@ -114,7 +116,7 @@ function classifyMessage(message: string): { agentId: AgentId; classification: s
   if (/\b(cost|pricing|maliyet|fiyat|toplam|snapshot|kenar|edge|labor|iscilik)\b/u.test(normalized)) {
     return { agentId: "costing_pricing", classification: "costing_pricing_explanation_read_only" };
   }
-  if (/\b(quote|proposal|teklif|pdf|artifact|artefakt|document|dokuman|onay|approve|send|gonder|delivery|teslimat|ack|acknowledgement|sandbox|provider)\b/u.test(normalized)) {
+  if (/\b(quote|proposal|teklif|pdf|artifact|artefakt|document|dokuman|onay|approve|send|gonder|delivery|teslimat|ack|acknowledgement|sandbox|provider|webhook|real provider)\b/u.test(normalized)) {
     return { agentId: "quote_document", classification: "quote_document_read_only" };
   }
   return { agentId: "enterprise_search", classification: "enterprise_search_read_only" };
@@ -122,12 +124,12 @@ function classifyMessage(message: string): { agentId: AgentId; classification: s
 
 function looksLikePromptInjection(message: string): boolean {
   const normalized = searchText(message);
-  return /ignore previous|system prompt|developer message|bypass|override|whitelist|policy|secret|token|approval token|document access token|password|service role|database url|cookie|signed url|storage path|tool output|malicious tool|call forbidden tool|fake provider ack|force provider ack|provider acknowledgement.*verified|webhook success|sent_at|mark sent|teslim edildi/i.test(normalized);
+  return /ignore previous|system prompt|developer message|bypass|override|whitelist|policy|secret|token|approval token|document access token|password|service role|database url|cookie|signed url|storage path|tool output|malicious tool|call forbidden tool|fake provider ack|force provider ack|provider acknowledgement.*verified|real provider acknowledgement.*verified|webhook success|webhook_signature|provider_event_id_hash|sent_at|mark sent|real provider sent|teslim edildi/i.test(normalized);
 }
 
 function asksForMutation(message: string): boolean {
   const normalized = searchText(message);
-  return /send|gonder|approve|onayla|finalize|finalise|tamamla|consume approval|consume token|approval token.*consume|token.*tuket|onay token.*tuket|calculate|recalculate|hesapla|yeniden hesapla|generate|olustur|uret|download|indir|prepare send|send intent|gonderim niyeti|record delivery|delivery attempt|teslimat denemesi|acknowledge delivery|delivery acknowledgement.*(create|record|mark|force|verify)|provider ack.*(set|mark|force|verify|dogrula)|webhook|mark sent|sent_at|production|uretim|create|update|delete|sil|degistir|kaydet/i.test(normalized);
+  return /send|gonder|approve|onayla|finalize|finalise|tamamla|consume approval|consume token|approval token.*consume|token.*tuket|onay token.*tuket|calculate|recalculate|hesapla|yeniden hesapla|generate|olustur|uret|download|indir|prepare send|send intent|gonderim niyeti|record delivery|delivery attempt|teslimat denemesi|acknowledge delivery|delivery acknowledgement.*(create|record|mark|force|verify)|provider ack.*(set|mark|force|verify|dogrula)|webhook.*(consume|success|mark|verify|force|record|create|set|dogrula)|mark sent|sent_at|production|uretim|create|update|delete|sil|degistir|kaydet/i.test(normalized);
 }
 
 function responseBody(input: {
@@ -358,6 +360,30 @@ function providerFacts(providerStatus: QuoteRevisionProviderStatusRecord | null)
   ];
 }
 
+function webhookReadinessFacts(webhookReadiness: ProviderWebhookReadinessRecord | null): Array<{ label: string; value: unknown }> {
+  if (!webhookReadiness) {
+    return [
+      { label: "Webhook hazirligi", value: "not_ready" },
+      { label: "Real sent gecisi", value: false }
+    ];
+  }
+  return [
+    { label: "Webhook hazirligi", value: webhookReadiness.blocked_reason },
+    { label: "Real provider config", value: webhookReadiness.real_provider_configured },
+    { label: "Real provider config valid", value: webhookReadiness.real_provider_config_valid },
+    { label: "Real delivery enabled", value: webhookReadiness.real_delivery_enabled },
+    { label: "Webhook configured", value: webhookReadiness.webhook_configured },
+    { label: "Webhook signature ready", value: webhookReadiness.webhook_signature_verification_ready },
+    { label: "Webhook consumption", value: webhookReadiness.webhook_consumption_enabled },
+    { label: "Real provider ack enabled", value: webhookReadiness.real_provider_acknowledgement_enabled },
+    { label: "Real provider ack verified", value: webhookReadiness.real_provider_acknowledgement_verified },
+    { label: "Latest sandbox ack", value: webhookReadiness.latest_sandbox_acknowledgement_status },
+    { label: "Latest real ack", value: webhookReadiness.latest_real_acknowledgement_status },
+    { label: "Real sent gecisi", value: webhookReadiness.real_sent_transition_enabled },
+    { label: "Quote sent", value: webhookReadiness.quote_sent }
+  ];
+}
+
 function deliveryAttemptFacts(attempts: QuoteDeliveryAttemptRecord[]): Array<{ label: string; value: unknown }> {
   const latest = attempts[0] ?? null;
   if (!latest) {
@@ -465,8 +491,8 @@ export async function POST(request: Request) {
         agentId,
         classification: mutationToolBlockedMarker,
         status: "failed",
-        summary: "Bu sohbet katmani P13'te salt okunur; sandbox acknowledgement, teklif gonderme, onay token tuketimi, final onay, PDF/artefakt uretimi, indirme, uretim veya veri degisikligi yapamaz.",
-        toolCalls: [deniedTool("agent-tool-1", "mutating_tool_request", "P13 salt okunur politika mutasyonu engelledi.")],
+        summary: "Bu sohbet katmani P14'te salt okunur; sandbox acknowledgement, gercek provider gonderimi, webhook tuketimi, teklif gonderme, onay token tuketimi, PDF/artefakt uretimi, indirme, uretim veya veri degisikligi yapamaz.",
+        toolCalls: [deniedTool("agent-tool-1", "mutating_tool_request", "P14 salt okunur politika mutasyonu engelledi.")],
         proposedActions: [{
           action: "request_backend_approval_gate",
           description: "Riskli islemler icin once backend/domain onay kapisi tamamlanmali.",
@@ -497,6 +523,7 @@ export async function POST(request: Request) {
     let quoteArtifacts: QuoteArtifactRecord[] = [];
     let deliveryOutbox: QuoteDeliveryOutboxRecord[] = [];
     let providerStatus: QuoteRevisionProviderStatusRecord | null = null;
+    let providerWebhookReadiness: ProviderWebhookReadinessRecord | null = null;
     let deliveryAttempts: QuoteDeliveryAttemptRecord[] = [];
     let deliveryAcknowledgements: QuoteDeliveryAcknowledgementRecord[] = [];
 
@@ -526,6 +553,7 @@ export async function POST(request: Request) {
       quoteArtifacts = await listQuoteArtifacts(session.mutationScope, revisionId);
       deliveryOutbox = await listQuoteDeliveryOutbox(session.mutationScope, revisionId);
       providerStatus = await getQuoteProviderStatusForRevision(session.mutationScope, revisionId);
+      providerWebhookReadiness = await getProviderWebhookReadinessForRevision(session.mutationScope, revisionId);
       deliveryAttempts = await listQuoteDeliveryAttempts(session.mutationScope, revisionId);
       deliveryAcknowledgements = await listQuoteDeliveryAcknowledgements(session.mutationScope, revisionId);
       toolCalls.push(completedTool("agent-tool-2", "get_quote_revision_detail", "Oturum sirketine ait revizyon okundu."));
@@ -537,9 +565,14 @@ export async function POST(request: Request) {
       toolCalls.push(completedTool("agent-tool-pdf-artifact-status", "get_pdf_artifact_status", "PDF artefakt durumu salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-delivery-status", "get_delivery_status", "Provider-safe delivery outbox durumu salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-provider-status", "get_provider_status", "Provider konfigurasyon siniri salt okunur okundu."));
+      toolCalls.push(completedTool("agent-tool-webhook-readiness", "get_webhook_readiness", "Gercek provider webhook hazirligi salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-delivery-attempt-status", "get_delivery_attempt_status", "Teslimat deneme ledger'i salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-delivery-acknowledgement-status", "get_delivery_acknowledgement_status", "Sandbox acknowledgement durumu salt okunur okundu."));
       toolCalls.push(completedTool("agent-tool-not-sent-explanation", "explain_why_quote_is_not_sent", "Provider ack olmadigi icin teklifin sent olmadigi aciklandi."));
+      toolCalls.push(completedTool("agent-tool-webhook-explanation", "explain_webhook_readiness", "Gercek webhook ve ack siniri aciklandi."));
+      toolCalls.push(completedTool("agent-tool-real-delivery-explanation", "explain_real_delivery_status", "Real provider delivery'nin neden devre disi oldugu aciklandi."));
+      toolCalls.push(completedTool("agent-tool-real-sent-explanation", "explain_why_real_sent_is_deferred", "Dogrulanmis real provider ack olmadigi icin sent gecisinin kapali oldugu aciklandi."));
+      toolCalls.push(completedTool("agent-tool-sandbox-real-explanation", "explain_sandbox_vs_real_delivery", "Sandbox ack ile real provider ack ayrimi aciklandi."));
       facts.push(
         ...revisionFacts(revisionDetail),
         ...configurationFacts(configurationDraft),
@@ -549,6 +582,7 @@ export async function POST(request: Request) {
         ...artifactFacts(quoteArtifacts),
         ...deliveryFacts(deliveryOutbox),
         ...providerFacts(providerStatus),
+        ...webhookReadinessFacts(providerWebhookReadiness),
         ...deliveryAttemptFacts(deliveryAttempts),
         ...deliveryAcknowledgementFacts(deliveryAcknowledgements)
       );

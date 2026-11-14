@@ -6,7 +6,7 @@ High priority:
 
 - Wire the Go core service to Supabase PostgreSQL repositories using the tenant-scoped migration constraints.
 - Move the P6/P7 deterministic wardrobe snapshot and quote lifecycle paths from the Next.js server boundary into the long-term backend/domain service or clearly preserve them as audited adapters until Go repositories are live.
-- Extend the P13 frozen HTML/PDF artifact, guarded customer approval, audited send-intent, provider-deferred outbox, provider boundary, sandbox delivery-attempt ledger, and sandbox acknowledgement lifecycle into real customer-facing delivery, verified real-provider acknowledgement, quote-sent transitions, and production-package persistence.
+- Extend the P14 frozen HTML/PDF artifact, guarded customer approval, audited send-intent, provider-deferred outbox, provider boundary, sandbox delivery-attempt/acknowledgement lifecycle, and real-provider readiness boundary into real customer-facing delivery, verified real-provider acknowledgement, quote-sent transitions, and production-package persistence.
 - Replace or remove the remaining lower-page legacy P3 Go demo controls now that the Supabase lifecycle panel owns persisted document/fork/diff behavior.
 - Harden the local-demo session boundary into production auth with hashed/rotating sessions, revocation, device tracking, rate limiting, and audit trails.
 - Replace the current process-local development rate limits with a durable distributed limiter for production deployment.
@@ -19,7 +19,7 @@ High priority:
   - add explicit human/customer delivery intent before any external quote send
   - bind send transition to company, actor/customer identity, revision id/version, document hash, PDF artifact hash, provider config version, verified provider acknowledgement, action, and idempotency key
   - audit issue, deny, consume, replay, final approval, delivery attempt, acknowledgement, and send decisions
-- Replace the sandbox/disabled provider adapters with a real server-only email provider adapter only after production no-secret config, idempotent provider-attempt records, customer intent capture, webhook/ack replay protection, real provider acknowledgement verification, and delivery verification tests exist.
+- Replace the sandbox/disabled provider adapters with a real server-only email provider adapter only after production no-secret config, outbound redaction, idempotent provider-attempt records, customer intent capture, webhook signature verification, webhook replay/stale protection, real provider acknowledgement verification, and delivery verification tests exist.
 - Run and fix `go test ./...` in an environment with Go installed.
 - Add CI-hosted verification for the cloud path. Docker Desktop is not an active local requirement for this machine.
 
@@ -53,7 +53,7 @@ Lower priority:
 
 ## Recommended Next Phase
 
-The next phase should focus on turning the P13 approved, stored HTML/PDF artifact plus sandbox acknowledgement lifecycle into a controlled real-provider delivery and production-readiness workflow:
+The next phase should focus on turning the P14 approved, stored HTML/PDF artifact plus sandbox acknowledgement and real-provider readiness boundary into a controlled real-provider delivery and production-readiness workflow:
 
 1. Wire core repositories to Supabase PostgreSQL with tenant predicates.
 2. Promote the provider-deferred delivery outbox and sandbox-attempt/ack ledger into an explicit quote-send workflow only after provider configuration, idempotency, audit, no-secret delivery, real provider acknowledgement, webhook/retry safety, and customer intent tests exist.

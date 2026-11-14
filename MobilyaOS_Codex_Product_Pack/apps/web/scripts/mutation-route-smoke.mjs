@@ -51,15 +51,19 @@ const forbiddenPayloadKeys = [
   "smtp_password",
   "provider_message_id",
   "provider_response",
+  "provider_event_id_hash",
   "delivery_status",
   "delivery_verified",
   "provider_acknowledgement",
+  "real_provider_acknowledgement",
+  "real_sent_transition",
   "acknowledgement_hash",
   "sandbox_raw_payload",
   "sandbox_ack_secret",
   "raw_provider_payload",
   "sent_at",
-  "webhook_secret"
+  "webhook_secret",
+  "webhook_signature"
 ];
 const forbiddenResponseFields = [
   "company_id",
@@ -80,15 +84,19 @@ const forbiddenResponseFields = [
   "smtp_password",
   "provider_message_id",
   "provider_response",
+  "provider_event_id_hash",
   "delivery_status",
   "delivery_verified",
   "provider_acknowledgement",
+  "real_provider_acknowledgement",
+  "real_sent_transition",
   "acknowledgement_hash",
   "sandbox_raw_payload",
   "sandbox_ack_secret",
   "raw_provider_payload",
   "sent_at",
   "webhook_secret",
+  "webhook_signature",
   "recipient_email"
 ];
 const forgedPayloadMarkers = {
@@ -111,16 +119,20 @@ const forgedPayloadMarkers = {
   smtp_password: "browser-supplied",
   provider_message_id: "browser-supplied",
   provider_response: "browser-supplied",
+  provider_event_id_hash: "browser-supplied",
   delivery_status: "browser-supplied",
   delivery_verified: true,
   provider_acknowledged: true,
   provider_acknowledgement: "browser-supplied",
+  real_provider_acknowledgement: "browser-supplied",
+  real_sent_transition: true,
   acknowledgement_hash: "browser-supplied",
   sandbox_raw_payload: "browser-supplied",
   sandbox_ack_secret: "browser-supplied",
   raw_provider_payload: "browser-supplied",
   sent_at: "2026-01-01T00:00:00Z",
   webhook_secret: "browser-supplied",
+  webhook_signature: "browser-supplied",
   artifact_html: "browser-supplied",
   database_password: "browser-supplied",
   SUPABASE_SERVICE_ROLE_KEY: "browser-supplied",
@@ -921,6 +933,54 @@ function assertProviderStatus(payload, expected, label) {
   assertNoForbiddenResponseFields(label, payload);
 }
 
+function assertWebhookReadiness(payload, expected, label) {
+  const readiness = payload.webhook_readiness;
+  requireSafe(readiness?.revision_id === expected.quoteRevisionId, `${label} must bind quote revision.`);
+  requireSafe(readiness.quote_status === expected.quoteStatus, `${label} quote status must match.`);
+  requireSafe(readiness.tenant_scoped === true, `${label} must be tenant scoped.`);
+  requireSafe(
+    ["provider_missing", "provider_configured_unverified", "sandbox_provider_available"].includes(readiness.provider_status),
+    `${label} provider status must be bounded.`
+  );
+  requireSafe(
+    ["sandbox_only", "real_configured_disabled", "real_configured_invalid"].includes(readiness.provider_mode),
+    `${label} provider mode must be bounded.`
+  );
+  requireSafe(typeof readiness.real_provider_configured === "boolean", `${label} real provider configured flag must be boolean.`);
+  requireSafe(typeof readiness.real_provider_config_valid === "boolean", `${label} real provider config valid flag must be boolean.`);
+  requireSafe(typeof readiness.real_provider_enable_requested === "boolean", `${label} real provider enable flag must be boolean.`);
+  requireSafe(readiness.real_delivery_enabled === false, `${label} real delivery must stay disabled.`);
+  requireSafe(typeof readiness.webhook_configured === "boolean", `${label} webhook configured flag must be boolean.`);
+  requireSafe(typeof readiness.webhook_enable_requested === "boolean", `${label} webhook enable flag must be boolean.`);
+  requireSafe(typeof readiness.webhook_signature_verification_ready === "boolean", `${label} webhook signature readiness must be boolean.`);
+  requireSafe(readiness.webhook_consumption_enabled === false, `${label} webhook consumption must stay disabled.`);
+  requireSafe(readiness.provider_event_ingestion_enabled === false, `${label} provider event ingestion must stay disabled.`);
+  requireSafe(readiness.real_provider_acknowledgement_enabled === false, `${label} real provider acknowledgement must stay disabled.`);
+  requireSafe(readiness.real_provider_acknowledgement_verified === false, `${label} real provider acknowledgement must not be verified.`);
+  requireSafe(readiness.real_sent_transition_enabled === false, `${label} real sent transition must stay disabled.`);
+  requireSafe(readiness.sent_transition_enabled === false, `${label} sent transition must stay disabled.`);
+  requireSafe(readiness.quote_status_after_sandbox === "approved", `${label} sandbox acknowledgement must leave quote approved.`);
+  requireSafe(readiness.quote_sent === false, `${label} quote sent flag must stay false.`);
+  requireSafe(readiness.provider_secret_returned === false, `${label} provider secret must not be returned.`);
+  requireSafe(readiness.provider_raw_payload_returned === false, `${label} raw provider payload must not be returned.`);
+  requireSafe(readiness.webhook_secret_returned === false, `${label} webhook secret must not be returned.`);
+  requireSafe(readiness.webhook_signature_returned === false, `${label} webhook signature must not be returned.`);
+  requireSafe(readiness.provider_message_id_available === false, `${label} provider message id must not be available.`);
+  requireSafe(
+    ["none", "deferred"].includes(readiness.latest_real_acknowledgement_status),
+    `${label} real acknowledgement status must be bounded.`
+  );
+  requireSafe(
+    ["none", "sandbox_acknowledged"].includes(readiness.latest_sandbox_acknowledgement_status),
+    `${label} sandbox acknowledgement status must be bounded.`
+  );
+  requireSafe(readiness.sandbox_delivery_verified === Boolean(expected.sandboxDeliveryVerified), `${label} sandbox delivery flag must match.`);
+  requireSafe(readiness.sandbox_acknowledgement_verified === Boolean(expected.sandboxAcknowledgementVerified), `${label} sandbox acknowledgement flag must match.`);
+  requireSafe(Array.isArray(readiness.deferred_actions), `${label} must include deferred actions.`);
+  requireSafe(readiness.deferred_actions.includes("quote_sent_transition"), `${label} must keep sent transition deferred.`);
+  assertNoForbiddenResponseFields(label, payload);
+}
+
 function assertDeliveryAttempt(payload, expected, label) {
   const attempt = payload.delivery_attempt;
   requireSafe(Boolean(attempt?.id), `${label} must include a delivery attempt id.`);
@@ -1169,6 +1229,10 @@ async function main() {
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/provider-status`
       },
       {
+        label: "unauthenticated provider webhook readiness",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/webhook-readiness`
+      },
+      {
         label: "unauthenticated quote delivery attempts list",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-attempts`
       },
@@ -1376,6 +1440,10 @@ async function main() {
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/provider-status`
       },
       {
+        label: "second tenant reads primary provider webhook readiness",
+        path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/webhook-readiness`
+      },
+      {
         label: "second tenant reads primary delivery attempts",
         path: `/api/supabase/quote-revisions/${demoQuoteRevisionId}/delivery-attempts`
       },
@@ -1440,6 +1508,11 @@ async function main() {
       {
         label: "primary tenant reads second provider status",
         path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/provider-status`,
+        cookie: salesCookie
+      },
+      {
+        label: "primary tenant reads second provider webhook readiness",
+        path: `/api/supabase/quote-revisions/${secondTenantQuoteRevisionId}/webhook-readiness`,
         cookie: salesCookie
       },
       {
@@ -1696,6 +1769,11 @@ async function main() {
       {
         label: "missing quote provider status read",
         path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/provider-status`,
+        method: "GET"
+      },
+      {
+        label: "missing provider webhook readiness read",
+        path: `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/webhook-readiness`,
         method: "GET"
       },
       {
@@ -3210,6 +3288,18 @@ async function main() {
       quoteStatus: "approved"
     }, "quote provider status");
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/webhook-readiness`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "provider webhook readiness before sandbox ack");
+    requireSafe(result.response.ok, "Provider webhook readiness must be readable.");
+    assertWebhookReadiness(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved",
+      sandboxDeliveryVerified: false,
+      sandboxAcknowledgementVerified: false
+    }, "provider webhook readiness before sandbox ack");
+
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
       method: "POST",
       headers: {
@@ -3288,6 +3378,13 @@ async function main() {
     }, "quote delivery attempt idempotency replay");
     requireSafe(result.response.status === 201, "Quote delivery attempt replay must return stored status.");
     requireSafe(result.payload.delivery_attempt?.id === deliveryAttempt.id, "Quote delivery attempt replay must return the original attempt id.");
+
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${fakeQuoteRevisionId}/delivery-attempts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": deliveryAttemptKey },
+      body: JSON.stringify({})
+    }, "quote delivery attempt idempotency different target conflict");
+    requireSafe(result.response.status === 409, "Delivery attempt key reuse against a different revision must return 409.");
 
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/delivery-attempts`, {
       method: "POST",
@@ -3406,6 +3503,13 @@ async function main() {
       "Sandbox delivery acknowledgement replay must return the original acknowledgement id."
     );
 
+    result = await requestJson(baseUrl, `/api/supabase/delivery-attempts/${fakeDeliveryAttemptId}/sandbox-acknowledgement`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": sandboxAcknowledgementKey },
+      body: JSON.stringify({})
+    }, "sandbox delivery acknowledgement idempotency different target conflict");
+    requireSafe(result.response.status === 409, "Sandbox acknowledgement key reuse against a different attempt must return 409.");
+
     result = await requestJson(baseUrl, `/api/supabase/delivery-attempts/${deliveryAttempt.id}/sandbox-acknowledgement`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": sandboxAcknowledgementKey },
@@ -3508,6 +3612,18 @@ async function main() {
       sandboxAcknowledgementVerified: true
     }, "quote provider status after sandbox acknowledgement");
 
+    result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/webhook-readiness`, {
+      method: "GET",
+      headers: { Cookie: salesCookie }
+    }, "provider webhook readiness after sandbox acknowledgement");
+    requireSafe(result.response.ok, "Provider webhook readiness after sandbox acknowledgement must be readable.");
+    assertWebhookReadiness(result.payload, {
+      quoteRevisionId: quoteRevision.id,
+      quoteStatus: "approved",
+      sandboxDeliveryVerified: true,
+      sandboxAcknowledgementVerified: true
+    }, "provider webhook readiness after sandbox acknowledgement");
+
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}`, {
       method: "GET",
       headers: { Cookie: salesCookie }
@@ -3522,6 +3638,13 @@ async function main() {
       body: JSON.stringify({ ...forgedPayloadMarkers, send_state: "browser-supplied" })
     }, "send gate post probe");
     requireSafe([404, 405].includes(sendGatePost.response.status), "Send gate POST must remain unavailable.");
+
+    const webhookReadinessPost = await requestText(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/webhook-readiness`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: salesCookie, "x-idempotency-key": `webhook-readiness-post-${suffix}` },
+      body: JSON.stringify({ ...forgedPayloadMarkers, webhook_signature: "browser-supplied" })
+    }, "webhook readiness post probe");
+    requireSafe([404, 405].includes(webhookReadinessPost.response.status), "Webhook readiness POST must remain unavailable.");
 
     result = await requestJson(baseUrl, `/api/supabase/quote-revisions/${quoteRevision.id}/configuration-draft`, {
       method: "PATCH",
